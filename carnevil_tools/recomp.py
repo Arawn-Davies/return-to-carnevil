@@ -39,12 +39,16 @@ A control transfer in a delay slot, or an instruction outside the reached census
 function), `funcs_000.c` ... (FUNCTIONS_PER_FILE functions each, in address order, each file
 including recomp.h and funcs.h), `func_table.c` (`recomp_lookup`, a binary search over every
 function start, stub slots and interpreted functions included) and, last, `manifest.toml`.
-Everything goes to `<out_dir>.partial`, which is renamed to out_dir when complete and
-removed on any failure, so a folder with a manifest is always a complete output.
+Everything goes to a working folder this run creates next to out_dir, renamed to out_dir
+when complete, so a folder with a manifest is always a complete output. The only path
+`recompile` ever deletes that it did not create is out_dir itself, and only when it holds a
+manifest.toml; on any failure the folders this run created are removed and an existing
+output is left as it was.
 """
 import dataclasses
 import os
 import shutil
+import tempfile
 
 from carnevil_tools import emit, functions, mips
 
@@ -314,13 +318,6 @@ def _write(path, text):
         f.write(text)
 
 
-def _remove(path):
-    if os.path.isdir(path) and not os.path.islink(path):
-        shutil.rmtree(path)
-    elif os.path.lexists(path):
-        os.remove(path)
-
-
 def _sources(image, analysis):
     """{file name: text} of every C file, and the Manifest. Raises RecompileError."""
     fns = sorted(analysis.functions, key=lambda f: f.addr)
@@ -384,21 +381,32 @@ def recompile(image, analysis, out_dir):
         raise ValueError(f"{out_dir} exists and holds no {MANIFEST}: it is not a recompile "
                          "output, so it is not replaced")
     files, manifest = _sources(image, analysis)
-    partial, old = out_dir + ".partial", out_dir + ".old"
-    _remove(partial)
-    os.makedirs(partial)
+    parent, base = os.path.split(out_dir)
+    parent = parent or os.curdir
+    os.makedirs(parent, exist_ok=True)
+    # Folders of this run only, next to out_dir (one filesystem, so the renames are moves);
+    # nothing else next to it is touched.
+    work = tempfile.mkdtemp(dir=parent, prefix=f".{base}.partial-")
+    aside = None
     try:
+        umask = os.umask(0)
+        os.umask(umask)
+        os.chmod(work, 0o777 & ~umask)  # mkdtemp makes it 0700
         for name in sorted(files):
-            _write(os.path.join(partial, name), files[name])
-        _write(os.path.join(partial, MANIFEST), _manifest_toml(manifest))
-        _remove(old)
+            _write(os.path.join(work, name), files[name])
+        _write(os.path.join(work, MANIFEST), _manifest_toml(manifest))
         if os.path.lexists(out_dir):
-            os.rename(out_dir, old)
-        os.rename(partial, out_dir)
+            aside = tempfile.mkdtemp(dir=parent, prefix=f".{base}.old-")
+            os.rename(out_dir, os.path.join(aside, base))
+        os.rename(work, out_dir)
     except BaseException:
-        _remove(partial)
-        if os.path.lexists(old) and not os.path.lexists(out_dir):
-            os.rename(old, out_dir)
+        held = None if aside is None else os.path.join(aside, base)
+        if held is not None and os.path.lexists(held) and not os.path.lexists(out_dir):
+            os.rename(held, out_dir)
+        for path in (work, aside):
+            if path is not None and os.path.lexists(path):
+                shutil.rmtree(path)
         raise
-    _remove(old)
+    if aside is not None:
+        shutil.rmtree(aside)
     return manifest

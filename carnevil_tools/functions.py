@@ -140,6 +140,8 @@ class _Descent:
         self.stub_blocks = sorted(stub_blocks)
         self.refused_tables = set(refused_tables)  # jr addresses whose table left the text
         self.manual_tables = {t.jr_addr: t for t in manual_tables}
+        # jr address -> the table the analysis finds by itself at a manual table's jr
+        self.found_under_manual = {}
         self.code = set()  # every word known to be an instruction
         self.walked = set()  # words a path has continued from (delay slots may not be)
         self.starts = {}  # function start -> set of sources
@@ -247,27 +249,32 @@ class _Descent:
             return
         manual = self.manual_tables.get(jr_addr)
         if manual is not None:  # checked against the result by `discover`
+            found = self._found_table(jr_addr, reg)
+            if found is not None:
+                self.found_under_manual[jr_addr] = found
             self.pending.extend(t for t in manual.targets if self.valid(t))
             self.tables[jr_addr] = JumpTable(jr_addr, 0, list(manual.targets))
             return
-        if jr_addr in self.refused_tables:
+        found = None if jr_addr in self.refused_tables else self._found_table(jr_addr, reg)
+        if found is None:
             self.notes.unresolved_jr.append(jr_addr)
             return
+        self.pending.extend(found.targets)
+        self.tables[jr_addr] = found
+
+    def _found_table(self, jr_addr, reg):
+        """The JumpTable the analysis finds for `jr reg` by itself, or None."""
         seq = self._window(jr_addr, JUMP_TABLE_LOOKBACK)
         table = _table_address(seq, reg)
         bound = next((i.imm for i in seq if i.mnemonic == "sltiu"), None)
         if table is None or bound is None or not 0 < bound <= MAX_JUMP_TABLE:
-            self.notes.unresolved_jr.append(jr_addr)
-            return
+            return None
         if table % 4 or not (self.image.contains(table) and self.image.contains(table + 4 * bound - 1)):
-            self.notes.unresolved_jr.append(jr_addr)
-            return
+            return None
         targets = [self.image.word(table + 4 * k) for k in range(bound)]
         if not all(self.valid(t) and not self.in_stub(t) for t in targets):
-            self.notes.unresolved_jr.append(jr_addr)
-            return
-        self.pending.extend(targets)
-        self.tables[jr_addr] = JumpTable(jr_addr, table, targets)
+            return None
+        return JumpTable(jr_addr, table, targets)
 
     def bounds(self):
         """(text_start, text_end). text_end is the end of the last code word, except
@@ -576,6 +583,12 @@ def _check_manual(analysis, d, jump_tables):
         f = owner.get(t.jr_addr)
         if f is None:
             raise ValueError(entry + ": not reached code of a function")
+        found = d.found_under_manual.get(t.jr_addr)
+        if found is not None and all(analysis.text_start <= v < analysis.text_end
+                                     for v in found.targets):
+            raise ValueError(entry + ": the analysis resolves this jr by itself (table %s, %d "
+                             "entries); a [[jump_table]] entry is only for a jr it cannot "
+                             "resolve" % (_hex(found.table_addr), len(found.targets)))
         insn = d.insn(t.jr_addr)
         if insn.mnemonic != "jr" or insn.rs == RA:
             raise ValueError(entry + ": the instruction there is %s, not a jr on a register "
@@ -667,7 +680,17 @@ def read_toml(path):
     )
 
 
-_MANUAL_KINDS = ("manual", "stub_block", "jump_table", "interpreted")
+# entry kind -> its keys (every entry also has a reason)
+_MANUAL_KEYS = {"manual": ("addr",), "stub_block": ("start", "end"),
+                "jump_table": ("jr_addr", "targets"), "interpreted": ("addr",)}
+_MANUAL_KINDS = tuple(_MANUAL_KEYS)
+
+
+def _entry_text(kind, k, entry):
+    """[[kind]] entry k (1-based), with its address keys, for an error message."""
+    keys = ", ".join("%s = %s" % (key, _hex(v)) for key, v in entry.items()
+                     if isinstance(v, int) and not isinstance(v, bool))
+    return "[[%s]] entry %d%s" % (kind, k, " (%s)" % keys if keys else "")
 
 
 def read_manual(path):
@@ -683,10 +706,20 @@ def read_manual(path):
     unknown = set(data) - set(_MANUAL_KINDS)
     if unknown:
         raise ValueError("%s: unknown keys %s" % (path, ", ".join(sorted(unknown))))
-    for table in _MANUAL_KINDS:
-        for entry in data.get(table, []):
+    for table, keys in _MANUAL_KEYS.items():
+        for k, entry in enumerate(data.get(table, []), 1):
             if not isinstance(entry.get("reason"), str) or not entry["reason"].strip():
-                raise ValueError("%s: a [[%s]] entry has no reason" % (path, table))
+                raise ValueError("%s: a [[%s]] entry has no reason (%s)"
+                                 % (path, table, _entry_text(table, k, entry)))
+            for key in keys:
+                if key not in entry:
+                    raise ValueError("%s: %s has no `%s`" % (path, _entry_text(table, k, entry),
+                                                            key))
+            extra = sorted(set(entry) - set(keys) - {"reason"})
+            if extra:
+                raise ValueError("%s: %s has unknown keys %s (it takes %s and reason)"
+                                 % (path, _entry_text(table, k, entry), ", ".join(extra),
+                                    ", ".join(keys)))
     blocks = [(b["start"], b["end"]) for b in data.get("stub_block", [])]
     for lo, hi in blocks:
         if lo % 4 or hi % 4 or lo >= hi:

@@ -3,7 +3,8 @@
 /work/
 /generated/
 # recompile output under any folder name, and its build (make linkcheck builds outside the repo)
-*.partial/
+.*.partial-*/
+.*.old-*/
 funcs_[0-9]*.c
 func_table.c
 funcs.h

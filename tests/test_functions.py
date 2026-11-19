@@ -239,6 +239,15 @@ class Discovery(unittest.TestCase):
                                             ".*%s" % (table.jr_addr, reason)):
                     functions.analyse(a.image(), BASE, jump_tables=[table])
 
+    def test_manual_jump_table_for_a_resolved_jr_is_refused(self):
+        a = self._switch("lw")
+        L = a.labels
+        table = functions.JumpTable(L["jr"], 0, [L["case%d" % k] for k in range(4)])
+        with self.assertRaisesRegex(ValueError, r"\[\[jump_table\]\] jr_addr = 0x%08X: the "
+                                    r"analysis resolves this jr by itself \(table 0x%08X, 4 "
+                                    r"entries\)" % (L["jr"], L["table"])):
+            functions.analyse(a.image(), BASE, jump_tables=[table])
+
     def test_interpreted(self):
         a = self._dispatch()
         L = a.labels
@@ -684,6 +693,25 @@ class Discovery(unittest.TestCase):
                         'reason = "r"\n' * 2)
             with self.assertRaisesRegex(ValueError, "two .* for one jr_addr"):
                 functions.read_manual(path)
+            bad = [
+                ('[[manual]]\nreason = "r"\n', r"\[\[manual\]\] entry 1 has no `addr`"),
+                ('[[stub_block]]\nstart = 0x80010000\nreason = "r"\n',
+                 r"\[\[stub_block\]\] entry 1 \(start = 0x80010000\) has no `end`"),
+                ('[[interpreted]]\naddr = 0x80010050\nreason = "r"\n[[interpreted]]\n'
+                 'adr = 0x80010060\nreason = "r"\n',
+                 r"\[\[interpreted\]\] entry 2 \(adr = 0x80010060\) has no `addr`"),
+                ('[[jump_table]]\njr_addr = 0x80010030\ntarget = [0x80010040]\nreason = "r"\n',
+                 r"\[\[jump_table\]\] entry 1 \(jr_addr = 0x80010030\) has no `targets`"),
+                ('[[manual]]\naddr = 0x80010020\nsize = 8\nreason = "r"\n',
+                 r"\[\[manual\]\] entry 1 \(addr = 0x80010020, size = 0x00000008\) has "
+                 "unknown keys size"),
+            ]
+            for text, message in bad:
+                with self.subTest(message=message):
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write(text)
+                    with self.assertRaisesRegex(ValueError, message):
+                        functions.read_manual(path)
 
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

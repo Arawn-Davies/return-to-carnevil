@@ -831,10 +831,14 @@ class RecompileTest(unittest.TestCase):
         recomp._write = spy
         self.addCleanup(setattr, recomp, "_write", real)
         manifest = recomp.recompile(image, analysis, out)
-        self.assertEqual(written[-1], os.path.join("gen.partial", "manifest.toml"))
+        # everything goes to a working folder of this run, next to out; the manifest last
+        work = {os.path.dirname(w) for w in written}
+        self.assertEqual(len(work), 1)
+        self.assertEqual(os.path.dirname(work.pop()), "")
+        self.assertEqual(os.path.basename(written[-1]), "manifest.toml")
         self.assertEqual(sorted(os.listdir(out)), ["func_table.c", "funcs.h", "funcs_000.c",
                                                    "manifest.toml"])
-        self.assertFalse(os.path.exists(out + ".partial"))
+        self.assertEqual(os.listdir(self.tmp), ["gen"])  # the working folder is gone
         with open(os.path.join(out, "manifest.toml"), "rb") as f:
             data = tomllib.load(f)
         self.assertEqual(data, {"format": 1, "exe_sha256": "", "functions": 3, "files": 1,
@@ -850,6 +854,68 @@ class RecompileTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "manifest.toml"):
             recomp.recompile(image, analysis, out)
         self.assertEqual(sorted(os.listdir(out)), ["func_table.c", "funcs.h", "funcs_000.c"])
+
+    def test_paths_next_to_the_output_are_never_deleted(self):
+        """Only out_dir is ever replaced: `<out>.old` and `<out>.partial`, whatever they hold,
+        survive a successful and a failing run, and a failing run leaves nothing of its
+        own behind (an existing output stays as it was)."""
+        image, analysis = dispatch_analysis(dispatch_asm())
+        out = os.path.join(self.tmp, "gen")
+        mine = {}
+        for name in ("gen.old", "gen.partial"):
+            os.mkdir(os.path.join(self.tmp, name))
+            path = os.path.join(self.tmp, name, "keep.txt")
+            with open(path, "w") as f:
+                f.write(name)
+            mine[path] = name
+
+        def untouched():
+            for path, text in mine.items():
+                with open(path) as f:
+                    self.assertEqual(f.read(), text)
+            self.assertEqual(sorted(os.listdir(self.tmp)), ["gen", "gen.old", "gen.partial"])
+            for name in ("gen.old", "gen.partial"):
+                self.assertEqual(os.listdir(os.path.join(self.tmp, name)), ["keep.txt"])
+        for _ in range(2):  # first run creates out, second replaces it
+            recomp.recompile(image, analysis, out)
+            untouched()
+        def contents():
+            out_files = {}
+            for n in os.listdir(out):
+                with open(os.path.join(out, n)) as f:
+                    out_files[n] = f.read()
+            return out_files
+        before = contents()
+        real = recomp._write
+
+        def failing(path, text):
+            if os.path.basename(path) == "manifest.toml":
+                raise OSError(28, "No space left on device")
+            real(path, text)
+        recomp._write = failing
+        self.addCleanup(setattr, recomp, "_write", real)
+        with self.assertRaisesRegex(OSError, "No space left"):
+            recomp.recompile(image, analysis, out)
+        untouched()
+        self.assertEqual(contents(), before)
+        # a failure after the old output was set aside puts it back
+        real_rename = os.rename
+        calls = []
+
+        def rename(src, dst):
+            calls.append((src, dst))
+            if len(calls) == 2:  # the new output into place
+                raise OSError(5, "Input/output error")
+            real_rename(src, dst)
+        recomp._write = real
+        recomp.os.rename = rename
+        self.addCleanup(setattr, recomp.os, "rename", real_rename)
+        with self.assertRaisesRegex(OSError, "Input/output"):
+            recomp.recompile(image, analysis, out)
+        recomp.os.rename = real_rename
+        self.assertEqual(len(calls), 3)  # aside, into place (failed), back
+        untouched()
+        self.assertEqual(contents(), before)
 
     def test_files_hold_64_functions_in_address_order(self):
         p = Asm()
@@ -1052,6 +1118,48 @@ class LinkTest(unittest.TestCase):
         self.assertEqual(again.returncode, 0, again.stderr)
         self.assertNotIn(" -c ", again.stdout)
         self.assertNotIn(" -o ", again.stdout)
+
+    def test_lookup_hits_and_misses_in_the_linked_program(self):
+        """game_stub enters through rt_call, so recomp_lookup: the first and the last table
+        entries run natively; an address below the first, above the last and inside a
+        function miss and run in the interpreter, which logs the address."""
+        p = Asm()
+        p(A("addu", rd=S0, rs=RA, rt=0))
+        p.j("jal", "last")
+        p(0)
+        p(A("addu", rd=RA, rs=S0, rt=0))
+        p(JR_RA, A("ori", rt=V1, rs=0, imm=1))
+        p.label("last")
+        p(A("ori", rt=V0, rs=0, imm=2), JR_RA, 0)
+        p(0x7FFFFFFF)  # data: the code after it is not reached
+        p.label("leaf")
+        p(A("ori", rt=A0, rs=0, imm=3), JR_RA, 0)
+        exe_path = os.path.join(self.tmp, "GAME.EXE")
+        image = write_exe(exe_path, p.words())
+        analysis = functions.analyse(image, CODE)
+        L = p.labels
+        self.assertEqual([f.addr for f in analysis.functions], [CODE, L["last"]])
+        gen, build = os.path.join(self.tmp, "gen"), os.path.join(self.tmp, "build")
+        recomp.recompile(image, analysis, gen)
+        res = linkcheck(self.make, gen, build)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        stub = os.path.join(build, "game_stub")
+        runs = [  # entry, interpreted?, (v0, v1, a0)
+            (CODE, False, (2, 1, 0)),
+            (L["last"], False, (2, 0, 0)),
+            (CODE - 8, True, (2, 1, 0)),  # zero words (nops) run on into the first function
+            (L["leaf"], True, (0, 0, 3)),
+            (L["last"] + 4, True, (0, 0, 0)),
+        ]
+        for entry, interpreted, want in runs:
+            with self.subTest(entry=hex(entry)):
+                run = subprocess.run([stub, f"{entry:08X}", exe_path], capture_output=True,
+                                     text=True)
+                self.assertEqual(run.returncode, 0, run.stderr)
+                regs = [int(v, 16) for v in run.stdout.split("\n")[0].split()[1:]]
+                self.assertEqual((regs[V0], regs[V1], regs[A0]), want)
+                log = [f"stub: interp_run entered at 0x{entry:08X}"] if interpreted else []
+                self.assertEqual(run.stderr.splitlines(), log)
 
     def test_linkcheck_refuses_a_folder_without_manifest(self):
         image, analysis = dispatch_analysis(dispatch_asm())
