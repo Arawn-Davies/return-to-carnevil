@@ -341,11 +341,12 @@ From `config/boot_state.toml`:
 
 ## How the findings were checked
 
-Every number comes from a committed tool with unit tests on synthetic fixtures and checks
-against the real files (156 tests). MAME 0.276 in the Linux container was the oracle: Lua autoboot
-scripts set breakpoints and logged registers (boot hand-off, registrations, callbacks), dumped
-RAM at the hand-off, and tapped the Voodoo and every other hardware range with PC attribution
-(`-nodrc` for exact PCs). Each task's result was reviewed independently, the reviewer
+Static numbers come from the Python tools in `carnevil_tools/`, which have unit tests on
+synthetic fixtures and checks against the real files (TESTCOUNT tests). MAME numbers come from
+the Lua scripts in `tools/mame/` (command lines in its README), run under MAME 0.276 in the Linux container,
+the oracle: they set breakpoints and logged registers (boot hand-off, registrations,
+callbacks), dumped RAM at the hand-off, and tapped the Voodoo and every other hardware range
+with PC attribution (`-nodrc` for exact PCs). Each task's result was reviewed independently, the reviewer
 re-running the numbers. Twice the dynamic check overturned a static conclusion: the RAM image
 at the hand-off differed from the extracted `GAME.EXE` in its last 556 bytes, which exposed the
 contiguous-block extraction bug; and the hardware tap showed the game reading the CMOS

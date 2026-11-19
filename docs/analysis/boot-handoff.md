@@ -28,7 +28,8 @@ loader address A is ROM address A - 0x80000000 + 0xBFC00F20.
     breakpoints on the handler registrations and on the callbacks and unresolved jumps of
     `functions.md`. MAME's NVRAM after it (131,072 bytes, 7,168 of them not 0xFF, so it was
     written to) is kept as `mame/nvram-carnevil/` on the share.
-- Scripts, logs and dumps stay on the share under `reincarnevilation/work/mame/`.
+- The scripts are in `tools/mame/` (`handoff.lua`, `diagpath.lua`, `gamerun.lua`; command
+  lines in its README). Logs and dumps stay on the share under `reincarnevilation/work/mame/`.
 
 "Confirmed" below means seen in MAME as well as read statically. Anything else is marked.
 

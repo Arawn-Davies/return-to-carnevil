@@ -290,6 +290,7 @@ class VerifyResult:
     matched: list  # names whose size and checksum agree
     mismatched: list  # names on the partition whose size or checksum differ
     missing: list  # listed names not on the partition
+    unlisted: list  # names on the partition that FILESYS.CHK does not list (not checked)
 
 
 def verify_files(partition_path):
@@ -316,7 +317,9 @@ def verify_files(partition_path):
                 matched.append(name)
             else:
                 mismatched.append(name)
-    return VerifyResult(len(records), matched, mismatched, missing)
+    listed = {name for name, _size, _checksum in records}
+    unlisted = [entry.name for entry, _blocks in scanned if entry.name not in listed]
+    return VerifyResult(len(records), matched, mismatched, missing, unlisted)
 
 
 def _parse_checksum_table(table):

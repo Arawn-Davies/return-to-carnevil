@@ -26,7 +26,7 @@ The layout of the partition table and the file system is described in [analysis/
 python3 -m carnevil_tools verify <partition file>
 ```
 
-Reads every file of a partition in memory, following the block chains, and compares its size and checksum with the game's own table `FILESYS.CHK`. It prints how many listed files match, how many listed files are not on the partition, and the name of each file that does not match; it exits with an error when any file does not match. Nothing is written.
+Reads every file of a partition in memory, following the block chains, and compares its size and checksum with the game's own table `FILESYS.CHK`. It prints how many listed files match, how many listed files are not on the partition, how many files on the partition the table does not list (those are not checked; on partition 0 they are 17, `GAME.EXE` and `DIAG.EXE` among them, which the EXE gate checks instead), and the name of each file that does not match; it exits with an error when any file does not match. Nothing is written.
 
 ## census
 

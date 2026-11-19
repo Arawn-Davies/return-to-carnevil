@@ -19,10 +19,17 @@ produced on your machine from your own `carnevil.chd`:
 ```
 chdman extractraw -i carnevil.chd -o work/carnevil.raw
 python3 -m carnevil_tools split work/carnevil.raw -o work/parts
+python3 -m carnevil_tools verify work/parts/part0
 python3 -m carnevil_tools extract work/parts/part0 -o work/part0_files
 ```
 
-Point the tools and tests at that folder with `CARNEVIL_WORK=/path/to/work`. One revision is
+`verify` checks every file the game's own table `FILESYS.CHK` lists against its recorded size
+and checksum, and says how many files on the partition the table does not list. `GAME.EXE` and
+`DIAG.EXE` are among those; they are checked instead by the EXE gate when `census` or
+`functions` first loads them.
+
+Point the tools and tests at that folder with `CARNEVIL_WORK=/path/to/work`, and the boot-ROM
+tests at your `boot.u32` (from the MAME `carnevil` set) with `CARNEVIL_BOOT_ROM=/path/to/boot.u32`. One revision is
 supported for now: the `GAME.EXE` whose SHA-256 is
 `f9455ce801d2e5c26a7b6e00eff88efa573deb7ab15fa29f9c90100623bfd3a6`. Any other file is refused
 with a message showing both hashes: an intact file of another revision as an unknown
@@ -37,6 +44,8 @@ python3 -m unittest discover -s tests -v
 ```
 
 Tests that need game files skip when they are not there, so the suite passes on a clean checkout.
+A few always skip on a user's machine because they read files only the developer has; see
+[getting started](docs/getting-started.md#5-run-the-tests).
 
 ## Documentation
 

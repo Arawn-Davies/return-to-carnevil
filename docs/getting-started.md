@@ -18,12 +18,15 @@ chdman extractraw -i carnevil.chd -o work/carnevil.raw
 
 This gives a raw hard disk image of 4,310,046,720 bytes.
 
-## 2. Split it into partitions and extract the files
+## 2. Split it into partitions, check partition 0 and extract its files
 
 ```
 python3 -m carnevil_tools split work/carnevil.raw -o work/parts
+python3 -m carnevil_tools verify work/parts/part0
 python3 -m carnevil_tools extract work/parts/part0 -o work/part0_files
 ```
+
+`verify` reads every file of partition 0 in memory and checks it against the game's own table `FILESYS.CHK`. On a good image it prints `1339 of 1504 listed files match`, `165 listed files are not on the partition` (the table lists more than this partition holds) and `17 files on the partition are not listed (not checked)`, and no mismatch. `GAME.EXE` and `DIAG.EXE` are among the 17: they are checked instead by the EXE gate (SHA-256 and header checksum, below) when `census` or `functions` first loads them.
 
 The disk has 17 partitions. Partition 0 holds the 1,356 files the game runs from, including `GAME.EXE` (the game), `DIAG.EXE` (the operator diagnostics), textures (`.WMS`), models (`.ZM`), animations (`.ZA`) and sound banks (`.BNK`).
 
@@ -33,7 +36,13 @@ The disk has 17 partitions. Partition 0 holds the 1,356 files the game runs from
 export CARNEVIL_WORK=/path/to/work
 ```
 
-The built-in default is the author's own path, so set this.
+The built-in default is the author's own path, so set this. The boot ROM is not on the disk; it is `boot.u32` in MAME's `carnevil` set. The tests that read it run only when you name it:
+
+```
+export CARNEVIL_BOOT_ROM=/path/to/boot.u32
+```
+
+`hwcensus --loader` takes the path on its command line.
 
 ## 4. Run the analysis tools
 
@@ -50,7 +59,14 @@ The first counts the MIPS instructions in the game. The second finds its functio
 python3 -m unittest discover -s tests -v
 ```
 
-The unit tests build their own small fixtures and need no game files. The tests that check your game files skip when the files are not there, so the suite passes on a clean checkout.
+The unit tests build their own small fixtures and need no game files. The tests that check your game files skip when the files are not there, so the suite passes on a clean checkout. `python3 -m unittest` and `python3 -m unittest tests.test_disk` (one module) work as well.
+
+With your files in place, two tests still skip, because they read files only the developer has; their skips are expected:
+
+- `test_contiguous_extraction_reported_as_mis_extracted` reads `part0_files_contiguous_wrong/GAME.EXE`, a copy extracted the wrong way (contiguously) on purpose.
+- `test_game_exe_matches_loader` reads `mame/dumps/ram-at-game-entry.bin`, the RAM dump `tools/mame/handoff.lua` saves in MAME.
+
+The boot-ROM tests skip unless `CARNEVIL_BOOT_ROM` is set (step 3).
 
 ## Supported revision
 

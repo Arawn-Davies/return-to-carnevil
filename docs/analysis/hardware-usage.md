@@ -351,11 +351,12 @@ during gameplay, which was not run.
 **Run.** MAME 0.276 in the Linux container, `carnevil` (boot ROM 1.9, the `carnevil` CHD), blank NVRAM,
 default DIP switches, no input. It was started with `-video none -sound none -nothrottle
 -seconds_to_run 90` under `timeout 2400`, with the Lua `-autoboot_script`
-`mame/scripts/voodootap.lua`. The script installs a write tap and a read tap on the main
+`tools/mame/voodootap.lua`. The script installs a write tap and a read tap on the main
 CPU's program space over physical 0x08000000 to 0x08FFFFFF. For each access it records the
 raw offset, read or write, and whether the PC is inside GAME.EXE (0x800C4000 to 0x801A4224),
 with up to 12 PCs per offset. It writes `mame/voodoo-tap/voodoo-tap.txt` when the machine
-stops. All of it is on the share, not in git.
+stops. The script is in `tools/mame/` (command lines in its README); its output is on the
+share, not in git.
 - It ran 90.0 emulated seconds (4,891 frames). The first Voodoo access from GAME.EXE came at
   about 5 emulated seconds, so the game ran for about 85 seconds: its own start-up, then
   attract mode. No game was played.
@@ -468,7 +469,7 @@ receives any store the census cannot value. Holders before and after:
 
 **Run.** The machine, ROMs, NVRAM (blank) and inputs (none) were the same as the Voodoo run.
 The options were `-nodrc -video none -sound none -nothrottle -seconds_to_run 90` under
-`timeout 2400`, with `-autoboot_script mame/scripts/hwtap.lua`. Read and write taps covered
+`timeout 2400`, with `-autoboot_script tools/mame/hwtap.lua`. Read and write taps covered
 physical 0x0A000000 to 0x0C000FFF (PCI I/O, so IDE, plus the GT64010) and 0x10000000 to
 0x17FFFFFF (all four chip selects: sound FIFO, CS2, IOASIC, CMOS, gun, CS3 control
 registers).
@@ -515,7 +516,7 @@ registers).
   reads and 3 writes, interrupt configuration 1 and 1, 0x17F00000 6 and 6, no-op register 1.
 - Other code (the POST program): CS2 0x14000068 1 write, LEDs 2 writes.
 
-**Split run** (`mame/scripts/hwtap-split.lua`, output `mame/hw-tap/hw-tap-split.txt`). It is
+**Split run** (`tools/mame/hwtap-split.lua`, output `mame/hw-tap/hw-tap-split.txt`). It is
 the same run with one more tap. The first non-zero write to physical 0x000C408C, `_start`
 copying the slot table, marks the hand-off, which came at 5.0 emulated seconds. Loader
 accesses after it are counted apart. The totals came out identical to the first run, so the

@@ -215,6 +215,7 @@ class SyntheticPartitionTests(unittest.TestCase):
         self.assertEqual(result.matched, ["A.BIN"])
         self.assertEqual(result.mismatched, ["B.BIN"])
         self.assertEqual(result.missing, ["C.BIN", "D.BIN"])
+        self.assertEqual(result.unlisted, ["FILESYS.CHK"])
 
     def test_verify_size_mismatch_counts(self):
         a = os.urandom(400)
@@ -438,6 +439,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("1 of 4 listed files match", r.stdout)
         self.assertIn("2 listed files are not on the partition", r.stdout)
+        self.assertIn("1 files on the partition are not listed (not checked)", r.stdout)
         self.assertIn("mismatch: BAD.BIN", r.stdout)
         self.assertNotIn("GOOD.BIN", r.stdout)
 
@@ -488,6 +490,10 @@ class GameDataTests(unittest.TestCase):
         self.assertEqual(len(result.matched), 1339)
         self.assertEqual(result.mismatched, [])
         self.assertEqual(len(result.missing), 165)
+        # 17 files are not in the table; GAME.EXE and DIAG.EXE are checked by the EXE gate.
+        self.assertEqual(len(result.unlisted), 17)
+        self.assertIn("GAME.EXE", result.unlisted)
+        self.assertIn("DIAG.EXE", result.unlisted)
 
 
 class GameDataSkipTests(unittest.TestCase):

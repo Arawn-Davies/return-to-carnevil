@@ -7,10 +7,12 @@ from contextlib import redirect_stderr, redirect_stdout
 from carnevil_tools import board, cli, exe, functions, hwcensus, loader
 from tests.gamedata import requires_file, work_path
 
-BOOT_ROM = os.environ.get("CARNEVIL_BOOT_ROM",
-                          "/Volumes/archive/Gaming/Consoles/ROMs/mame/carnevil/boot.u32")
+# The boot ROM is not under CARNEVIL_WORK (it comes with the MAME romset): its tests run
+# only when CARNEVIL_BOOT_ROM names it.
+BOOT_ROM = os.environ.get("CARNEVIL_BOOT_ROM", "")
 requires_boot_rom = unittest.skipUnless(
-    os.path.isfile(BOOT_ROM), "boot ROM not found: " + BOOT_ROM + " (set CARNEVIL_BOOT_ROM)")
+    BOOT_ROM and os.path.isfile(BOOT_ROM),
+    "boot ROM not found (set CARNEVIL_BOOT_ROM to boot.u32)")
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FUNCTIONS = os.path.join(REPO, "config", "game.functions.toml")
 BOOT_STATE = os.path.join(REPO, "config", "boot_state.toml")

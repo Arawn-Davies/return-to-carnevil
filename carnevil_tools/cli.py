@@ -264,6 +264,7 @@ def _verify(partition):
         return 1
     print(f"{len(result.matched)} of {result.listed} listed files match")
     print(f"{len(result.missing)} listed files are not on the partition")
+    print(f"{len(result.unlisted)} files on the partition are not listed (not checked)")
     for name in result.mismatched:
         print(f"mismatch: {name}")
     return 1 if result.mismatched else 0
