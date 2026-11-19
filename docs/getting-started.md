@@ -60,7 +60,7 @@ One revision of the game is supported for now, identified by the SHA-256 of `GAM
 f9455ce801d2e5c26a7b6e00eff88efa573deb7ab15fa29f9c90100623bfd3a6
 ```
 
-Loading a different `GAME.EXE` stops with a message that shows the expected hash and yours. Other revisions can be added later; each needs its own analysis output.
+Loading a different `GAME.EXE` stops with one of two messages: an intact file of another revision gets "unknown EXE revision" with the expected hash and yours; a damaged or mis-extracted file (its header checksum fails, for example after extracting with a tool that reads files as contiguous blocks) gets a checksum error that also names the expected hash. Other revisions can be added later; each needs its own analysis output.
 
 ## Keeping game files out of git
 

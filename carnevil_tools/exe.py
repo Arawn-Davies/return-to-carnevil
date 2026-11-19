@@ -66,21 +66,32 @@ class ExeImage:
 def load_exe(path, expect_sha256=GAME_EXE_SHA256):
     """Read an EXE, refusing it if its SHA-256 differs from expect_sha256 (None skips that
     check) or if header word 0 is not the POSIX cksum of the file from byte 4 (always checked).
+
+    When the SHA-256 differs, the checksum tells the two failures apart: a file that fails
+    it is damaged or mis-extracted (ChecksumError), an intact file is another revision
+    (UnknownRevisionError).
     """
     with open(path, "rb") as f:
         raw = f.read()
     digest = hashlib.sha256(raw).hexdigest()
-    if expect_sha256 is not None and digest != expect_sha256:
-        raise UnknownRevisionError(
-            "unknown EXE revision: expected sha256 %s, got %s" % (expect_sha256, digest)
-        )
+    pinned = expect_sha256 is None or digest == expect_sha256
     if len(raw) < HEADER.size:
+        if not pinned:
+            raise UnknownRevisionError(
+                "unknown EXE revision: expected sha256 %s, got %s" % (expect_sha256, digest)
+            )
         raise ValueError("EXE shorter than its %d-byte header" % HEADER.size)
     word0, load_addr = HEADER.unpack_from(raw)
     computed = posix_cksum(raw[4:])
     if word0 != computed:
-        raise ChecksumError(
-            "EXE header checksum 0x%08X does not match the file's checksum 0x%08X: "
-            "the file is damaged or was mis-extracted" % (word0, computed)
+        message = ("EXE header checksum 0x%08X does not match the file's checksum 0x%08X: "
+                   "the file is damaged or was mis-extracted (for example by a tool that "
+                   "reads files as contiguous blocks)" % (word0, computed))
+        if not pinned:
+            message += "; the supported revision has sha256 %s" % expect_sha256
+        raise ChecksumError(message)
+    if not pinned:
+        raise UnknownRevisionError(
+            "unknown EXE revision: expected sha256 %s, got %s" % (expect_sha256, digest)
         )
     return ExeImage(word0, load_addr, raw[HEADER.size:], digest)

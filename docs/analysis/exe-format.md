@@ -9,11 +9,14 @@ relocations or symbols.
     offset 8   ...  image, copied to the load address
                     end address = load address + (file size - 8)
 
-Loader: `carnevil_tools/exe.py` (`load_exe`). It refuses any file whose
-SHA-256 differs from the pinned value (`UnknownRevisionError`), then any file
-whose header word 0 is not the checksum of the rest (`ChecksumError`, a
-`ValueError`: the file is damaged or was mis-extracted). The checksum is
-verified even when the SHA-256 check is skipped (`expect_sha256=None`).
+Loader: `carnevil_tools/exe.py` (`load_exe`). A file whose header word 0 is
+not the checksum of the rest is refused with `ChecksumError` (a `ValueError`:
+the file is damaged or was mis-extracted, for example by a tool that reads
+files as contiguous blocks); when the SHA-256 also differs from the pinned
+value, the message names the supported revision's hash. An intact file (checksum
+holds) whose SHA-256 differs is refused with `UnknownRevisionError`: another
+revision. The checksum is verified even when the SHA-256 check is skipped
+(`expect_sha256=None`).
 
 ## Observed values
 

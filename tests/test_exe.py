@@ -57,10 +57,29 @@ class ExeTests(unittest.TestCase):
         image = exe.load_exe(self._write(good), expect_sha256=None)
         self.assertEqual(image.header_word0, right)
 
+    def test_unpinned_file_with_bad_checksum_is_mis_extracted(self):
+        right = struct.unpack_from("<I", self._synthetic())[0]
+        wrong = right ^ 0x1
+        with self.assertRaises(exe.ChecksumError) as ctx:
+            exe.load_exe(self._write(self._synthetic(wrong)))
+        message = str(ctx.exception)
+        self.assertIn("mis-extracted", message)
+        self.assertIn("0x%08X" % wrong, message)
+        self.assertIn("0x%08X" % right, message)
+        self.assertIn(exe.GAME_EXE_SHA256, message)
+
+    @requires_file("part0_files_contiguous_wrong", "GAME.EXE")
+    def test_contiguous_extraction_reported_as_mis_extracted(self):
+        with self.assertRaises(exe.ChecksumError) as ctx:
+            exe.load_exe(work_path("part0_files_contiguous_wrong", "GAME.EXE"))
+        self.assertIn("mis-extracted", str(ctx.exception))
+
     def test_unknown_hash_refused(self):
+        # Intact (checksum holds) but not the pinned revision.
         path = self._write(self._synthetic())
         with self.assertRaises(exe.UnknownRevisionError) as ctx:
             exe.load_exe(path)
+        self.assertNotIsInstance(ctx.exception, exe.ChecksumError)
         message = str(ctx.exception)
         self.assertIn(exe.GAME_EXE_SHA256, message)
         self.assertIn(hashlib.sha256(self._synthetic()).hexdigest(), message)
