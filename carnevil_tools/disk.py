@@ -97,15 +97,20 @@ class _Output:
     def __exit__(self, exc_type, exc, tb):
         try:
             self.f.close()
-        finally:
             if exc_type is None:
                 os.replace(self.partial, self.dest)
-            else:
-                try:
-                    os.remove(self.partial)
-                except OSError:
-                    pass
+        except BaseException:
+            self._discard()
+            raise
+        if exc_type is not None:
+            self._discard()
         return False
+
+    def _discard(self):
+        try:
+            os.remove(self.partial)
+        except OSError:
+            pass
 
 
 def split_partitions(raw_path, out_dir):

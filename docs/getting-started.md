@@ -51,7 +51,7 @@ python3 -m carnevil_tools census work/part0_files/GAME.EXE
 python3 -m carnevil_tools functions work/part0_files/GAME.EXE -o my.functions.toml
 ```
 
-The first counts the MIPS instructions in the game. The second finds its functions and jump tables. See the [tools reference](tools.md).
+The first counts the MIPS instructions in the game. The second finds its functions and jump tables. With an output name like `my.functions.toml` it reads no manual input; `--manual config/game.manual.toml` (or `-o config/game.functions.toml`, which picks that file up by name) reproduces the committed `config/game.functions.toml` exactly. See the [tools reference](tools.md).
 
 ## 5. Run the tests
 
