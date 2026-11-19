@@ -1,0 +1,496 @@
+"""runtime/core's virtual clock, interrupt and exception dispatch (runtime/include/machine.h),
+against docs/analysis/loader-services.md section 6.
+
+The C runs in tests/harness/machine_driver.c (its top comment lists the commands), built with
+the global C flags, -Wall -Wextra -Werror and the sanitizer flags, with the interpreter
+running synthetic guest code assembled here, into a cache under the system temp dir. No game
+data is needed.
+"""
+import hashlib
+import os
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+from carnevil_tools import vectors
+from tests import charness
+
+REPO = charness.REPO
+SOURCES = [os.path.join(REPO, "runtime", "core", f)
+           for f in ("call.c", "fpu.c", "clock.c", "irq.c", "exc.c")] + \
+          [os.path.join(REPO, "runtime", "interp", "interp.c")]
+DRIVER = os.path.join(REPO, "tests", "harness", "machine_driver.c")
+HEADERS = [os.path.join(charness.INCLUDE, h) for h in ("recomp.h", "machine.h")]
+CACHE = os.path.join(tempfile.gettempdir(), "carnevil-machine-driver")
+
+A = vectors.assemble
+NOP = 0
+AT, V0, A0, A1, A2, T0, T1, T2, T3, S7, K0, SP, RA = 1, 2, 4, 5, 6, 8, 9, 10, 11, 23, 26, 29, 31
+
+MAIN = 0x80100000
+H = 0x80110000
+H2 = 0x80112000
+CNT = 0x80200000
+FLAG = 0x80200004
+COPY = 0x80201000
+PROBE = 0x80300000
+FRAME = 0x80014328
+FRAME_SIZE = 0x320
+EXC_SP = 0x800C1400
+NS_PER_CHECK = 100
+P = 100_000  # the tests' VBLANK period: 1,000 check points
+STATUS = 0x30010401
+EXL = 2
+MARK = 0xA5A5A5A5
+FCSR = 0x00800001  # condition code 0 and RM = 1, so both kinds of FCSR bit are carried
+
+
+def build_driver():
+    """Path of the machine driver binary. Raises unittest.SkipTest without `cc`."""
+    cc = charness._cc()
+    flags = charness.CFLAGS + charness.RUNTIME_WARNINGS + charness.SANITIZE
+    h = hashlib.sha256()
+    st = os.stat(os.path.realpath(cc))
+    h.update(f"{os.path.realpath(cc)}\0{st.st_size}\0{st.st_mtime_ns}\0".encode())
+    h.update("\0".join(flags).encode())
+    for path in SOURCES + [DRIVER] + HEADERS:
+        with open(path, "rb") as f:
+            h.update(path.encode() + b"\0" + hashlib.sha256(f.read()).digest())
+    out = os.path.join(CACHE, h.hexdigest()[:32])
+    exe = os.path.join(out, "machine_driver")
+    if os.path.exists(exe):
+        return exe
+    os.makedirs(CACHE, exist_ok=True)
+    tmp = tempfile.mkdtemp(dir=CACHE, prefix="build-")
+    try:
+        objs = []
+        for i, src in enumerate(SOURCES + [DRIVER]):
+            obj = os.path.join(tmp, f"{i}-{os.path.basename(src)}.o")
+            charness._cc_run([cc, *flags, "-I", charness.INCLUDE, "-c", src, "-o", obj])
+            objs.append(obj)
+        charness._cc_run([cc, *charness.SANITIZE, *objs, "-lm",
+                          "-o", os.path.join(tmp, "machine_driver")])
+        try:
+            os.rename(tmp, out)
+        except OSError:  # another process built the same key first
+            if not os.path.exists(exe):
+                raise
+    finally:
+        if os.path.isdir(tmp):
+            shutil.rmtree(tmp)
+    return exe
+
+
+# --- guest code --------------------------------------------------------------------------
+
+def li(reg, value):
+    return [A("lui", rt=reg, imm=value >> 16 & 0xFFFF), A("ori", rt=reg, rs=reg, imm=value & 0xFFFF)]
+
+
+def asm(*items):
+    """Words of a program: ints are words, lists are spliced, a str is a label, and a tuple
+    (mnemonic, rs, rt, label) is a branch to a label."""
+    labels, words, fix = {}, [], []
+    for item in items:
+        if isinstance(item, str):
+            labels[item] = len(words)
+        elif isinstance(item, tuple):
+            fix.append((len(words), item))
+            words.append(0)
+        elif isinstance(item, list):
+            words += item
+        else:
+            words.append(item)
+    for i, (mnemonic, rs, rt, label) in fix:
+        words[i] = A(mnemonic, rs=rs, rt=rt, imm=labels[label] - (i + 1))
+    return words
+
+
+def call_probe(tag):
+    """ra saved in s7, a2 = tag, jal PROBE, ra restored."""
+    return [A("or", rd=S7, rs=RA, rt=0), A("ori", rt=A2, rs=0, imm=tag),
+            A("jal", target=PROBE), NOP, A("or", rd=RA, rs=S7, rt=0)]
+
+
+def ret(v0):
+    return [A("jr", rs=RA), A("ori", rt=V0, rs=0, imm=v0)]
+
+
+# The guest's main loop: t0 counts down to 0, one check point per iteration.
+LOOP = asm("loop", A("addiu", rt=T0, rs=T0, imm=-1), ("bne", T0, 0, "loop"), NOP,
+           A("jr", rs=RA), NOP)
+LOOP_EPC = MAIN + 8  # the pc stored last at the loop's check point: the bne's delay slot
+
+
+def place(addr, words):
+    return [f"mem {addr + 4 * i:08X} {w:08X}" for i, w in enumerate(words)]
+
+
+def pattern():
+    """Distinct register values, half of them with bit 31 set (sign extension shows)."""
+    r = [0] + [(0x80000000 if n % 2 else 0) | n << 16 | (0x100 + n) for n in range(1, 32)]
+    fpr = [0x3F000000 + 0x10101 * k for k in range(32)]
+    return r, 0x11223344, 0x8899AABB, fpr
+
+
+def set_state(r, hi, lo, fpr, fcsr=FCSR):
+    cmds = [f"r {n:X} {v:08X}" for n, v in enumerate(r)]
+    cmds += [f"fpr {n:X} {v:08X}" for n, v in enumerate(fpr)]
+    return cmds + [f"hilo {hi:08X} {lo:08X}", f"fcsr {fcsr:08X}"]
+
+
+def run_main(n, entry=MAIN):
+    return [f"r {T0:X} {n:X}", f"run {entry:08X}"]
+
+
+class Out:
+    """The driver's output, parsed."""
+
+    def __init__(self, text):
+        self.lines = [line.split() for line in text.splitlines()]
+
+    def all(self, key):
+        return [line[1:] for line in self.lines if line[0] == key]
+
+    def last(self, key):
+        found = self.all(key)
+        if not found:
+            raise AssertionError(f"no {key!r} line in the driver's output")
+        return found[-1]
+
+    def probes(self):
+        return [dict(zip(("a0", "a1", "a2", "sp", "status"), (int(x, 16) for x in p[:5])),
+                     now=int(p[5])) for p in self.all("probe")]
+
+    def regs(self):
+        return [int(x, 16) for x in self.last("r")]
+
+    def fpr(self):
+        return [int(x, 16) for x in self.last("fpr")]
+
+    def hilo(self):
+        return tuple(int(x, 16) for x in self.last("hilo"))
+
+    def fcsr(self):
+        return int(self.last("fcsr")[0], 16)
+
+    def m(self):
+        f = self.last("m")
+        return dict(status=int(f[0], 16), cause=int(f[1], 16), intctl=int(f[2], 16),
+                    gtcause=int(f[3], 16), now=int(f[4]), slice=int(f[5]))
+
+    def dump(self, i=-1):
+        return [int(x, 16) for x in self.all("dump")[i]]
+
+
+class ClockIrqTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.exe = build_driver()
+
+    def drive(self, cmds, status=0):
+        res = subprocess.run([self.exe], input="\n".join(["reset"] + cmds) + "\n",
+                             capture_output=True, text=True, timeout=120)
+        if res.returncode != status:
+            self.fail(f"driver status {res.returncode}, want {status}: {res.stderr}")
+        if status == 0 and res.stderr:
+            self.fail(f"driver wrote to stderr: {res.stderr}")
+        return Out(res.stdout), res.stderr
+
+    def stops(self, cmds, *needles):
+        """The driver stops through rt_stop: status 3, one "carnevil: stop:" line holding
+        every needle."""
+        out, err = self.drive(cmds, status=3)
+        lines = [line for line in err.splitlines() if line.startswith("carnevil: stop: ")]
+        self.assertEqual(len(lines), 1, err)
+        for needle in needles:
+            self.assertIn(needle, lines[0])
+        return out, err
+
+    # --- delivery ------------------------------------------------------------------------
+
+    def test_vblank_delivery(self):
+        clobber = [A("ori", rt=n, rs=0, imm=0xB000 + n) for n in range(1, 31) if n != S7]
+        handler = asm(call_probe(1), li(T0, CNT), A("lw", rt=T1, base=T0, imm=0),
+                      A("addiu", rt=T1, rs=T1, imm=1), A("sw", rt=T1, base=T0, imm=0),
+                      A("mult", rs=T0, rt=T1), li(T0, 0x40490FDB),
+                      [A("mtc1", rt=T0, fs=k) for k in range(32)],
+                      A("ori", rt=T1, rs=0, imm=3), A("ctc1", rt=T1, fs=31), clobber,
+                      A("ori", rt=RA, rs=0, imm=0xB01F), A("or", rd=RA, rs=S7, rt=0),
+                      A("ori", rt=S7, rs=0, imm=0xB017), ret(1))
+        r, hi, lo, fpr = pattern()
+        # 10,210 check points (main's entry, the 10,199 taken backward branches of 10,200
+        # iterations, ten handler entries): ten periods and a fraction
+        out, _ = self.drive(place(MAIN, LOOP) + place(H, handler) + set_state(r, hi, lo, fpr)
+                            + [f"line 0 {H:08X}", f"vblank {P}"] + run_main(10200)
+                            + [f"dump {CNT:08X} 1"])
+        probes = out.probes()
+        self.assertEqual(len(probes), 10)
+        self.assertEqual(out.dump(), [10])
+        for k, p in enumerate(probes):
+            self.assertEqual((p["a0"], p["a1"], p["sp"]), (0x4000, FRAME, EXC_SP))
+            self.assertEqual(p["status"], STATUS | 0x4000 | 1 | EXL)
+            self.assertGreaterEqual(p["now"], (k + 1) * P)
+            self.assertLess(p["now"], (k + 1) * P + 10 * NS_PER_CHECK)
+        want = list(r)
+        want[T0] = 0
+        got = out.regs()
+        got[K0] = want[K0]  # k0 is not restored
+        self.assertEqual(got, want)
+        self.assertEqual(out.hilo(), (hi, lo))
+        self.assertEqual(out.fpr(), fpr)
+        self.assertEqual(out.fcsr(), FCSR)
+        m = out.m()
+        self.assertEqual(m["status"], STATUS | 0x4000 | 1)
+        self.assertEqual(m["cause"], 0)
+        self.assertTrue(m["intctl"] & 0x4000)
+        self.assertEqual(m["now"], 10210 * NS_PER_CHECK)
+
+    def test_no_nesting(self):
+        # The first call loops for 3 periods and returns 0 (no default work, so the VBLANK
+        # stays pending); later calls return 1 at once (the default work acknowledges).
+        handler = asm(call_probe(1), li(T0, FLAG), A("lw", rt=T1, base=T0, imm=0),
+                      ("bne", T1, 0, "quick"), NOP,
+                      A("ori", rt=T1, rs=0, imm=1), A("sw", rt=T1, base=T0, imm=0),
+                      A("ori", rt=T2, rs=0, imm=3 * P // NS_PER_CHECK + 1),  # 3,000 checks
+                      "busy", A("addiu", rt=T2, rs=T2, imm=-1), ("bne", T2, 0, "busy"), NOP,
+                      call_probe(2), ret(0),
+                      "quick", call_probe(2), ret(1))
+        out, _ = self.drive(place(MAIN, LOOP) + place(H, handler)
+                            + [f"line 0 {H:08X}", f"vblank {P}"] + run_main(10200))
+        probes = out.probes()
+        self.assertEqual([p["a2"] for p in probes], [1, 2] * (len(probes) // 2))
+        entries = [p["now"] for p in probes if p["a2"] == 1]
+        exits = [p["now"] for p in probes if p["a2"] == 2]
+        self.assertTrue(P <= entries[0] < P + 1000, entries)
+        self.assertGreaterEqual(exits[0] - entries[0], 3 * P)
+        # the VBLANKs due during the long call are one pending bit, delivered once at once
+        self.assertLess(entries[1] - exits[0], 1000)
+        self.assertGreater(entries[1], 4 * P)
+        # then one per period again, starting with the first VBLANK after the second call
+        for k, t in enumerate(entries[2:]):
+            self.assertEqual(t // P, 5 + k)
+            self.assertLess(t % P, 1000)
+        self.assertEqual(len(entries), 2 + out.m()["now"] // P - 4)
+        for p in probes:
+            self.assertTrue(p["status"] & EXL)
+
+    def test_masked_until_registered(self):
+        r, hi, lo, fpr = pattern()
+        out, _ = self.drive(place(MAIN, LOOP) + place(H, asm(call_probe(1), ret(1)))
+                            + set_state(r, hi, lo, fpr) + [f"vblank {P}"] + run_main(10200))
+        self.assertEqual(out.probes(), [])
+        m = out.m()
+        self.assertGreaterEqual(m["now"], 10 * P)
+        self.assertEqual(m["status"], STATUS)
+        self.assertEqual(m["cause"], 0x4000)  # pending, masked
+        want = list(r)
+        want[T0] = 0
+        self.assertEqual(out.regs(), want)
+
+    def test_frame_layout(self):
+        handler = asm(li(T0, FRAME), li(T1, COPY), A("addiu", rt=T2, rs=T0, imm=FRAME_SIZE),
+                      "copy", A("lw", rt=T3, base=T0, imm=0), A("sw", rt=T3, base=T1, imm=0),
+                      A("addiu", rt=T0, rs=T0, imm=4), A("addiu", rt=T1, rs=T1, imm=4),
+                      ("bne", T0, T2, "copy"), NOP, ret(1))
+        r, hi, lo, fpr = pattern()
+        marks = place(FRAME, [MARK] * (FRAME_SIZE // 4))
+        out, _ = self.drive(place(MAIN, LOOP) + place(H, handler) + marks
+                            + set_state(r, hi, lo, fpr) + [f"line 0 {H:08X}", f"vblank {P}"]
+                            + run_main(P // NS_PER_CHECK + 50)
+                            + [f"dump {COPY:08X} {FRAME_SIZE // 4:X}",
+                               f"dump {FRAME:08X} {FRAME_SIZE // 4:X}"])
+        w = out.dump(0)
+
+        def slot(off):
+            return w[off // 4], w[off // 4 + 1]
+
+        def sext(v):
+            return v, 0xFFFFFFFF if v & 0x80000000 else 0
+
+        self.assertEqual(slot(0x000), (MARK, MARK))  # r0 is not written
+        for n in range(1, 32):
+            if n == K0:
+                self.assertEqual(slot(0xD0), (MARK, MARK))  # k0 is not saved
+            elif n == T0:
+                self.assertEqual(slot(8 * n), sext(slot(8 * n)[0]))  # the loop counter
+            else:
+                self.assertEqual(slot(8 * n), sext(r[n]), f"GPR {n}")
+        self.assertEqual(slot(0x100), sext(lo))
+        self.assertEqual(slot(0x108), sext(hi))
+        self.assertEqual(slot(0x110), (LOOP_EPC, MARK))  # the resume pc is a 32-bit sw
+        self.assertEqual(slot(0x118 + 8 * 12), (STATUS | 0x4000 | 1 | EXL, 0))
+        self.assertEqual(slot(0x180), (0x4000, 0))  # Cause: IP6, code 0
+        self.assertEqual(slot(0x188), sext(LOOP_EPC))  # EPC
+        for k in range(16):
+            self.assertEqual(w[(0x218 + 16 * k) // 4], fpr[2 * k])
+            self.assertEqual(w[(0x21C + 16 * k) // 4], fpr[2 * k + 1])
+            self.assertEqual(slot(0x220 + 16 * k), (MARK, MARK))
+        self.assertEqual(w[0x31C // 4], FCSR)
+        # after the loop, the IP bit is cleared in the saved Cause
+        self.assertEqual(out.dump(1)[0x180 // 4], 0)
+
+    def test_handler_edits_frame(self):
+        handler = asm(call_probe(3), A("lw", rt=T0, base=A1, imm=0x110),
+                      A("addiu", rt=T0, rs=T0, imm=4), A("sw", rt=T0, base=A1, imm=0x110),
+                      A("ori", rt=T1, rs=0, imm=0x5678), A("sw", rt=T1, base=A1, imm=0x10),
+                      A("sw", rt=0, base=A1, imm=0x14), A("ori", rt=T2, rs=0, imm=0xDEAD),
+                      ret(0))
+        r, hi, lo, fpr = pattern()
+        r[V0] = 0x1234
+        epc = MAIN + 0x40
+        out, _ = self.drive(place(H, handler) + set_state(r, hi, lo, fpr)
+                            + [f"exc D {H:08X}", f"raise D {epc:08X}"])
+        self.assertEqual(out.last("resume"), [f"{epc + 4:08X}"])
+        [p] = out.probes()
+        self.assertEqual((p["a0"], p["a1"], p["sp"]), (13 << 2, FRAME, EXC_SP))
+        self.assertTrue(p["status"] & EXL)
+        want = list(r)
+        want[V0] = 0x5678
+        got = out.regs()
+        got[K0] = want[K0]
+        self.assertEqual(got, want)
+        self.assertEqual(out.fpr(), fpr)
+        m = out.m()
+        self.assertEqual(m["status"], STATUS)
+        self.assertTrue(m["intctl"] & 0x4000)
+
+    def test_gt_cause(self):
+        out, _ = self.drive(place(MAIN, LOOP) + place(H, asm(call_probe(4), ret(7)))
+                            + [f"gt 4 {H:08X}", "gtraise 4"] + run_main(10))
+        [p] = out.probes()
+        self.assertEqual((p["a0"], p["sp"], p["a2"]), (1, EXC_SP, 4))
+        m = out.m()
+        self.assertEqual((m["gtcause"], m["cause"]), (0, 0))
+
+    # --- break and FP exceptions -----------------------------------------------------------
+
+    def test_break_services(self):
+        r, hi, lo, fpr = pattern()
+        # break 0x409 installs (a0 code, a1 handler); a code above 15 is ignored
+        out, _ = self.drive(place(H, asm(call_probe(5), ret(0))) + set_state(r, hi, lo, fpr)
+                            + [f"r {A0:X} D", f"r {A1:X} {H:08X}", "break 80100020 409",
+                               f"r {A0:X} 10", f"r {A1:X} {H2:08X}", "break 80100024 409",
+                               "handlers"])
+        want = list(r)
+        want[A0], want[A1] = 0x10, H2
+        self.assertEqual(out.regs(), want)
+        self.assertEqual([int(x, 16) for x in out.last("handlers")],
+                         [H if code == 13 else 0 for code in range(16)])
+        self.assertEqual(out.m()["status"], STATUS)
+        # break 0x407 (an assert) stops, naming the pc
+        self.stops(["break 80100024 407"], "0x80100024")
+        # break 7 with a hook: hook(Cause, frame); the hook leaving the pc stops naming it
+        out, _ = self.stops(place(H, asm(call_probe(6), ret(0)))
+                            + [f"hook 7 {H:08X}", "break 80100028 1C00"], "0x80100028")
+        [p] = out.probes()
+        self.assertEqual((p["a0"], p["a1"], p["sp"]), (9 << 2, FRAME, EXC_SP))
+        # a hook that moves the resume pc past the break returns to the next instruction
+        skip = asm(A("lw", rt=T0, base=A1, imm=0x110), A("addiu", rt=T0, rs=T0, imm=4),
+                   A("sw", rt=T0, base=A1, imm=0x110), ret(0))
+        out, _ = self.drive(place(H, skip) + set_state(r, hi, lo, fpr)
+                            + [f"hook 6 {H:08X}", "break 80100028 1800"])
+        self.assertEqual(out.all("returned"), [[]])
+        got = out.regs()
+        got[K0] = r[K0]
+        self.assertEqual(got, r)
+
+    def test_fp_trap_reaches_catch_all(self):
+        catch_all = asm(li(T0, 0xBFC00000), A("jr", rs=T0), NOP)
+        main = asm(A("ori", rt=A0, rs=0, imm=15), li(A1, H), A("break", code=0x409),
+                   A("div.s", fd=0, fs=2, ft=4), A("jr", rs=RA), NOP)
+        self.stops(place(MAIN, main) + place(H, catch_all)
+                   + ["fpr 2 3F800000", "fpr 4 0", "fcsr 400", f"run {MAIN:08X}"],
+                   "reset vector", "0xBFC00000")
+
+    def test_fpe_handler_advances(self):
+        # no code-15 handler: the default calls the FPU handler of each FCSR cause bit with
+        # a0 = frame and clears the bit in the saved FCSR; this one skips the instruction
+        skip = asm(call_probe(7), A("lw", rt=T0, base=A0, imm=0x110),
+                   A("addiu", rt=T0, rs=T0, imm=4), A("sw", rt=T0, base=A0, imm=0x110), ret(9))
+        # (break 0x409 with a0 = 0, a1 = 0 only hands the runtime its RAM: it installs no
+        # handler)
+        out, _ = self.drive(place(H, skip) + [f"fpe 3 {H:08X}", "fcsr 400",
+                                              "break 80100000 409", f"pc {MAIN + 0x10:08X}",
+                                              "fptrap 8000"])
+        [p] = out.probes()
+        self.assertEqual((p["a0"], p["sp"]), (FRAME, EXC_SP))
+        self.assertEqual(len(out.all("returned")), 2)  # the break, then the trap
+        self.assertEqual(out.fcsr(), 0x400)  # the cause bit is cleared in the saved FCSR
+
+    # --- the clock -------------------------------------------------------------------------
+
+    def test_timer_far_future(self):
+        t = 1 << 40
+        out, _ = self.drive([f"event 1 {t}", f"event 2 {t}", f"event 3 {t + 1}",
+                             f"advance {t + 1000}", "checks 5", "checks 0"])
+        events = [(int(i), int(now)) for i, now in out.all("event")]
+        self.assertEqual([i for i, _ in events], [1, 2, 3])
+        for _i, now in events:
+            self.assertTrue(t <= now < t + NS_PER_CHECK, now)
+        now, ticks, max_slice, min_slice, backwards = map(int, out.last("advanced"))
+        self.assertGreaterEqual(now, t + 1000)
+        self.assertEqual(backwards, 0)
+        self.assertTrue(1 <= min_slice <= max_slice <= 1_000_000, (min_slice, max_slice))
+        self.assertGreater(ticks, t // NS_PER_CHECK // 1_000_000)
+        later, same = (int(x[0]) for x in out.all("now"))
+        self.assertEqual(later, now + 5 * NS_PER_CHECK)
+        self.assertEqual(same, later)
+
+    def test_event_order(self):
+        # time order; equal times in scheduling order; an event may schedule one at the
+        # current time, which runs in the same tick; a cancelled event does not run
+        out, _ = self.drive(["event 5 3000", "chain 1 2000", "event 4 2000", "event 9 2500",
+                             "cancel 9", "advance 4000"])
+        self.assertEqual(out.all("event"), [["1", "2000"], ["4", "2000"], ["2", "2000"],
+                                            ["5", "3000"]])
+
+    # --- stops -----------------------------------------------------------------------------
+
+    def test_stop_paths(self):
+        nested = asm(A("break", code=0x409), ret(0))
+        moves = asm(A("lw", rt=T0, base=A1, imm=0x110), A("addiu", rt=T0, rs=T0, imm=8),
+                    A("sw", rt=T0, base=A1, imm=0x110), ret(1))
+        cases = [
+            (["break 80100024 402"], ["0x80100024", "0x402"]),
+            (["break 80100024 1234"], ["0x80100024", "0x1234"]),
+            (["break 80100024 1C00"], ["0x80100024", "0x1C00"]),  # no hook
+            (place(H, moves) + [f"hook 7 {H:08X}", "break 80100024 1C00"],
+             ["0x80100024", "0x8010002C"]),
+            (place(H, nested) + [f"exc D {H:08X}", "raise D 80100040"],
+             ["exception inside a handler", f"0x{H:08X}", "code 9"]),
+            (["raise E 80100040"], ["0x80100040", "code 14"]),
+            (place(H, ret(1)) + [f"exc D {H:08X}", "raise D 80100040"],
+             ["0x80100040", "code 13"]),
+            (["raise 9 80100040"], ["0x80100040", "code 9"]),
+            (["break 80100000 409", "pc 80100050", "fptrap 8000"],
+             ["0x80100050", "pc as last stored", "0x8000"]),
+            (["badtarget 9FC00000"], ["reset vector", "0x9FC00000"]),
+            (["badtarget 10000000"], ["0x10000000"]),
+            (place(MAIN, LOOP) + place(H, moves) + [f"line 0 {H:08X}", f"vblank {P}"]
+             + run_main(P // NS_PER_CHECK + 50),
+             [f"0x{LOOP_EPC:08X}", f"0x{LOOP_EPC + 8:08X}"]),
+            (place(MAIN, LOOP) + place(H, ret(1)) + [f"line 2 {H:08X}", "irqraise 4"]
+             + run_main(10), ["IP4"]),
+            (["irqraise 7"], ["IP7"]),
+            (["irqraise 1"], ["IP1"]),
+            (["vblank 0"], ["VBLANK period 0"]),
+            ([f"event {i:X} 1000" for i in range(65)], ["events"]),
+            (["fptrap 8000"], ["0x8000"]),  # before the runtime was given RAM
+            (["slice 5", "checks 0"], ["slice"]),
+            ([f"hook 5 {H:08X}"], ["break hook 5"]),
+        ]
+        for cmds, needles in cases:
+            with self.subTest(cmds=cmds[-1], needles=needles):
+                self.stops(cmds, *needles)
+
+    def test_at_stop_order(self):
+        _out, err = self.stops(["atstop", "break 80100024 407"], "0x80100024")
+        lines = err.splitlines()
+        self.assertTrue(lines[0].startswith("carnevil: stop: "), err)
+        self.assertEqual(lines[1:], ["at_stop 1", "at_stop 2"])
+
+
+if __name__ == "__main__":
+    unittest.main()

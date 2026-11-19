@@ -78,9 +78,11 @@ static void note_entry(uint32_t pc)
         rt_log_unrecompiled(pc);
 }
 
-static uint32_t fetch(uint8_t *ram, uint32_t pc)
+static uint32_t fetch(uint8_t *ram, cpu_t *c, uint32_t pc)
 {
     uint32_t w;
+    if (!mem_is_ram(pc, 4))
+        rt_bad_target(ram, c, pc);
     if ((pc & 3u) || !mem_is_ram(pc, 4))
         stop("fetch from %08X, which is not aligned RAM", pc);
     memcpy(&w, ram + (pc & 0x1FFFFFFFu), 4);
@@ -375,7 +377,7 @@ static enum xfer control(cpu_t *c, uint32_t pc, uint32_t w, uint32_t *target, in
 
 static void delay_slot(uint8_t *ram, cpu_t *c, uint32_t pc)
 {
-    uint32_t w = fetch(ram, pc);
+    uint32_t w = fetch(ram, c, pc);
     c->pc = pc;
     if (!exec(ram, c, pc, w))
         stop("control transfer %08X in the delay slot at %08X", w, pc);
@@ -386,7 +388,7 @@ void interp_run(uint8_t *ram, cpu_t *c, uint32_t pc)
     note_entry(pc);
     RT_CHECK(ram, c);
     for (;;) {
-        uint32_t w = fetch(ram, pc), target;
+        uint32_t w = fetch(ram, c, pc), target;
         int taken, likely;
         c->pc = pc;
         if (exec(ram, c, pc, w)) {

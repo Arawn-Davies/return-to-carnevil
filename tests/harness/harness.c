@@ -224,6 +224,12 @@ void rt_fp_trap(cpu_t *c, uint32_t cause_bit)
     printf("call fp_trap %08" PRIX32 "\n", cause_bit);
 }
 
+/* Returning lets the interpreter stop with its own message naming the address. */
+void rt_bad_target(uint8_t *ram, cpu_t *c, uint32_t addr)
+{
+    (void)ram, (void)c, (void)addr;
+}
+
 static void log_unrecompiled(uint32_t addr)
 {
     printf("unrecompiled %08" PRIX32 "\n", addr);

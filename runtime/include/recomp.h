@@ -100,6 +100,12 @@ void rt_host_switch(uint8_t *ram, cpu_t *c, int kind);
  * vector. A test or stub runtime that does return gets the IEEE result of the operation. */
 void rt_fp_trap(cpu_t *c, uint32_t cause_bit);
 
+/* rt_bad_target: the interpreter is to fetch from addr, which is not RAM: a call or jump
+ * through a null or corrupt pointer, or to the boot ROM (the game's crash handler ends with
+ * a jump to the reset vector 0xBFC00000). c->pc is the pc last stored. A runtime need not
+ * return; if it does, the interpreter stops the process with a message naming the address. */
+void rt_bad_target(uint8_t *ram, cpu_t *c, uint32_t addr);
+
 /* rt_switch_kind: the RT_SWITCH_* kind of the host-switch point at pc, or -1 when pc is none.
  * The generated func_table.c provides it for the game; a test harness may provide its own. The
  * interpreter asks it at every `j` and `jr`. */
@@ -159,10 +165,10 @@ extern void (*rt_log_unrecompiled)(uint32_t addr);
 
 /* interp_run: run from pc until the function entered there returns (its jr ra), calling
  * through rt_call (runtime/interp/interp.c says how each transfer is handled). It fetches
- * code from ram, so the runtime must keep the EXE image there. A fetch outside RAM or from
- * an unaligned pc (a jump through a null or corrupt pointer, or into the boot ROM) stops the
- * process with a message naming the address, as does an instruction outside the census:
- * a limitation that M2 lifts. */
+ * code from ram, so the runtime must keep the EXE image there. A fetch outside RAM (a jump
+ * through a null or corrupt pointer, or into the boot ROM) goes to rt_bad_target first. Such
+ * a fetch, or one from an unaligned pc, stops the process with a message naming the
+ * address, as does an instruction outside the census: a limitation that M2 lifts. */
 void interp_run(uint8_t *ram, cpu_t *c, uint32_t pc);
 /* interp_forget_entries: forget the entry addresses already given to rt_log_unrecompiled
  * (for test harnesses that run independent cases in one process). */

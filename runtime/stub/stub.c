@@ -14,6 +14,7 @@
  *   ("rt_loader slot S", "rt_break pc P code C", "rt_host_switch kind K sp SP",
  *   "rt_fp_trap cause C"; after rt_fp_trap the division gives its IEEE result);
  * - rt_tick reloads slice with STUB_SLICE and does nothing else: no clock, no interrupt;
+ * - rt_bad_target returns, so the interpreter stops with its own message;
  * - every address the interpreter is entered at, once ("interp_run entered at ADDR").
  */
 #include <inttypes.h>
@@ -98,6 +99,14 @@ void rt_fp_trap(cpu_t *c, uint32_t cause_bit)
 {
     (void)c;
     fprintf(stderr, "stub: rt_fp_trap cause 0x%05" PRIX32 "\n", cause_bit);
+}
+
+/* Returning lets the interpreter stop with its own message naming the address. */
+void rt_bad_target(uint8_t *ram, cpu_t *c, uint32_t addr)
+{
+    (void)ram;
+    (void)c;
+    (void)addr;
 }
 
 static void log_unrecompiled(uint32_t addr)

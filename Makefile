@@ -40,6 +40,11 @@ CORE_OBJS := $(patsubst $(ROOT)/runtime/%.c,$(BUILD)/runtime/%.o,$(CORE_SRCS))
 DISK_SRCS := $(ROOT)/runtime/disk/image.c $(ROOT)/runtime/disk/fs.c \
              $(ROOT)/runtime/disk/sha256.c
 DISK_OBJS := $(patsubst $(ROOT)/runtime/%.c,$(BUILD)/runtime/%.o,$(DISK_SRCS))
+# the virtual clock, interrupt and exception dispatch (runtime/include/machine.h), for the
+# runtime
+MACHINE_SRCS := $(ROOT)/runtime/core/clock.c $(ROOT)/runtime/core/irq.c \
+                $(ROOT)/runtime/core/exc.c
+MACHINE_OBJS := $(patsubst $(ROOT)/runtime/%.c,$(BUILD)/runtime/%.o,$(MACHINE_SRCS))
 GENERATED_SRCS := $(sort $(wildcard $(GENERATED)/funcs_*.c)) $(GENERATED)/func_table.c
 GENERATED_OBJS := $(patsubst $(GENERATED)/%.c,$(BUILD)/generated/%.o,$(GENERATED_SRCS))
 
@@ -72,6 +77,7 @@ $(BUILD)/replay: $(GENERATED_OBJS) $(filter-out %/call.o,$(CORE_OBJS)) $(BUILD)/
 
 $(BUILD)/runtime/stub/smoke.o $(BUILD)/runtime/stub/replay.o: $(ROOT)/runtime/stub/common.h
 $(DISK_OBJS): $(ROOT)/runtime/disk/disk.h
+$(MACHINE_OBJS): $(INCLUDE)/machine.h
 
 $(BUILD)/generated/%.o: $(GENERATED)/%.c $(GENERATED)/funcs.h $(INCLUDE)/recomp.h
 	@mkdir -p "$(@D)"
