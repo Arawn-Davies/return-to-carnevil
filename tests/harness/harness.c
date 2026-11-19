@@ -1,11 +1,15 @@
 /* harness.c: runs instruction test cases through the runtime, for tests/charness.py.
  *
- * Usage: harness MODE < cases > results. MODE "interp" runs each case with interp_run.
- * Unknown modes are an error.
+ * Usage: harness MODE < cases > results. MODE "interp" runs each case with interp_run; MODE
+ * "recomp" runs it by calling the linked function its "fn" line names. Unknown modes are an
+ * error.
  *
  * Wire format: text, one record per line, a keyword then fields; numbers are hexadecimal.
- * Input, per case, in this order ("irq" and "mem" are optional; "mem" may repeat):
+ * Input, per case, in this order ("fn", "irq" and "mem" are optional; "mem" may repeat):
  *   case NAME              starts a case (NAME has no spaces)
+ *   fn NAME                the function "recomp" mode calls, as registered with
+ *                          harness_register_named (required in that mode, ignored in
+ *                          "interp" mode, so one input runs in both)
  *   r R0 .. R31            general registers
  *   hilo HI LO
  *   fpr F0 .. F31          FP register halves
@@ -39,8 +43,11 @@
  *
  * Recompiled functions: a C file linked into the harness includes harness.h and registers
  * its functions with harness_register(addr, fn), typically from a constructor;
- * recomp_lookup finds them. No
- * function is registered unless a linked file registers it.
+ * recomp_lookup finds them. No function is registered unless a linked file registers it.
+ * The functions of "recomp" mode are registered separately by name, with
+ * harness_register_named(name, fn): case programs all start at the same address, so the
+ * address registry cannot tell them apart. "recomp" mode calls the function directly, on a
+ * state set up as for "interp" mode; it does not go through recomp_lookup.
  */
 #include <fenv.h>
 #include <inttypes.h>
@@ -88,6 +95,43 @@ recomp_fn recomp_lookup(uint32_t addr)
             return reg_fn[i];
         i = (i + 1) & (REGISTRY_SIZE - 1);
     }
+    return NULL;
+}
+
+/* --- the registry of functions by name, for "recomp" mode ------------------------------ */
+
+struct named {
+    const char *name;
+    recomp_fn fn;
+};
+
+static struct named *named_fns;
+static size_t named_count, named_cap;
+
+void harness_register_named(const char *name, recomp_fn fn)
+{
+    for (size_t i = 0; i < named_count; i++) {
+        if (strcmp(named_fns[i].name, name) == 0) {
+            named_fns[i].fn = fn;
+            return;
+        }
+    }
+    if (named_count == named_cap) {
+        named_cap = named_cap ? 2 * named_cap : 256;
+        named_fns = realloc(named_fns, named_cap * sizeof *named_fns);
+        if (!named_fns)
+            die("out of memory", NULL);
+    }
+    named_fns[named_count].name = name;
+    named_fns[named_count].fn = fn;
+    named_count++;
+}
+
+static recomp_fn find_named(const char *name)
+{
+    for (size_t i = 0; i < named_count; i++)
+        if (strcmp(named_fns[i].name, name) == 0)
+            return named_fns[i].fn;
     return NULL;
 }
 
@@ -149,14 +193,16 @@ static void put_words(const char *key, const uint32_t *v, int n)
 
 int main(int argc, char **argv)
 {
-    static char name[256], key[16];
+    static char name[256], fn_name[256], key[16];
+    int recomp_mode;
     fenv_t host_env;
     uint8_t *ram = malloc(RAM_SIZE);
     cpu_t c;
     uint32_t fcsr = 0;
 
-    if (argc != 2 || strcmp(argv[1], "interp") != 0)
-        die("usage: harness MODE (MODE: interp)", argc == 2 ? argv[1] : NULL);
+    if (argc != 2 || (strcmp(argv[1], "interp") != 0 && strcmp(argv[1], "recomp") != 0))
+        die("usage: harness MODE (MODE: interp, recomp)", argc == 2 ? argv[1] : NULL);
+    recomp_mode = strcmp(argv[1], "recomp") == 0;
     if (!ram)
         die("out of memory", NULL);
     if (fegetenv(&host_env) != 0)
@@ -172,6 +218,10 @@ int main(int argc, char **argv)
             memset(&c, 0, sizeof c);
             memset(ram, 0, RAM_SIZE);
             fcsr = 0;
+            fn_name[0] = '\0';
+        } else if (strcmp(key, "fn") == 0) {
+            if (scanf("%255s", fn_name) != 1)
+                die("bad input", "fn without a name");
         } else if (strcmp(key, "r") == 0) {
             for (int i = 0; i < 32; i++)
                 c.r[i] = hex();
@@ -196,7 +246,15 @@ int main(int argc, char **argv)
             c.r[0] = 0;
             interp_forget_entries();
             rt_set_fcsr(&c, fcsr);
-            interp_run(ram, &c, entry);
+            if (recomp_mode) {
+                recomp_fn fn = fn_name[0] ? find_named(fn_name) : NULL;
+                if (!fn)
+                    die(fn_name[0] ? "no registered function" : "case has no fn line",
+                        fn_name[0] ? fn_name : name);
+                fn(ram, &c);
+            } else {
+                interp_run(ram, &c, entry);
+            }
             uint32_t after_fcsr = rt_get_fcsr(&c);
             if (fesetenv(&host_env) != 0)
                 die("fesetenv failed", name);

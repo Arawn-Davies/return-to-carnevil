@@ -5,7 +5,9 @@ files a later task links in, e.g. generated functions), with the global C flags 
 sanitizer flags, into a cache directory under the system temp dir keyed by a hash of every
 input and flag; nothing is written into the repo. `run(exe, mode, cases)` feeds the cases to
 the binary and returns their after-states. The wire format is described at the top of
-tests/harness/harness.c.
+tests/harness/harness.c. Modes: "interp" runs each case in the reference interpreter;
+"recomp" calls, per case, the linked C function that `functions` names for it (see
+`wrap_function`, `register_named` and `write_generated`, which build the C file to link).
 
 Each returned `vectors.State` also carries, as attributes outside its dataclass fields (so
 equality with a recorded State is unaffected):
@@ -118,15 +120,82 @@ def build(sources, extra_flags=()):
     return exe
 
 
+def make_case(name, *words, r=None, fpr=None, fcsr=0, mem=None):
+    """A case program at vectors.CODE_BASE: `words`, then `jr ra; nop`, entered with
+    ra = vectors.RA; all-zero state apart from `r` (register -> value), `fpr`, `fcsr`, `mem`."""
+    regs = [0] * 32
+    regs[31] = vectors.RA
+    for reg, value in (r or {}).items():
+        regs[reg] = value
+    fp = [0] * 32
+    for reg, value in (fpr or {}).items():
+        fp[reg] = value
+    state = vectors.State(regs, 0, 0, fp, fcsr, dict(mem or {}))
+    return vectors.Case(name, list(words) + [vectors.assemble("jr", rs=31), 0], state)
+
+
+def first_difference(want, got):
+    """The first field in which two states differ, as text, or None."""
+    for i, (u, v) in enumerate(zip(want.r, got.r)):
+        if u != v:
+            return f"r[{i}]: want {u:08X} got {v:08X}"
+    for name in ("hi", "lo"):
+        u, v = getattr(want, name), getattr(got, name)
+        if u != v:
+            return f"{name}: want {u:08X} got {v:08X}"
+    for i, (u, v) in enumerate(zip(want.fpr, got.fpr)):
+        if u != v:
+            return f"fpr[{i}]: want {u:08X} got {v:08X}"
+    if want.fcsr != got.fcsr:
+        return f"fcsr: want {want.fcsr:08X} got {got.fcsr:08X}"
+    for addr in sorted(set(want.mem) | set(got.mem)):
+        u, v = want.mem.get(addr, 0), got.mem.get(addr, 0)
+        if u != v:
+            return f"mem[{addr:08X}]: want {u:08X} got {v:08X}"
+    return None
+
+
+def wrap_function(name, statements):
+    """C source of `void name(uint8_t *ram, cpu_t *c) { ... }` whose body is `statements`
+    (strings, one per line). Not static, so it can be registered from the same file or not."""
+    body = "".join(f"    {line}\n" for line in statements)
+    return f"void {name}(uint8_t *ram, cpu_t *c)\n{{\n    (void)ram;\n    (void)c;\n{body}}}\n"
+
+
+def register_named(names):
+    """C source of a constructor that registers each function `names` for "recomp" mode,
+    under its own name (the functions must be defined above it)."""
+    lines = "".join(f'    harness_register_named("{n}", {n});\n' for n in names)
+    return ("static void __attribute__((constructor)) register_all(void)\n{\n"
+            f"{lines}}}\n")
+
+
+def write_generated(source):
+    """Write C `source`, headed by an include of harness.h, to a path derived from its content
+    (so the build cache stays valid between runs) under the cache directory; returns the path."""
+    text = '#include "harness.h"\n\n' + source
+    path = os.path.join(CACHE, "generated",
+                        hashlib.sha256(text.encode()).hexdigest()[:32] + ".c")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if not os.path.exists(path):
+        tmp = f"{path}.{os.getpid()}"
+        with open(tmp, "w") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    return path
+
+
 def _hex(v):
     return f"{v & 0xFFFFFFFF:08X}"
 
 
-def _input(cases):
+def _input(cases, functions):
     lines = []
     for case in cases:
         b = case.before
         lines.append(f"case {case.name}")
+        if functions is not None:
+            lines.append(f"fn {functions[case.name]}")
         lines.append("r " + " ".join(_hex(v) for v in b.r))
         lines.append(f"hilo {_hex(b.hi)} {_hex(b.lo)}")
         lines.append("fpr " + " ".join(_hex(v) for v in b.fpr))
@@ -169,11 +238,14 @@ def _parse(text):
     return states
 
 
-def run(exe, mode, cases):
-    """After-states of `cases` run in the harness in `mode` ("interp"), in order. Raises
-    HarnessError, with the harness's message, when it exits non-zero."""
+def run(exe, mode, cases, functions=None):
+    """After-states of `cases` run in the harness in `mode` ("interp" or "recomp"), in order.
+    `functions` maps a case's name to the name of its linked C function (registered with
+    `register_named`); "recomp" mode needs it, "interp" mode ignores it. Raises HarnessError,
+    with the harness's message, when it exits non-zero."""
     cases = list(cases)
-    res = subprocess.run([exe, mode], input=_input(cases), capture_output=True, text=True)
+    res = subprocess.run([exe, mode], input=_input(cases, functions), capture_output=True,
+                         text=True)
     if res.returncode != 0:
         raise HarnessError(f"harness exited with status {res.returncode}: {res.stderr.strip()}")
     states = _parse(res.stdout)

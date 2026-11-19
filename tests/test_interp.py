@@ -21,38 +21,8 @@ def _f32(value):
     return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
-def _case(name, *words, r=None, fpr=None, fcsr=0, mem=None):
-    """A case program at CODE_BASE ending in jr ra; nop, with all-zero state by default."""
-    regs = [0] * 32
-    regs[31] = vectors.RA
-    for reg, value in (r or {}).items():
-        regs[reg] = value
-    fp = [0] * 32
-    for reg, value in (fpr or {}).items():
-        fp[reg] = value
-    state = vectors.State(regs, 0, 0, fp, fcsr, dict(mem or {}))
-    return vectors.Case(name, list(words) + [JR_RA, NOP], state)
-
-
-def first_difference(want, got):
-    """The first field in which two states differ, as text, or None."""
-    for i, (u, v) in enumerate(zip(want.r, got.r)):
-        if u != v:
-            return f"r[{i}]: want {u:08X} got {v:08X}"
-    for name in ("hi", "lo"):
-        u, v = getattr(want, name), getattr(got, name)
-        if u != v:
-            return f"{name}: want {u:08X} got {v:08X}"
-    for i, (u, v) in enumerate(zip(want.fpr, got.fpr)):
-        if u != v:
-            return f"fpr[{i}]: want {u:08X} got {v:08X}"
-    if want.fcsr != got.fcsr:
-        return f"fcsr: want {want.fcsr:08X} got {got.fcsr:08X}"
-    for addr in sorted(set(want.mem) | set(got.mem)):
-        u, v = want.mem.get(addr, 0), got.mem.get(addr, 0)
-        if u != v:
-            return f"mem[{addr:08X}]: want {u:08X} got {v:08X}"
-    return None
+_case = charness.make_case
+first_difference = charness.first_difference
 
 
 class InterpTest(unittest.TestCase):
