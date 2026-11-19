@@ -468,6 +468,32 @@ class DamagedInputTests(DriverTestCase):
                 self.assertEqual(lines, ["stat -1 0 0 0 0", "stat -1 0 0 0 0", "open -1",
                                          "open -1", "unlink -1", "rename -1"])
 
+    def test_extension_ignores_a_link_past_the_length(self):
+        # A.BIN: one block (4) whose chain entry already links a block 5 past its length;
+        # E.BIN: length 0 with a first block 7. No healthy partition holds either (part0
+        # has no such entry); extending allocates new blocks first-fit and leaves the old
+        # tails allocated as they were.
+        data = random.Random(6).randbytes(BLOCK)
+        part = fs_partition([("A.BIN", BLOCK, 4), ("E.BIN", 0, 7)],
+                            [([4, 5], data + bytes(BLOCK))], fat_overrides={7: 0})
+        lines = self.run_on(part, [
+            "open A.BIN 2", "seek 0 0 2", "wr 0 8 1", "close 0", "open E.BIN 2", "wr 0 8 2",
+            "close 0", "hash A.BIN", "hash E.BIN"])
+        self.assertEqual(lines, ["open 0", "seek 4096", "wr 8", "close 0", "open 0", "wr 8",
+                                 "close 0", "hash 0 4104 " + sha(data + pattern(8, 1)),
+                                 "hash 0 8 " + sha(pattern(8, 2))])
+        out = self.path("dump")
+        self.assertEqual(self.opened(self.path(f"bad{self.runs}.raw"), self.overlay,
+                                     [f"dump 1 {out}"]), ["dump 0"])
+        with open(out, "rb") as f:
+            written = f.read()
+        self.assertEqual({b: fat_entry(written, b) for b in range(3, 10)},
+                         {3: 0, 4: 6, 5: 0, 6: 0, 7: 0, 8: 0, 9: 1})
+        d = (BASE_SECTOR + 8 * 3) * SECTOR
+        self.assertEqual(written[d:d + 48],
+                         encode_name("A.BIN") + struct.pack("<III", 1026, 0x25210000, 4)
+                         + encode_name("E.BIN") + struct.pack("<III", 2, 0x25210000, 8))
+
     def test_directory_blocks_that_link_in_a_circle(self):
         part = bytearray(fs_partition([("A.BIN", 4, 4)], [([4], b"AAAA")],
                                       fat_overrides={5: 0}))

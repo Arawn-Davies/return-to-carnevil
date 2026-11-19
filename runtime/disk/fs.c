@@ -487,7 +487,12 @@ int fs_write(int h, const void *buf, uint32_t n)
         } else {
             /* pos <= length, so this is the block just after the file's last one: always a
              * new block, since a link the chain already has past the length is not trusted
-             * (it could lead back into the file); such a tail is left as it was */
+             * (it could lead back into the file); such a tail is left as it was, allocated
+             * and unreachable. No healthy partition has one: on part0 none of the 1,523
+             * entries has a chain longer than its length needs (the 3 ending on a block
+             * boundary all end with 0; none has length 0), and the loader's create
+             * (0x80008904, called from 0x80009B5C) gives a new file first block 0
+             * (measured and read) */
             uint32_t prev = index ? walk(f, index - 1) : 0;
             fresh = 1;
             b = index && !prev ? 0 : allocate();
