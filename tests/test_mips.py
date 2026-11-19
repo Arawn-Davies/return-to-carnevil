@@ -527,6 +527,15 @@ class CensusTests(unittest.TestCase):
         self.assertEqual(counts, {"jr": 1})
         self.assertEqual(mips.census(image, 0x80010004, 0x80010004), {})
 
+    def test_tally(self):
+        c_lt_cc1 = (0x11 << 26) | (16 << 21) | (2 << 16) | (1 << 11) | (4 << 6) | 0x3C
+        words = [0x3C1D8080, 0x7FFFFFFF, c_lt_cc1, 0x00000000]
+        image = self.make_image(words)
+        t = mips.tally(mips.walk(image, 0x80010000, 0x80010010))
+        self.assertEqual(t.counts, {"lui": 1, "unknown": 1, "c.lt.s": 1, "sll": 1})
+        self.assertEqual(t.unknown, [0x80010004])
+        self.assertEqual(t.fp_cc_nonzero, 1)
+
     def test_branch_target_uses_address(self):
         word = enc_i(0x04, 0, 0, 3)
         image = self.make_image([0, word], load=0x80020000)

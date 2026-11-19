@@ -6,7 +6,7 @@ import os
 import tomllib
 import unittest
 
-from carnevil_tools import functions
+from carnevil_tools import functions, loader
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BOOT_STATE = os.path.join(REPO, "config", "boot_state.toml")
@@ -54,6 +54,13 @@ class BootState(unittest.TestCase):
             self.assertTrue(c["callers"], c)
             for caller in c["callers"]:
                 self.assertIn(caller, text, "0x%08X calls 0x%08X" % (caller, c["addr"]))
+
+    def test_game_slots(self):
+        slots = loader.game_slots(BOOT_STATE)
+        self.assertEqual(len(slots), 29)
+        self.assertEqual(slots, sorted(set(slots)))
+        self.assertIn(0x0C8, slots)  # ioctl
+        self.assertIn(0x110, slots)  # the PCI lookup that returns the Voodoo base
 
     def test_every_stub_block_call_is_listed(self):
         # The 29 call targets inside the stub block 0x800C408C-0x800C42CC (functions.md).

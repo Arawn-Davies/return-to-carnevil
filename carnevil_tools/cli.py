@@ -2,9 +2,8 @@
 import argparse
 import os
 import sys
-import tomllib
 
-from carnevil_tools import disk, exe, functions, hwcensus, mips
+from carnevil_tools import board, disk, exe, functions, hwcensus, loader, mips
 
 DEFAULT_WORK = "/Volumes/archive/reincarnevilation/work"
 
@@ -37,28 +36,20 @@ def _census(path):
         return status
     start, end = image.load_addr, image.end_addr() & ~3
     print(f"range 0x{start:08X}-0x{end:08X}, {(end - start) // 4} words")
-    _print_census(mips.walk(image, start, end))
+    _print_census(mips.tally(mips.walk(image, start, end)))
     return 0
 
 
-def _print_census(insns):
-    """Mnemonic counts, MIPS IV / COP0 presence and unknown words of (addr, Insn) pairs."""
-    counts = {}
-    unknown = []
-    cc_nonzero = 0
-    for addr, insn in insns:
-        counts[insn.mnemonic] = counts.get(insn.mnemonic, 0) + 1
-        if insn.kind == "unknown":
-            unknown.append(addr)
-        elif mips.fp_condition_code(insn):
-            cc_nonzero += 1
+def _print_census(tally):
+    """Mnemonic counts, MIPS IV / COP0 presence and unknown words of a mips.Tally."""
+    counts, unknown = tally.counts, tally.unknown
     print("\nmnemonic counts:")
     for name, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
         print(f"  {name} {n}")
     print("\nMIPS IV instructions present:")
     for name in sorted(mips.MIPS_IV_MNEMONICS & counts.keys()):
         print(f"  {name} {counts[name]}")
-    print(f"  fp condition code != 0 uses {cc_nonzero}")
+    print(f"  fp condition code != 0 uses {tally.fp_cc_nonzero}")
     print("\nCOP0 instructions present:")
     for name in sorted(mips.COP0_MNEMONICS & counts.keys()):
         print(f"  {name} {counts[name]}")
@@ -101,12 +92,9 @@ def _functions(path, out):
     print(f"control transfers out of the image {len(notes.bad_targets)}, calls out of the image "
           f"{len(notes.external_calls)}, control transfers in delay slots {len(notes.cti_in_delay_slot)}")
     print(f"unknown words reached as code {len(notes.unknown)}: {_hex_list(sorted(notes.unknown))}")
-    skip = set()
-    for lo, hi in res.unreached:
-        skip.update(range(lo, hi, 4))
-    code = [a for f in res.functions for a in range(f.addr, f.addr + f.size, 4) if a not in skip]
+    code = [a for words in functions.reached_words(res).values() for a in sorted(words)]
     print(f"\ncensus of reached code ({len(code)} words):")
-    _print_census((a, mips.decode(image.word(a), a)) for a in code)
+    _print_census(mips.tally((a, mips.decode(image.word(a), a)) for a in code))
     print(f"\nwrote {out}")
     return 0
 
@@ -146,10 +134,10 @@ def _print_hwcensus(accesses, reach=None):
     """Per region: sites and addresses, each address with reads, writes and functions."""
     regions = {}
     for a in accesses:
-        name = hwcensus.classify(a.addr)
-        if name in ("ram", "unknown") or not hwcensus.is_kseg01(a.addr):
+        name = board.classify(a.addr)
+        if name in ("ram", "unknown") or not board.is_kseg01(a.addr):
             continue
-        regions.setdefault(name, {}).setdefault(hwcensus.physical(a.addr), []).append(a)
+        regions.setdefault(name, {}).setdefault(board.physical(a.addr), []).append(a)
     for name in sorted(regions, key=lambda n: min(regions[n])):
         regs = regions[name]
         sites = [a for lst in regs.values() for a in lst]
@@ -160,7 +148,7 @@ def _print_hwcensus(accesses, reach=None):
             lst = regs[addr]
             ops = {op: sum(a.op == op for a in lst) for op in ("read", "write", "cache")}
             funcs = sorted({a.function for a in lst})
-            line = (f"  0x{addr:08X} {hwcensus.register_name(addr | 0xA0000000)}: "
+            line = (f"  0x{addr:08X} {board.register_name(addr | 0xA0000000)}: "
                     f"r{ops['read']} w{ops['write']}")
             if ops["cache"]:
                 line += f" cache{ops['cache']}"
@@ -175,23 +163,21 @@ def _print_hwcensus(accesses, reach=None):
             print(line)
 
 
-def _hwcensus(path, loader, ioctl=False):
-    if loader is not None:
-        if not os.path.isfile(loader):
-            return _missing(loader)
+def _hwcensus(path, rom, ioctl=False):
+    if rom is not None:
+        if not os.path.isfile(rom):
+            return _missing(rom)
         try:
-            image = hwcensus.loader_image(loader)
+            image = loader.loader_image(rom)
         except exe.UnknownRevisionError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
-        analysis, _notes = hwcensus.analyse_loader(image)
-        with open(BOOT_STATE, "rb") as f:
-            calls = tomllib.load(f)["external_call"]
-        game_slots = sorted({c["slot"] for c in calls if "slot" in c})
-        reach = hwcensus.loader_reach(image, analysis, game_slots)
+        analysis, _notes = loader.analyse_loader(image)
+        game_slots = loader.game_slots(BOOT_STATE)
+        reach = loader.loader_reach(image, analysis, game_slots)
         print(f"loader 0x{image.load_addr:08X}-0x{image.end_addr():08X}, "
               f"{len(analysis.functions)} functions; {len(game_slots)} slots called by GAME.EXE")
-        _print_hwcensus(hwcensus.all_accesses(hwcensus.census(image, analysis)), reach)
+        _print_hwcensus(hwcensus.all_accesses(hwcensus.propagate(image, analysis)), reach)
         return 0
     image, status = _load(path)
     if image is None:

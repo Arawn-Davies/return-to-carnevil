@@ -362,15 +362,121 @@ def fp_condition_code(insn):
     return None
 
 
+class Decoder:
+    """The words of an image, each decoded once: `insn(addr)`."""
+
+    def __init__(self, image):
+        self.image = image
+        self._decoded = {}
+
+    def insn(self, addr):
+        insn = self._decoded.get(addr)
+        if insn is None:
+            insn = self._decoded[addr] = decode(self.image.word(addr), addr)
+        return insn
+
+
+# --- instruction semantics --------------------------------------------------------------
+
+SP, RA = 29, 31
+
+# Instructions that write their rt field; everything else on SPECIAL writes rd
+# unless listed in _SPECIAL_NO_RD.
+_WRITES_RT = frozenset(
+    "addi addiu slti sltiu andi ori xori lui daddi daddiu lb lh lw lbu lhu lwu ld "
+    "lwl lwr ldl ldr ll lld sc scd mfc0 dmfc0 mfc1 dmfc1 cfc1".split()
+)
+_SPECIAL_NO_RD = frozenset(
+    "jr mult multu div divu dmult dmultu ddiv ddivu mthi mtlo sync syscall break "
+    "tge tgeu tlt tltu teq tne".split()
+)
+_LINKING = frozenset("jal bltzal bgezal bltzall bgezall".split())
+_SHIFT_IMM = frozenset("sll srl sra dsll dsrl dsra dsll32 dsrl32 dsra32".split())
+_STORES = frozenset("sb sh sw swl swr sd sdl sdr sc scd".split())
+_FROM_RT = frozenset("mtc1 dmtc1 ctc1 mtc0 dmtc0".split())
+
+
+def dest_reg(insn):
+    """The integer register an instruction writes, or None."""
+    name = insn.mnemonic
+    if name in _WRITES_RT:
+        return insn.rt
+    if name in _LINKING:
+        return RA
+    if insn.word >> 26 == 0 and name not in _SPECIAL_NO_RD and insn.kind != "unknown":
+        return insn.rd
+    return None
+
+
+def reads(insn):
+    """Integer registers an instruction reads; None if it reads state undefined at entry
+    (hi/lo, a coprocessor's control or system registers)."""
+    name, op = insn.mnemonic, insn.word >> 26
+    if name in ("mfhi", "mflo", "mfc0", "dmfc0", "cfc1"):
+        return None
+    if op == 0:
+        return {insn.rt} if name in _SHIFT_IMM else {insn.rs, insn.rt}
+    if name == "lui":
+        return set()
+    if name in _STORES:
+        return {insn.rs, insn.rt}
+    if name in _FROM_RT:
+        return {insn.rt}
+    if op in (0x10, 0x11):  # other COP0/COP1 work on their own registers
+        return set()
+    if op == 0x13:  # COP1X: integer base and index for the indexed loads/stores
+        return {insn.rs, insn.rt} if insn.mnemonic[-2:] == "c1" else set()
+    return {insn.rs}
+
+
+def always_taken(insn):
+    """beq r,r and bgez zero (and their likely forms) are unconditional."""
+    if insn.mnemonic in ("beq", "beql"):
+        return insn.rs == insn.rt
+    if insn.mnemonic in ("bgez", "bgezl"):
+        return insn.rs == 0
+    return False
+
+
+def ends_path(insn):
+    """A control transfer after whose delay slot execution never falls through."""
+    return insn.kind in ("jump", "jump_reg") or (
+        insn.kind in ("branch", "branch_likely") and always_taken(insn)
+    )
+
+
+def is_prologue(insn):
+    """`addiu sp,sp,-n`: the stack adjustment that opens a function."""
+    return insn.mnemonic == "addiu" and insn.rs == SP and insn.rt == SP and insn.imm < 0
+
+
+# --- census -----------------------------------------------------------------------------
+
 def walk(image, start, end):
     """Yield (addr, Insn) for every word in [start, end) of an ExeImage."""
     for addr in range(start, end, 4):
         yield addr, decode(image.word(addr), addr)
 
 
+@dataclass
+class Tally:
+    counts: dict  # mnemonic -> count
+    unknown: list  # addresses of the words that decode as unknown, in input order
+    fp_cc_nonzero: int  # instructions using an FP condition code other than 0
+
+
+def tally(insns):
+    """Mnemonic counts, unknown words and FP condition-code uses of (addr, Insn) pairs."""
+    out = Tally({}, [], 0)
+    for addr, insn in insns:
+        out.counts[insn.mnemonic] = out.counts.get(insn.mnemonic, 0) + 1
+        if insn.kind == "unknown":
+            out.unknown.append(addr)
+        elif fp_condition_code(insn):
+            out.fp_cc_nonzero += 1
+    return out
+
+
 def census(image, start, end):
     """Mnemonic -> count over the words in [start, end)."""
-    counts = {}
-    for _addr, insn in walk(image, start, end):
-        counts[insn.mnemonic] = counts.get(insn.mnemonic, 0) + 1
-    return counts
+    return tally(walk(image, start, end)).counts

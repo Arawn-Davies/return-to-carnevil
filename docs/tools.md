@@ -71,8 +71,11 @@ The static census cannot see every access; [analysis/hardware-usage.md](analysis
 ## The modules behind them
 
 - `disk.py`: partition table, block chains and file system, and the `FILESYS.CHK` check.
+- `cksum.py`: the POSIX `cksum` CRC that the EXE header and `FILESYS.CHK` use (also importable as `exe.posix_cksum`).
 - `exe.py`: the EXE header, its checksum, loading the image, and the revision check.
-- `mips.py`: the MIPS IV instruction decoder.
-- `functions.py` and `naming.py`: function discovery, and naming functions from the game's own debug messages.
-- `hwcensus.py`: the hardware regions of the board, the register-value propagation behind `hwcensus`, the loader analysis and the ioctl list.
+- `mips.py`: the MIPS IV instruction decoder, the instruction semantics the analyses share (`dest_reg`, `reads`, `always_taken`, `ends_path`, `is_prologue`) and the opcode census (`tally`, `census`).
+- `functions.py` and `naming.py`: function discovery, the TOML it writes and reads, `reached_words` (the words of each function that discovery reached), and naming functions from the game's own debug messages.
+- `board.py`: the board's physical memory map (`REGIONS`, `classify`, `region_of`) and the register names.
+- `hwcensus.py`: the register-value propagation behind `hwcensus` (`propagate`), the hardware accesses it attributes and the ioctl list. `hwcensus.REGIONS` and `hwcensus.classify` are the ones in `board.py`.
+- `loader.py`: the boot ROM's resident loader: its image, service slots, device-driver table, call graph and what each slot reaches, and `game_slots`, the slots `GAME.EXE` calls according to `config/boot_state.toml`.
 - `cli.py`: the command line.

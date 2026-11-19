@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from carnevil_tools import mips, naming
 
 SOURCES = ("entry", "call", "pointer", "prologue", "manual")
-SP, RA = 29, 31
+RA = mips.RA
 JUMP_TABLE_LOOKBACK = 12  # instructions searched back from a `jr reg`
 MAX_JUMP_TABLE = 4096  # entries; a larger sltiu bound is not taken for a table
 PAIR_WINDOW = 32  # instructions searched forward from a `lui` for its low half
@@ -84,56 +84,8 @@ class Notes:
     withdrawn: list[int] = field(default_factory=list)
 
 
-# Instructions that write their rt field; everything else on SPECIAL writes rd
-# unless listed in _SPECIAL_NO_RD.
-_WRITES_RT = frozenset(
-    "addi addiu slti sltiu andi ori xori lui daddi daddiu lb lh lw lbu lhu lwu ld "
-    "lwl lwr ldl ldr ll lld sc scd mfc0 dmfc0 mfc1 dmfc1 cfc1".split()
-)
-_SPECIAL_NO_RD = frozenset(
-    "jr mult multu div divu dmult dmultu ddiv ddivu mthi mtlo sync syscall break "
-    "tge tgeu tlt tltu teq tne".split()
-)
-_LINKING = frozenset("jal bltzal bgezal bltzall bgezall".split())
-
-
-def _dest(insn):
-    """The integer register an instruction writes, or None."""
-    name = insn.mnemonic
-    if name in _WRITES_RT:
-        return insn.rt
-    if name in _LINKING:
-        return RA
-    if insn.word >> 26 == 0 and name not in _SPECIAL_NO_RD and insn.kind != "unknown":
-        return insn.rd
-    return None
-
-
-_SHIFT_IMM = frozenset("sll srl sra dsll dsrl dsra dsll32 dsrl32 dsra32".split())
-_STORES = frozenset("sb sh sw swl swr sd sdl sdr sc scd".split())
-_FROM_RT = frozenset("mtc1 dmtc1 ctc1 mtc0 dmtc0".split())
 # Integer registers holding a value at a function's first instruction: zero, a0-a3, gp, sp, ra
 _LIVE_AT_ENTRY = frozenset((0, 4, 5, 6, 7, 28, 29, 31))
-
-
-def _reads(insn):
-    """Integer registers an instruction reads; None if it reads state undefined at entry."""
-    name, op = insn.mnemonic, insn.word >> 26
-    if name in ("mfhi", "mflo", "mfc0", "dmfc0", "cfc1"):
-        return None
-    if op == 0:
-        return {insn.rt} if name in _SHIFT_IMM else {insn.rs, insn.rt}
-    if name == "lui":
-        return set()
-    if name in _STORES:
-        return {insn.rs, insn.rt}
-    if name in _FROM_RT:
-        return {insn.rt}
-    if op in (0x10, 0x11):  # other COP0/COP1 work on their own registers
-        return set()
-    if op == 0x13:  # COP1X: integer base and index for the indexed loads/stores
-        return {insn.rs, insn.rt} if insn.mnemonic[-2:] == "c1" else set()
-    return {insn.rs}
 
 
 def _entry_run_ok(run):
@@ -141,28 +93,15 @@ def _entry_run_ok(run):
     $zero other than the canonical nop (word 0) is data, not compiled code."""
     live = set(_LIVE_AT_ENTRY)
     for insn in run:
-        reads = _reads(insn)
+        reads = mips.reads(insn)
         if insn.kind != "normal" or reads is None or not reads <= live:
             return False
-        dest = _dest(insn)
+        dest = mips.dest_reg(insn)
         if dest == 0 and insn.word != 0:
             return False
         if dest is not None:
             live.add(dest)
     return True
-
-
-def _always_taken(insn):
-    """beq r,r and bgez zero (and their likely forms) are unconditional."""
-    if insn.mnemonic in ("beq", "beql"):
-        return insn.rs == insn.rt
-    if insn.mnemonic in ("bgez", "bgezl"):
-        return insn.rs == 0
-    return False
-
-
-def _is_prologue(insn):
-    return insn.mnemonic == "addiu" and insn.rs == SP and insn.rt == SP and insn.imm < 0
 
 
 class _Descent:
@@ -177,13 +116,7 @@ class _Descent:
         self.returns = set()  # words a path reaches as the return point of a call
         self.pending = []
         self.notes = Notes()
-        self._decoded = {}
-
-    def insn(self, addr):
-        insn = self._decoded.get(addr)
-        if insn is None:
-            insn = self._decoded[addr] = mips.decode(self.image.word(addr), addr)
-        return insn
+        self.insn = mips.Decoder(image).insn
 
     def valid(self, addr):
         return addr % 4 == 0 and self.image.contains(addr)
@@ -222,7 +155,7 @@ class _Descent:
             self._delay_slot(addr + 4)
             if kind in ("branch", "branch_likely"):
                 self.pending.append(insn.target)
-                if _always_taken(insn):
+                if mips.always_taken(insn):
                     return
             elif kind == "call":
                 if self.image.contains(insn.target):
@@ -314,7 +247,7 @@ class _Descent:
     def _function_like(self, value, text_start, text_end):
         if value % 4 or not text_start <= value < text_end:
             return False
-        return value in self.starts or _is_prologue(self.insn(value))
+        return value in self.starts or mips.is_prologue(self.insn(value))
 
     def data_pointers(self, text_start, text_end):
         for addr in range(text_end, self.image.end_addr() - 3, 4):
@@ -337,14 +270,14 @@ class _Descent:
                 continue
             reg, high = insn.rt, insn.imm << 16
             for a in range(addr + 4, addr + 4 * (PAIR_WINDOW + 1), 4):
-                if a not in self.code or (a >= addr + 8 and _ends_path(self.insn(a - 8))):
+                if a not in self.code or (a >= addr + 8 and mips.ends_path(self.insn(a - 8))):
                     break  # left reached code, or passed the delay slot of a path end
                 nxt = self.insn(a)
                 if nxt.mnemonic == "addiu" and nxt.rs == reg:
                     yield a, (high + nxt.imm) & _M32
                 elif nxt.mnemonic == "ori" and nxt.rs == reg:
                     yield a, high | nxt.imm
-                if _dest(nxt) == reg:
+                if mips.dest_reg(nxt) == reg:
                     break
 
     def tail_calls(self, text_end):
@@ -364,7 +297,7 @@ class _Descent:
                 if target != owner:
                     self.add_start(target, "call")
             elif not owner <= target < end:
-                if self.valid(target) and _is_prologue(self.insn(target)):
+                if self.valid(target) and mips.is_prologue(self.insn(target)):
                     self.add_start(target, "call")
                 else:
                     out.append((addr, target))
@@ -399,7 +332,7 @@ class _Descent:
         instructions above the stack adjustment, so the start moves back over them."""
         for lo, hi in self.gaps(text_start, text_end):
             for addr in range(lo, hi, 4):
-                if _is_prologue(self.insn(addr)):
+                if mips.is_prologue(self.insn(addr)):
                     start = self._hoisted_start(lo, addr)
                     if start not in self.notes.withdrawn:  # never re-propose a refuted start
                         self.add_start(start, "prologue")
@@ -422,17 +355,11 @@ class _Descent:
         return q
 
 
-def _ends_path(insn):
-    return insn.kind in ("jump", "jump_reg") or (
-        insn.kind in ("branch", "branch_likely") and _always_taken(insn)
-    )
-
-
 def _constant(seq, start, reg, depth=0):
     """Value of `reg` built by lui [+ addiu/ori] in seq[start:] (nearest first), or None."""
     for k in range(start, len(seq)):
         insn = seq[k]
-        if _dest(insn) != reg:
+        if mips.dest_reg(insn) != reg:
             continue
         if insn.mnemonic == "lui":
             return insn.imm << 16
@@ -448,14 +375,14 @@ def _constant(seq, start, reg, depth=0):
 def _table_address(seq, reg):
     """Table address for `jr reg`: lw reg,off(base) where base = constant + index."""
     for k, insn in enumerate(seq):
-        if _dest(insn) != reg:
+        if mips.dest_reg(insn) != reg:
             continue
         if insn.mnemonic != "lw":
             return None
         offset, base = insn.imm, insn.rs
         for m in range(k + 1, len(seq)):
             add = seq[m]
-            if _dest(add) != base:
+            if mips.dest_reg(add) != base:
                 continue
             if add.mnemonic not in ("addu", "daddu"):
                 return None
@@ -531,6 +458,23 @@ def discover(image, entry, manual=()):
             refused.append(value)
     d.notes.rejected_pointers = refused
     return analysis, d.notes
+
+
+def reached_words(analysis):
+    """Function start -> the set of its reached words: the words of [addr, addr + size)
+    outside every unreached range (a function's size spans interior unreached ranges)."""
+    unreached = sorted(analysis.unreached)
+    lows = [lo for lo, _hi in unreached]
+    out = {}
+    for f in sorted(analysis.functions, key=lambda f: f.addr):
+        words = set()
+        for a in range(f.addr, f.addr + f.size, 4):
+            i = bisect.bisect_right(lows, a) - 1
+            if i >= 0 and a < unreached[i][1]:
+                continue
+            words.add(a)
+        out[f.addr] = words
+    return out
 
 
 def _hex(value):

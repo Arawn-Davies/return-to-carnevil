@@ -451,6 +451,17 @@ class Discovery(unittest.TestCase):
         self.assertEqual(names[L["g"]], fname(L["g"]))
         self.assertEqual(names[L["h"]], fname(L["h"]))
 
+    def test_reached_words(self):
+        analysis = functions.Analysis(BASE, BASE + 0x40, [
+            functions.Function(BASE, 0x20, "_start", {"entry"}),
+            functions.Function(BASE + 0x20, 0x20, fname(BASE + 0x20), {"call"}),
+        ], [], [(BASE + 0x08, BASE + 0x10)])
+        words = functions.reached_words(analysis)
+        self.assertEqual(list(words), [BASE, BASE + 0x20])
+        self.assertEqual(sorted(words[BASE]),
+                         [BASE, BASE + 4] + list(range(BASE + 0x10, BASE + 0x20, 4)))
+        self.assertEqual(sorted(words[BASE + 0x20]), list(range(BASE + 0x20, BASE + 0x40, 4)))
+
     def test_toml_roundtrip(self):
         a = self._switch("lw")
         res = functions.analyse(a.image(), BASE)
@@ -513,7 +524,7 @@ class GameExe(unittest.TestCase):
             if end != nxt.addr or nxt.addr in stub_block:
                 continue
             last = mips.decode(image.word(end - 8), end - 8) if f.size >= 8 else None
-            self.assertTrue(last is not None and functions._ends_path(last),
+            self.assertTrue(last is not None and mips.ends_path(last),
                             "0x%08X runs into 0x%08X" % (f.addr, nxt.addr))
         # Labels inside a function are not taken as starts (review round 1)
         for addr in (0x80151BD4, 0x80151CE4, 0x80151F9C, 0x800D1588):

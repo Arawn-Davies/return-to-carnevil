@@ -4,7 +4,7 @@ import struct
 import tempfile
 import unittest
 
-from carnevil_tools import exe
+from carnevil_tools import cksum, exe
 from tests.gamedata import requires_file, work_path
 
 
@@ -21,6 +21,9 @@ class ExeTests(unittest.TestCase):
         if word0 is None:
             word0 = exe.posix_cksum(body)
         return struct.pack("<I", word0) + body
+
+    def test_posix_cksum_lives_in_cksum(self):
+        self.assertIs(exe.posix_cksum, cksum.posix_cksum)
 
     def test_posix_cksum_check_value(self):
         self.assertEqual(exe.posix_cksum(b"123456789"), 0x377A6011)

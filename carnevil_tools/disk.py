@@ -6,7 +6,7 @@ import os
 import struct
 from dataclasses import dataclass
 
-from carnevil_tools.exe import posix_cksum
+from carnevil_tools.cksum import posix_cksum
 
 SECTOR = 512
 RAW_MAGIC = b"TRAP"
