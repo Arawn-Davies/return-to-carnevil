@@ -175,7 +175,7 @@ def _print_hwcensus(accesses, reach=None):
             print(line)
 
 
-def _hwcensus(path, loader):
+def _hwcensus(path, loader, ioctl=False):
     if loader is not None:
         if not os.path.isfile(loader):
             return _missing(loader)
@@ -199,9 +199,33 @@ def _hwcensus(path, loader):
     analysis = functions.read_toml(GAME_FUNCTIONS)
     print(f"{os.path.basename(path)} 0x{image.load_addr:08X}-0x{image.end_addr():08X}, "
           f"{len(analysis.functions)} functions (config/game.functions.toml)")
-    c = hwcensus.census(image, analysis, hwcensus.GAME_RETURNS)
-    _print_hwcensus(hwcensus.all_accesses(c))
+    _print_hwcensus(hwcensus.hardware_accesses(image, analysis, hwcensus.GAME_RETURNS))
+    if ioctl:
+        _print_ioctls(*hwcensus.ioctl_calls(image, analysis, hwcensus.GAME_RETURNS))
     return 0
+
+
+def _value_text(value):
+    if isinstance(value, int):
+        return f"0x{value:X}"
+    if isinstance(value, hwcensus.Idx):
+        return f"0x{value.base:X}+reg"
+    if isinstance(value, hwcensus.Ptr):
+        path = "/".join(f"0x{p:X}" for p in value.path)
+        return f"*[{path}]{value.delta:+#x}" + ("+reg" if value.indexed else "")
+    return "?"
+
+
+def _print_ioctls(counts, other):
+    """ioctl(fd, cmd) at the slot 0x0C8 stub: constant pairs, then the other sites."""
+    total = sum(counts.values()) + len(other)
+    print(f"\nioctl calls (stub 0x{hwcensus.IOCTL_STUB:08X}): {total} sites")
+    for (fd, cmd), n in sorted(counts.items()):
+        print(f"  fd {fd} cmd 0x{cmd:04X}: {n}")
+    print(f"sites without a constant descriptor or command: {len(other)}")
+    for call in other:
+        print(f"  0x{call.site:08X} in 0x{call.function:08X}: fd {_value_text(call.args.get(4))}"
+              f" cmd {_value_text(call.args.get(5))}")
 
 
 def _verify(partition):
@@ -246,12 +270,16 @@ def main(argv=None):
     hwc.add_argument("exe", nargs="?", help="GAME.EXE (uses config/game.functions.toml)")
     hwc.add_argument("--loader", metavar="BOOT_U32",
                      help="census the boot ROM's resident loader instead")
+    hwc.add_argument("--ioctl", action="store_true",
+                     help="also list the EXE's ioctl calls into the loader (slot 0x0C8)")
     args = parser.parse_args(argv)
 
     if args.command == "hwcensus":
         if (args.exe is None) == (args.loader is None):
             parser.error("hwcensus takes an EXE or --loader <boot.u32>, not both")
-        return _hwcensus(args.exe, args.loader)
+        if args.ioctl and args.loader is not None:
+            parser.error("--ioctl applies to an EXE, not to --loader")
+        return _hwcensus(args.exe, args.loader, args.ioctl)
     if args.command == "disasm":
         return _disasm(args.file, args.base, args.start, args.count)
     if args.command == "verify":

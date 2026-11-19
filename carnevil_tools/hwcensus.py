@@ -267,9 +267,19 @@ class Indirect:
     indexed: bool
 
 
+class _Unknown:
+    """The value of a store the census cannot value."""
+
+    def __repr__(self):
+        return "UNKNOWN"
+
+
+UNKNOWN = _Unknown()
+
+
 @dataclass
 class Store:
-    """A store of a known value (a constant, or a Ptr) into memory location `path`."""
+    """A store into memory location `path` of a constant, an Idx, a Ptr, or UNKNOWN."""
     site: int
     function: int
     path: tuple
@@ -513,8 +523,11 @@ def _record(fn, addr, insn, state, out):
             ea = ((base.base if indexed else base) + insn.imm) & _M32
             value = stored if isinstance(stored, int) else None
             out.accesses[(addr, ea)] = Access(addr, fn.start, ea, op, size, value, indexed)
-        path = _location(base, insn.imm)
-        if path is not None and isinstance(stored, (int, Ptr, Idx)):
+        path = _location(base, insn.imm) if op == "write" else None
+        if path is not None:
+            if size < 4 or not isinstance(stored, (int, Ptr, Idx)) or (
+                    isinstance(stored, Ptr) and stored.indexed):
+                stored = UNKNOWN  # a store the census cannot value: it disqualifies the path
             out.stores[(addr, path, stored)] = Store(addr, fn.start, path, stored)
     formed = out.formed
     for reg in _reads(insn):
@@ -673,14 +686,16 @@ def _single(values, accept):
 
 def ram_pointers(c):
     """Memory path -> the RAM address it holds, when every store the census sees into the
-    path stores that address (a table + register counts as the table, entry 0) or null."""
+    path stores that address (a table + register counts as the table, entry 0) or null.
+    A store of anything else (UNKNOWN, a loaded pointer) disqualifies the path."""
     seen = {}
     for s in c.stores:
         value = s.value.base if isinstance(s.value, Idx) else s.value
-        if isinstance(value, int):
-            seen.setdefault(s.path, set()).add(value)
+        seen.setdefault(s.path, set()).add(value if isinstance(value, int) else UNKNOWN)
     out = {}
     for path, values in seen.items():
+        if UNKNOWN in values:
+            continue
         value = _single(values, lambda v: is_kseg01(v) and classify(v) == "ram")
         if value is not None:
             out[path] = value
@@ -695,39 +710,45 @@ def _canonical(path, rams):
 
 
 def holders(c):
-    """Memory path -> the hardware base it holds: every store this census sees into the
-    path, and the image's initial word there, is the same non-RAM KSEG0/KSEG1 constant
-    (or null), directly or by copying a word loaded from another holder. A path through a pointer to a RAM structure is taken
-    as the structure's own address (`ram_pointers`). Stores the census cannot see (through
-    bases it does not know) are not accounted for."""
+    """(holders, ram_pointers). holders: memory path -> the hardware base it holds, when
+    every store this census sees into the path, and the image's initial word there, is the
+    same non-RAM KSEG0/KSEG1 constant (or constant + register, or null), directly or by
+    copying a word loaded from another holder. Any store into the path the census cannot
+    value (UNKNOWN: a register it does not know, a partial-word store, an FPU store) or a
+    copy from a location that is not a holder disqualifies the path. A path through a
+    pointer to a RAM structure is taken as the structure's own address (`ram_pointers`).
+    Stores through bases the census does not know cannot be seen at all and are not
+    accounted for."""
     rams = ram_pointers(c)
-    seen = {path: {value} for path, value in c.initial.items()}  # initialised data
+    direct = {path: {value} for path, value in c.initial.items()}  # initialised data
     copies = []
     for s in c.stores:
         dst = _canonical(s.path, rams)
-        if isinstance(s.value, (int, Idx)):
-            seen.setdefault(dst, set()).add(s.value)
-        elif isinstance(s.value, Ptr) and not s.value.indexed:
+        if isinstance(s.value, Ptr):
             copies.append((_canonical(s.value.path, rams), s.value.delta, dst))
+            direct.setdefault(dst, set())
+        else:
+            direct.setdefault(dst, set()).add(s.value)
 
     def accept(value):
         return _hardware(value.base if isinstance(value, Idx) else value)
 
-    while True:
-        known = {}
+    known = {}
+    for _round in range(64):  # least fixpoint: a copy counts only from a proven holder
+        seen = {path: set(values) for path, values in direct.items()}
+        for src, delta, dst in copies:
+            seen[dst].add(_offset(known[src], delta) if src in known else UNKNOWN)
+        new = {}
         for path, values in seen.items():
+            if UNKNOWN in values:
+                continue
             value = _single(values, accept)
             if value is not None:
-                known[path] = value
-        changed = False
-        for src, delta, dst in copies:
-            if src in known:
-                value = _offset(known[src], delta)
-                if value not in seen.setdefault(dst, set()):
-                    seen[dst].add(value)
-                    changed = True
-        if not changed:
-            return known, rams
+                new[path] = value
+        if new == known:
+            break
+        known = new
+    return known, rams
 
 
 def _hardware(value):
@@ -755,20 +776,87 @@ def all_accesses(c):
 
 
 def constant_addresses(image, analysis):
-    """Address -> code addresses forming it: each lui-based value an addiu/ori (or other
-    constant arithmetic) builds, each effective address of a load/store/cache through a
-    constant base, and each constant used as a jump target."""
-    c = census(image, analysis)
+    """KSEG0/KSEG1 address -> the code addresses forming it, from constants in code only:
+    each value an `addiu`/`ori` (or other constant arithmetic) builds on a `lui`, each
+    effective address of a load/store/cache through such a constant base (constant +
+    register counts at its constant part), and each such constant used as a jump target.
+    Only KSEG0/KSEG1 values are returned: no value at or above 0x80000000 can be built
+    without a `lui`, so these are the lui-formed ones; small integers are left out.
+
+    Not included: addresses reached through bases held in memory, passed between
+    functions, or returned by loader services. These are not constants in the code.
+    `hardware_accesses` is the function to size the hardware from."""
+    c = census(image, analysis, interprocedural=False)
     out = {}
     for a in c.accesses:
-        out.setdefault(a.addr, set()).add(a.site)
+        if is_kseg01(a.addr):
+            out.setdefault(a.addr, set()).add(a.site)
     for value, f in c.formed.items():
+        if not is_kseg01(value):
+            continue
         sites = {s for s in f.sites if mips.decode(image.word(s), s).mnemonic != "lui"}
         if "target" in f.roles:
             sites |= f.sites
         if sites:
             out.setdefault(value, set()).update(sites)
     return {v: sorted(s) for v, s in sorted(out.items())}
+
+
+def hardware_accesses(image, analysis, returns=None):
+    """Every load/store/cache access to a hardware region (KSEG0/KSEG1, neither RAM nor
+    unknown) that the census can attribute, as Access records sorted by site. These are
+    direct (constant, or constant + register) accesses and accesses through bases held
+    in memory under the `holders` rule, with interprocedural summaries applied. returns:
+    known results of calls out of the image; for GAME.EXE pass `GAME_RETURNS`. The
+    document's tables are built from this."""
+    c = census(image, analysis, returns)
+    return [a for a in all_accesses(c) if _hardware(a.addr)]
+
+
+@dataclass
+class CallArgs:
+    site: int       # the call instruction
+    function: int   # the function holding it
+    target: int
+    args: dict      # a0..a3 register number -> known value (int, Idx or Ptr)
+
+
+def call_arguments(image, analysis, targets, returns=None):
+    """The known argument registers at each direct call to one of `targets`, after the
+    delay slot, with the census's interprocedural summaries applied."""
+    tables = {t.jr_addr: t for t in analysis.jump_tables}
+    seeds, rets = _summaries(image, analysis, tables, dict(returns or {}))
+    targets = set(targets)
+    out = []
+    for start, words in function_words(analysis):
+        if start not in words:
+            continue
+        fn = _Function(image, start, words, tables, rets)
+        states = fn.solve(seeds.get(start, {}))
+        for addr in sorted(states):
+            insn = fn.insn(addr)
+            if insn.kind != "call" or insn.target not in targets or addr + 4 not in words:
+                continue
+            after = _transfer(_transfer(states[addr], insn), fn.insn(addr + 4))
+            out.append(CallArgs(addr, start, insn.target,
+                                {r: after[r] for r in _ARGS if r in after}))
+    return out
+
+
+IOCTL_STUB = 0x800C4154  # GAME.EXE's stub-block entry for loader slot 0x0C8, ioctl(fd, cmd, arg)
+
+
+def ioctl_calls(image, analysis, returns=None):
+    """(fd, cmd) -> count over the ioctl calls with a constant descriptor and command, and
+    the list of CallArgs whose descriptor or command is not a constant."""
+    counts, other = {}, []
+    for call in call_arguments(image, analysis, [IOCTL_STUB], returns):
+        fd, cmd = call.args.get(4), call.args.get(5)
+        if isinstance(fd, int) and isinstance(cmd, int):
+            counts[(fd, cmd)] = counts.get((fd, cmd), 0) + 1
+        else:
+            other.append(call)
+    return counts, other
 
 
 # --- the boot ROM's resident loader -----------------------------------------------------

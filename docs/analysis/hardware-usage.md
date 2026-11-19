@@ -67,9 +67,13 @@ register values:
 - a constant plus an unknown register (a table or buffer index) is "indexed": the access is
   counted at the constant part;
 - a word loaded from a fixed RAM address A (or from offset k of a pointer loaded from A) is
-  tracked as "the word at A" (or "at A, k"). When every store the census sees into that
-  location, and the image's initial word there, is the same hardware base, accesses through
-  the loaded word are counted against that base ("through a base held in memory");
+  tracked as "the word at A" (or "at A, k"). Accesses through the loaded word are counted
+  against a hardware base ("through a base held in memory") only when every store the census
+  sees into that location, and the image's initial word there, is that base, or null. A
+  store into the location of a value the census cannot know disqualifies it: an unknown
+  register, a partial-word store, an FPU store, or a copy from a location that is not itself
+  a holder. Stores through bases the census does not know are invisible to it, so the rule
+  is sound only for what it sees;
 - interprocedural: a function whose every direct caller passes the same hardware constant
   or loaded pointer in a0 to a3, and whose address is never taken, starts with it; a
   function whose every `jr ra` returns the same such value (or null) returns it. Slot
@@ -96,58 +100,48 @@ union over a register's functions; jumps through the handler tables are not foll
 
 ## GAME.EXE
 
-Measured, 2,091 functions, `GAME_RETURNS` applied. Regions with no access at all: GT64010,
-PCI I/O and IDE, CMOS and its write enable, the security PIC registers, the interrupt
-controller registers, watchdog, LEDs. The game reaches all of those through the loader only.
+Measured statically over 2,091 functions with `GAME_RETURNS` applied, with
+`hwcensus.hardware_accesses`; then checked dynamically by two MAME runs (sections
+"Dynamic check" below). Which regions GAME.EXE's own code touches is settled by the second
+run (attract mode only), not by the census: the census cannot see the CMOS reads below.
 
-**Voodoo registers** (0x08000000): 96 sites, 82 of them through the base held in memory, 26
-registers, in functions 0x8014FB78 to 0x80168C48 (Glide and the code around it). The base is stored by the board-mapping
-code at 0x801E5DE0 (0x80157018, after slot 0x110) and at 0x801E756C, with the LFB and
-texture bases at 0x801E7574 (base + 0x400000) and 0x801E7570 (base + 0x800000), by
-0x80161258.
+**Voodoo registers** (0x08000000), static: 14 sites, 6 registers, all through constant bases.
+The holder rule now disqualifies the Glide context words that hold the Voodoo base, so no
+access through them is counted (see "Holders under the sound rule"):
+- vdstatus 0x000: read 2 (0x8015EEAC)
+- swapbufferCMD 0x128: write 1 (0x8015EEAC)
+- clutData 0x228: write 2 (0x8014FB78, 0x8014FD7C)
+- textureMode 0x300, tLOD 0x304, texBaseAddr 0x30C: write 3 each (0x80168558)
 
-- vdstatus 0x000: read, 13 sites, 6 functions (0x8015B1B0, 0x8015B498, 0x8015EEAC,
-  0x8015F0C8, 0x801624D4, 0x80162570)
-- fbzColorPath 0x104, fogMode 0x108, stipple 0x140, color0 0x144, color1 0x148: write and
-  read, 0x80160340 and 0x801615E8
-- alphaMode 0x10C: write 2, read 1; 0x80160340, 0x801615E8
-- fbzMode 0x110: write 6, read 1; 6 functions
-- lfbMode 0x114: write 7, read 2; 8 functions (0x80160340, 0x80160D40, 0x80160DBC,
-  0x80160E54, 0x80160EEC, 0x80160F64 and two more)
-- clipLeftRight 0x118, clipLowYHighY 0x11C: write 2, read 1; 0x8015F23C, 0x80160340,
-  0x801615E8
-- fastfillCMD 0x124: write, 0x8015EC5C
-- swapbufferCMD 0x128: write, 0x8015EEAC (constant base)
-- fogColor 0x12C, chromaKey 0x134: write, 0x80160340; zaColor 0x130: write, 3 functions
-- fbiInit3 0x21C: read 4, 0x8015C45C
-- clutData 0x228: write 2, 0x8014FB78 and 0x8014FD7C (constant base)
-- textureMode 0x300, tLOD 0x304: write 10 each; texBaseAddr 0x30C: write 9; tDetail 0x308:
-  write 2; texBaseAddr_1/_2/_3_8 0x310 to 0x318: write 1 each; nccTable[4] 0x334: write 1.
-  Texture-unit code (0x80160340, 0x80163864, 0x80163F74, 0x80165124, 0x80165B7C, 0x801661C4,
-  0x80166814, 0x80168558), indexed by TMU
+Where the base lives: the board-mapping code stores it at 0x801E5DE0 (0x80157018, after slot
+0x110), and 0x80161258 stores it at 0x801E756C, with the LFB and texture bases at 0x801E7574
+(base + 0x400000) and 0x801E7570 (base + 0x800000). The MAME run gives the full register
+list: 125 written, 16 read ("Dynamic check: Voodoo accesses"). That list is the one to use.
 
-Not seen by the static census: the triangle set-up registers 0x008 to 0x080 (vertex, start,
-gradient, triangleCMD), nopCMD, fogTable, most of nccTable, fbiInit0/1/2/4, the video timing
-registers, dacData, maxRgbDelta, trexInit0/1. The MAME run below shows the game writes all of
-them; see "Dynamic check: Voodoo accesses" for the full list and why the census missed them.
+**Voodoo LFB** (0x08400000), static: 39 sites, 16-bit, in 0x8015BF58 and 0x8015BF08. These are
+fixed-pixel writes and reads with test patterns (0xDEAD, 0x5A5A, 0x55AA, 0xAA55, 0xFFFF, 0)
+at 14 constant addresses across the buffer: a frame buffer memory test (inferred from the
+patterns).
 
-**Voodoo LFB** (0x08400000): 45 sites, 16-bit accesses.
-- 0x8015BF58 and 0x8015BF08: fixed-pixel writes and reads with test patterns (0xDEAD,
-  0x5A5A, 0x55AA, 0xAA55, 0xFFFF, 0) at 14 constant addresses across the buffer: a frame
-  buffer memory test (inferred from the patterns).
-- 0x80167390, 0x8016754C: indexed reads and writes through the LFB base held at 0x801E7574.
-
-**Voodoo texture memory** (0x08800000): 11 writes, indexed, 9 through the texture base held
-at 0x801E7570; 0x80165B7C, 0x801661C4, 0x80168558, 0x80168C48 (texture download).
+**Voodoo texture memory** (0x08800000), static: 2 indexed writes in 0x80168558 and 0x80168C48
+(texture download). The run measured 436,973.
 
 **IOASIC sound FIFO** (0x13000000): 3 writes in 0x8013FF78, through the base the image's data
 word 0x801A25CC holds (0xB3000000): the game feeds the DCS2 FIFO itself.
 
-**IOASIC** (0x16000000): one register only, SOUNDSTAT (bus word 14, 0x16000038): 13 writes in
-0x801470A4, 0x80147130, 0x801477B4, small constants 0 to 5 and more. MAME treats SOUNDSTAT as
-a status read; a write only latches. Everything else on the IOASIC (inputs, coin, UART,
-sound data port, PIC, interrupt control) the game reaches through the loader's `ioasic:`,
-`sound:`, `tty:` and `pic:` drivers.
+**IOASIC** (0x16000000), static: one register only, SOUNDSTAT (bus word 14, 0x16000038): 13
+writes in 0x801470A4, 0x80147130, 0x801477B4, with small constants 0 to 5 and more. MAME
+treats SOUNDSTAT as a status read, and a write only latches. None of these writes ran in
+the MAME run. Everything else on the IOASIC (inputs, coin, UART, sound data port, PIC,
+interrupt control) the run saw only from loader code. Statically the game uses the `ioasic:`
+descriptor (fd 4) and `pic:`; `sound:` and `tty:` were not seen in the game's descriptor or
+ioctl use, and the console descriptors' driver is not identified.
+
+**CMOS** (0x16100000): no static access. The MAME run measured 252,532 direct byte reads by
+GAME.EXE, all at one site in 0x801458C0, a CRC loop over CMOS bytes with its table at
+0x801A2A38. The address it reads comes in as an argument, built from the base the loader
+returns for ioctl 0x6301; the census cannot see it. The game writes no CMOS byte and does
+not write the CMOS write enable; writes go through the loader (dynamic, attract mode).
 
 **CarnEvil gun** (0x16800000): 29 sites, byte reads of all 8 registers (P1/P2 X low, X high,
 Y low, Y high); X high read 11 and 10 times. 0x800D4F6C reads all eight and writes offsets 0
@@ -176,7 +170,8 @@ Alternate status/device control 0x0A0003F6: read 22, write 2 (0 and 4: soft rese
 functions. Bus-master DMA 0x0A000F00: read 3, write 7, 0x0A000F04 write 1 (0x80012158,
 0x800124F4, 0x800128F8).
 
-**GT64010** (0x0C000000): 126 sites, 16 registers.
+**GT64010** (0x0C000000): 126 sites, 15 registers (the CLI shows a sixteenth address,
+0xC17, which is an artefact; see below).
 - DMA0 to DMA3 control 0x840 to 0x84C: read 3, write 3 each (0x8000D970, 0x8000E930 load and
   run, 0x8000EC04): stop the DMA channels before a new program runs.
 - TIMER0 to TIMER3 count 0x850 to 0x85C (written 0x4C4B40, 0x17D7840, 0xFFFFFF) and
@@ -202,9 +197,13 @@ functions. Bus-master DMA 0x0A000F00: read 3, write 7, 0x0A000F04 write 1 (0x800
   write 2: acknowledge): the `sound:` driver (0x8000FD70 to 0x8000FF3C) and 0x8000D370.
 
 **CMOS** (0x16100000): read and write, one byte per 32-bit word, from the `cmos:` driver's read
-(0x8000A0E0) and write (0x8000A13C) routines, at the position word 0x80014D78 (initially
-0xB6100000; ioctl 0x6300 moves it). Each byte write is preceded by a write of 1 to the CMOS
-write enable 0x17000000.
+(0x8000A0E0) and write (0x8000A13C) routines, at the position word 0x80014D78. That word is
+initially 0xB6100000, and ioctl 0x6300 stores the caller's address there. That store has a
+value the census cannot know, so under the sound holder rule the census no longer resolves
+these data accesses; this paragraph is from reading the code and from the MAME run, which
+measured 9,980 reads and 4,256 writes by loader code. Each byte write is preceded by a write
+of 1 to the CMOS write enable 0x17000000 (read; the run counted 4,256 enable writes, one per
+byte written).
 
 **CS3 control registers**:
 - watchdog 0x17100000: write 15 sites, 11 functions (interrupt paths 0x80005244, 0x80005368,
@@ -234,7 +233,9 @@ Through the driver table the game reaches the `cmos`, `ioasic`, `timer`, `pic`, 
 
 ### What the game asks the loader's drivers for (measured)
 
-Constant arguments at the ioctl slot (0x0C8) calls, 160 sites. The standard descriptors are
+Constant arguments at the ioctl slot (0x0C8) calls, 160 sites. Produced by
+`python3 -m carnevil_tools hwcensus GAME.EXE --ioctl` (`hwcensus.ioctl_calls`, with
+`call_arguments` and the census's interprocedural summaries). The standard descriptors are
 opened by the loader in this order (0x800065E0, read): `con:` three times (fd 0, 1, 2, inferred
 from the order), `cmos:` (fd 3), `ioasic:` (fd 4), `timer:` (fd 5).
 
@@ -245,15 +246,25 @@ from the order), `cmos:` (fd 3), `ioasic:` (fd 4), `timer:` (fd 5).
 - fd 5 (`timer:` by the open order; the `tty:` ioctl 0x8000F1B0 also tests 0x74xx numbers,
   so the driver is to be confirmed): 0x7401 6, 0x7402 1, 0x7403 2, 0x7405 6, 0x7406 1, 0x7407 2, 0x7409 11,
   0x740A 1, 0x740B 1.
-- `pic:` (opened by 0x800C6480): 0x7000, 0x7001, 0x7002, one each.
-- a descriptor held in memory: 0x7300 1, 0x7301 8 (0x80167FF8, 0x80168224, 0x801683EC); the
-  0x73xx commands are handled by the `sysctrl:` driver's ioctl 0x8000FB44 (read).
-- 3 sites with no constant descriptor.
+12 sites have no constant descriptor. Every one of them has a constant command:
+- 0x800C64D4, 0x800C64E4, 0x800C64F4 in 0x800C6480: commands 0x7000, 0x7001, 0x7002. The
+  descriptor is the result of `open("pic:", 0)` in the same function, through the open
+  wrapper 0x80145698 (read).
+- 0x80168014 in 0x80167FF8: 0x7300. 0x80168300, 0x80168328, 0x80168348, 0x80168368 in
+  0x80168224 and 0x80168480, 0x801684A8, 0x801684C8, 0x801684E8 in 0x801683EC: 0x7301. The
+  descriptor is the word at 0x801DE89C, which `main` sets from `open("pci:", 6)` (0x800C4540,
+  stored at 0x800C4550). The 0x73xx numbers match the constants in the ioctl routine
+  0x8000FB44 of the table entry named `sysctrl`. That `pci:` opens that driver is inferred.
+
+So the command numbers at all 160 sites are known. The pic commands issued are 0x7000 to
+0x7002 only.
 
 ## The four questions
 
 **1. Does GAME.EXE talk to the security PIC through the IOASIC, and with which commands?**
-No. GAME.EXE has no access to PICOUT or PICIN (measured; the test asserts it). It opens `pic:`
+No. GAME.EXE has no access to PICOUT or PICIN: none statically (the test asserts it), and
+none in the MAME run (attract mode). In that run every PIC access came from loader code
+before the hand-off, and none after it ("Split run"). It opens `pic:`
 and calls ioctl 0x7000, 0x7001 and 0x7002 from 0x800C6480. The loader's `pic:` ioctl
 (0x8000B0D8, read; jump table at 0x80013818) answers those three from words it stored at
 start-up (0x800B8650, 0x800B8398, 0x800B867C), with no PIC traffic. The PIC itself is driven
@@ -263,26 +274,42 @@ decodes it (0x8000AE2C). The driver also has clock commands 2 then 3 (read, 0x80
 (write, 0x8000AA20), behind ioctls 0x7003 to 0x7006, which the game never issues. Nibbles
 are sent as `0x90 | nibble` on PICOUT, the echo `0x80 | nibble` is awaited on PICIN bit 8,
 then 0 is written, as in MAME's PIC2 model. PIC NVRAM commands 5 and 6 are never sent; the
-MAME run 3 PIC NVRAM (`ioasic`, 256 bytes) stayed all 0xFF. Sure: high (static, consistent
-with the MAME NVRAM).
+MAME run 3 PIC NVRAM (`ioasic`, 256 bytes) stayed all 0xFF. Sure: high for attract mode
+(static, and dynamic with PC attribution). Medium for gameplay, which was not run, but the
+game issues no pic command besides 0x7000 to 0x7002 at any of its 160 ioctl sites.
 
-**2. Does it read CMOS/NVRAM, and which offsets?** Yes, read and write, but only through the
-loader's `cmos:` driver (fd 3): GAME.EXE has no CMOS or write-enable access of its own
-(measured). It asks for the base (0x6301: 0xB6100000) and the size (0x6302: 0x8000 bytes),
+**2. Does it read CMOS/NVRAM, and which offsets?** Yes, both.
+- It writes only through the loader's `cmos:` driver (fd 3). The MAME run saw no CMOS or
+  write-enable write by GAME.EXE code, and 4,256 by loader code after the hand-off.
+- It reads both ways. The run measured 252,532 direct byte reads by GAME.EXE code, at the
+  CRC loop in 0x801458C0, over 1,160 byte offsets in 0x000 to 0x767 (every byte of each word
+  group the CRC covers, with gaps between groups). It also measured 9,980 reads through the
+  driver. The static census cannot see the direct reads: their address is an argument built
+  from the base ioctl 0x6301 returns. The earlier "no CMOS access of its own" was wrong.
+
+It asks for the base (0x6301: 0xB6100000) and the size (0x6302: 0x8000 bytes),
 computes the addresses of its areas from bases kept at 0x801DE3B0, 0x801E3BF8, 0x8022B080
 and 0x80230F74 (the debug strings name audits, adjustments and GCR tables; which base is
 which was not read), sets the
 position with ioctl 0x6300 (23 sites, functions 0x80145C0C to 0x80146A30) and reads or writes
-through the file slots. No offset is a constant in the code. In MAME run 3 (149 s from a blank
-NVRAM, attract mode) CMOS bytes 0x000 to 0x76B were written, in five runs: 0x000-0x3BF,
-0x3C8-0x59F, 0x5A8-0x60B, 0x65C-0x75B, 0x768-0x76B (1,792 bytes; measured from the NVRAM
-file). Which of those are read back was not measured. Sure: high for the mechanism; medium
-for the offset list (one run, no game played).
+through the file slots. No offset is a constant in the code.
 
-**3. Linear frame buffer or command registers only?** Both, plus texture memory. The LFB is
-used: lfbMode is written by 8 functions, the LFB is read and written through its base
-(0x80167390, 0x8016754C) and a memory test writes and reads fixed pixels (0x8015BF58). Texture
-memory is written by 4 texture download functions. In MAME the game's own code read the LFB
+Offsets:
+- In MAME run 3 (149 s from a blank NVRAM, attract mode) the CMOS bytes that differ from a
+  blank NVRAM are 0x000 to 0x76B, in five ranges: 0x000-0x3BF, 0x3C8-0x59F, 0x5A8-0x60B,
+  0x65C-0x75B, 0x768-0x76B (1,792 bytes, from the NVRAM file).
+- The hardware run measured the written offsets directly: the loader wrote exactly those
+  1,792 byte offsets, in the same five ranges.
+- The loader read 1,648 offsets in 13 ranges between 0x000 and 0x76B. The game's CRC loop
+  read the 1,160 above.
+
+Sure: high for the mechanism and for attract mode (static and dynamic); medium for the
+offset list, since no game was played and gameplay may touch more (audits).
+
+**3. Linear frame buffer or command registers only?** Both, plus texture memory. Statically,
+a memory test writes and reads fixed LFB pixels (0x8015BF58, 0x8015BF08), and texture
+download writes texture memory (0x80168558, 0x80168C48). Dynamically, lfbMode was written
+7,551 times. In MAME the game's own code read the LFB
 8,237 times and wrote it 12 times in 85 seconds of attract mode, against 436,973 texture
 memory writes and 20,342 register writes (dynamic check below): in attract mode the LFB is a
 side path and drawing goes through the triangle registers (triangleCMD, nopCMD, fastfillCMD,
@@ -296,14 +323,23 @@ during gameplay, which was not run.
   also writes VBLANK clear and sets interrupt enable bit 7 (0x80006220), so line 0 is the
   VBLANK interrupt. Run 3 hit it thousands of times. Sure: high.
 - CPU line 3, 0x8013F678: IP3, IRQ1, the IOASIC summary (seattle.cpp). Hit in run 3.
+  Sure: high for the registration and the IP3 mapping (static, run 3); medium that the
+  IOASIC is its only source, since MAME wires only the IOASIC to IRQ1 and the board was not
+  checked.
 - GT64010 cause bits (slot 0x1E0, served by the loader's IP2 default handler): bit 4 (DMA0
-  complete) 0x800C611C, then 0x8014FDF0; bits 1, 2, 3 (MemOut, DMAOut, CPUOut errors)
-  0x800C4CEC, 0x800C4D10, 0x800C4D34.
+  complete) 0x800C611C, then 0x8014FDF0 (0x8014FDF0 hit in run 3); bits 1, 2, 3 (MemOut,
+  DMAOut, CPUOut errors) 0x800C4CEC, 0x800C4D10, 0x800C4D34. Sure: high for the
+  registrations (static, all logged in run 3); medium for the bit names, which come from
+  MAME's GT64010 constants, not from the game.
 - FPU causes 5 (unimplemented operation) 0x80150860 and 3 (divide by zero) 0x8014FEF0; break
   hooks 0x800C4DA0 (divide by zero) and 0x800C4E68 (overflow); exception codes 1 to 8 and 10
-  to 15, 0x800C47E0, and code 13 later 0x80151A70 (break 0x409).
+  to 15, 0x800C47E0, and code 13 later 0x80151A70 (break 0x409). Sure: high (static, logged
+  in run 3).
 - Not registered: IP4 (IDE, IRQ2: the loader's disk driver polls), the GT64010 timers (the
-  loader's `timer:` driver owns them), IP5, IP7.
+  loader's `timer:` driver owns them), IP5, IP7. Sure: medium. No registration call for them
+  exists in the code, and run 3 logged none. But "the disk driver polls" and "the timer
+  driver owns the timers" are read from the loader, not traced: the timer-driver writes to
+  TIMER_CONTROL and TIMER1 in the second MAME run were made by loader code.
 - Correction to `boot-handoff.md`: the loader calls a CPU-line handler with a0 = the Cause IP
   bit (0x100 << n), not (Cause, frame); a1 is not set for it (0x80005100, read). GT64010 and
   exception handlers are as described there. (Not edited in that page by this task.)
@@ -373,14 +409,21 @@ and the counters 0x14C to 0x15C. Attract mode uses the fixed-point triangle path
 reads (0x8015B82C to 0x8015B85C, 0x80163864, 0x80163F74, the computed-jump copy routines
 around 0x801644F4, and 0x80169134 to 0x8016932C).
 
-**Code outside GAME.EXE** touched the Voodoo before the hand-off: 1,916 swapbufferCMD,
-178 each of textureMode, tLOD and texBaseAddr, 1 trexInit1 write, 45,330 vdstatus reads and
-399,314 texture writes. That is the boot ROM's POST program. No loader routine called on the
-game's behalf touches the Voodoo; slot 0x110 only maps it, through PCI configuration.
+**Code outside GAME.EXE** touched the Voodoo: 1,916 swapbufferCMD, 178 each of textureMode,
+tLOD and texBaseAddr, 1 trexInit1 write, 45,330 vdstatus reads and 399,314 texture writes.
+This run did not record when these accesses happened or which program made them. Inferred:
+they are the boot ROM's POST program before the hand-off, which does the Glide/Voodoo set-up
+(`boot-handoff.md`); the loader has no Voodoo access in the static census, and slot 0x110
+only maps the board through PCI configuration.
 
-**Reconciliation.** Every register the static census listed was seen in the run, so it gave
-no false positives. It missed 101 of the 125 written registers and 4 of the 16 read ones.
-All of the missed accesses go through Glide's one-instruction access helpers: 0x8015DB04
+**Reconciliation.** These are the static census figures before the holder rule was made
+sound (fix round 1). The static census as it now stands lists 6 registers, all of them also
+seen in the run. The earlier 26-register list, which used the now-disqualified holders, had
+no false positives either: every register on it was seen in the run. That list missed 101 of
+the 125 written registers (fbiInit3, which it had only as a read, is among them) and 4 of
+the 16 read ones. Inferred from the PCs, which are those of MAME's recompiler and only
+approximate: the missed accesses go through Glide's one-instruction access helpers. Their
+call sites are the PCs recorded for the triangle, init and reset registers. 0x8015DB04
 stores a1 at a0, and 0x8015DB0C loads from a0. Their callers pass "base + register offset" in
 a0, for example 0x8015B1B0 (triangles), 0x801579F8 (register reset: every register once) and
 0x80157454 (board initialisation), with the base in a saved register that came in as an
@@ -394,6 +437,97 @@ A context-sensitive step would recover most of them: count a call to a function 
 stores or loads through its incoming a0 as an access at the call site, at the caller's a0.
 The census does not do that yet, and the static lists above are left as measured. The
 recommendation is to take the Voodoo register list from this run.
+
+**Holders under the sound rule** (fix round 1). The holder rule now rejects a location that
+receives any store the census cannot value. Holders before and after:
+- GAME.EXE before: 0x801A25CC (0xB3000000), 0x801E5DE0, 0x801E756C, 0x801E7578, 0x80212D74
+  (0xA8000000), 0x801E7574 (0xA8400000), 0x801E7570 (0xA8800000). GAME.EXE after: 0x801A25CC
+  and 0x801E5DE0. 0x801E5DE0 resolves no access.
+- What disqualified them: 0x801E756C gets an unknown `sw` at 0x80164AF4 (in 0x80164A10). It
+  is a store to a field of a table entry indexed by a register, which the entry-0 rule
+  folds onto this address, so not the base arriving another way. 0x801E7574 and 0x801E7570
+  get unknown stores at 0x80164C78 and 0x80164C80 (in 0x80164B2C), and copies of 0x801E756C
+  + 0x400000 / + 0x800000. 0x801E7578 and 0x80212D74 get only copies from 0x801E756C, which
+  is no longer a holder.
+- Resolved GAME.EXE accesses: 100 before, 3 after. The 97 lost are 82 Voodoo register, 9
+  texture memory and 6 LFB accesses (registers: vdstatus, fbzColorPath, fogMode, alphaMode,
+  fbzMode, lfbMode, clipLeftRight, clipLowYHighY, fastfillCMD, fogColor, zaColor, chromaKey,
+  stipple, color0, color1, fbiInit3, textureMode, tLOD, tDetail, texBaseAddr, _1, _2, _3_8,
+  nccTable[4]). The first MAME run saw all of them from GAME.EXE code, so the losses were
+  true accesses. The 3 that survive are the sound FIFO writes in 0x8013FF78; the second MAME
+  run saw 512 sound FIFO writes from GAME.EXE code (0x8013FF88, 0x8013FF9C).
+- Loader before: 0x80015344 (0xA9000000, SCSI) and 0x80014D78 (0xB6100000, the CMOS
+  position). Loader after: 0x80015344. 0x80014D78 gets the caller's address from ioctl 0x6300
+  at 0x8000A1F8. Its 2 resolved CMOS accesses are lost; the second MAME run saw loader CMOS
+  reads and writes, so they were true. The SCSI accesses were not exercised (no SCSI
+  device).
+
+## Dynamic check: the other hardware (measured in MAME, fix round 1)
+
+**Run.** The machine, ROMs, NVRAM (blank) and inputs (none) were the same as the Voodoo run.
+The options were `-nodrc -video none -sound none -nothrottle -seconds_to_run 90` under
+`timeout 2400`, with `-autoboot_script mame/scripts/hwtap.lua`. Read and write taps covered
+physical 0x0A000000 to 0x0C000FFF (PCI I/O, so IDE, plus the GT64010) and 0x10000000 to
+0x17FFFFFF (all four chip selects: sound FIFO, CS2, IOASIC, CMOS, gun, CS3 control
+registers).
+- Each access is attributed by the CPU's CURPC, which is precise under the interpreter
+  (`-nodrc`; in this build it reads one instruction after the access). The groups are
+  GAME.EXE (0x800C4000 to 0x801A4224, the stub block excluded), the stub block
+  (0x800C408C to 0x800C42CB), the loader (0x80000000 to 0x80015C40) and other.
+- 90.0 emulated seconds, 4,892 frames, average speed 28%. The first access by GAME.EXE code
+  came at 9 emulated seconds. Taps were reinstalled every 30 frames, as before.
+- The taps report the 32-bit-aligned address, so byte registers that share a word (the IDE
+  task file) are counted per word.
+- Output: `mame/hw-tap/hw-tap.txt` on the share.
+- A second run, with an extra tap marking the hand-off and splitting the loader's counts
+  into before and after it, is reported below as "split run".
+
+**By GAME.EXE's own code** (attract mode):
+- carnevil_gun: 76,878 accesses. Reads of all 8 registers: X high 21,355 and 17,084, the
+  others 4,271 each. Writes: offset 0 8,542, offset 4 4,271. PCs 0x800D4FE4 to 0x800D5814.
+- CMOS: 252,532 byte reads (1,160 distinct byte offsets in 0x000 to 0x767), all at the CRC
+  loop in 0x801458C0. No writes.
+- sound FIFO 0x13000000: 512 writes (0x8013FF88, 0x8013FF9C).
+- 0x17F00000: 1 read, 1 write (0x800D4BA4, 0x800D4BC8).
+- Nothing else: no IDE, GT64010, IOASIC, CMOS write enable, watchdog, interrupt control, VBLANK
+  clear or LED access by GAME.EXE code, and none by the stub block. The static SOUNDSTAT
+  writes (0x801470A4 ...) did not run.
+
+**By loader code** (the loader's own start-up plus everything after the hand-off):
+- IDE: 256,552 task-file accesses (data word 239,360 reads, 4,911 writes; the 0x1F4 word
+  12,281); alternate status 348,813; bus-master DMA 11,650.
+- GT64010: 9,604,980. TIMER_CONTROL 3,705,134 reads and as many writes; TIMER1/2/3 counts;
+  INTR_CAUSE 6,116 reads, 2,884 writes; CPU_MASK; DMA0 control 6,076 writes and DMA0 next
+  2,025 writes; DMA1 to DMA3 control; PCI configuration 359 address writes, 295 data reads,
+  64 data writes; PCI command and timeout.
+- IOASIC: 3,052,229. SOUNDSTAT 1,679,829 reads, SOUNDOUT 1,230,929 writes, COIN 32,790 reads,
+  PORT2 32,768 writes, INTCTL 19,166 reads and writes, INTSTAT 14,658, PORT0 to PORT3 reads,
+  UARTOUT 1,033, SOUNDIN, SOUNDCTL, PICOUT 34 writes, PICIN 102 reads.
+- CMOS: 9,980 reads, 4,256 writes; CMOS write enable 4,256 writes.
+- watchdog 173, VBLANK clear 4,374, LEDs 5,377 reads and 5,393 writes, interrupt enable 3
+  reads and 3 writes, interrupt configuration 1 and 1, 0x17F00000 6 and 6, no-op register 1.
+- Other code (the POST program): CS2 0x14000068 1 write, LEDs 2 writes.
+
+**Split run** (`mame/scripts/hwtap-split.lua`, output `mame/hw-tap/hw-tap-split.txt`). It is
+the same run with one more tap. The first non-zero write to physical 0x000C408C, `_start`
+copying the slot table, marks the hand-off, which came at 5.0 emulated seconds. Loader
+accesses after it are counted apart. The totals came out identical to the first run, so the
+emulation is deterministic here. After the hand-off, loader code made:
+- IDE: 16,303 task-file accesses, 4,658 alternate status reads, 11,645 bus-master DMA
+  accesses (file reads for the game);
+- GT64010: 9,142,595 (timers, cause and mask, DMA0 6,075 control and 2,025 next writes, PCI
+  configuration 94 address writes);
+- IOASIC: 2,985,826 (sound, inputs PORT0 to PORT3, INTCTL/INTSTAT, UARTOUT 902), but no
+  PICOUT, PICIN or COIN access: all 34 PIC writes and 102 PIC reads, and all 32,790 COIN
+  reads, came before the hand-off;
+- CMOS: all 9,980 reads and 4,256 writes, and all 4,256 enable writes;
+- watchdog 170, VBLANK clear 4,371, LEDs 10,748, interrupt enable 1 and 1. Interrupt
+  configuration only before the hand-off.
+
+What changed against the static census: GAME.EXE does touch the CMOS itself, for reads.
+This is a result: the runtime must give it readable CMOS at 0xB6100000 with one byte per
+word (Recommendation 1). Everything else matches the static census's negatives, for attract
+mode.
 
 ## Constants that are not addresses
 
@@ -421,17 +555,26 @@ dereferenced there.
 
 ## Decisions for the runtime (recommendations)
 
-1. **Implement the loader's drivers, not its registers, for the game's view of the CMOS, PIC,
-   timers, IOASIC and disk.** The game never touches them; it calls open/read/write/ioctl on
-   `cmos:`, `ioasic:`, `timer:`, `pic:`, `sysctrl:`, `wdog:`, the console and files, with
-   the ioctl commands listed above. The stand-ins need: `cmos:` as a 32 KB byte store with
-   ioctls 0x6300 to 0x6302 (positions are addresses 0xB6100000 + 4 × offset); `pic:` 0x7000
-   to 0x7002 returning the three serial-derived words; the 0x69xx, 0x74xx and 0x73xx sets,
-   whose meanings still need reading from the drivers named above. Sure: high for the list,
-   medium until the 0x69xx/0x73xx/0x74xx semantics are read.
+1. **Implement the loader's drivers, not its registers, for the game's view of the PIC,
+   timers, IOASIC, disk and CMOS writes. Back the CMOS with memory the game can also read.**
+   - GAME.EXE's own code touched none of the IDE, GT64010, IOASIC (bar the never-executed
+     SOUNDSTAT writes), PIC, interrupt-controller, watchdog or LED registers. That holds
+     statically, and dynamically with PC attribution in attract mode.
+   - It calls open/read/write/ioctl on `cmos:`, `ioasic:`, `timer:`, `pic:`, `pci:`, `wdog:`,
+     the console and files, with the ioctl commands listed above.
+   - The stand-ins need:
+     - `cmos:` as a 32 KB byte store with ioctls 0x6300 to 0x6302. Positions are addresses
+       0xB6100000 + 4 × offset. The same bytes must also be readable by the game at those
+       addresses, one byte per 32-bit word, because its CRC loop reads them directly.
+     - `pic:` 0x7000 to 0x7002, returning the three serial-derived words.
+     - the 0x69xx, 0x74xx and 0x73xx sets, whose meanings still need reading from the
+       drivers named above.
+   - Sure: high for attract mode; medium for gameplay; medium until the 0x69xx, 0x73xx and
+     0x74xx semantics are read.
 2. **Emulate directly what GAME.EXE touches itself:** the Voodoo (registers, LFB, texture
-   memory at 0x08000000), the gun registers, the sound FIFO at 0x13000000, the IOASIC
-   SOUNDSTAT write, the ASIC reset/flash register, and the reset vector. For the Voodoo, take
+   memory at 0x08000000), the gun registers, the sound FIFO at 0x13000000, CMOS reads, the
+   IOASIC SOUNDSTAT write (static only), the ASIC reset/flash register, and the reset
+   vector. For the Voodoo, take
    the register list from the dynamic check (125 registers written, 16 read), not from the
    static census alone. Sure: high for these being touched; medium for completeness of the
    Voodoo list, since gameplay was not run.
@@ -446,6 +589,9 @@ dereferenced there.
 
 ## Not confirmed
 
+- **Everything the two MAME runs measured covers boot and attract mode only.** A region or
+  register GAME.EXE touches only during gameplay would be missing, both from "by GAME.EXE's
+  own code" and from the static negatives, which the CMOS reads show can be incomplete.
 - **Voodoo registers used only during gameplay.** The dynamic check covered boot and attract
   mode only, with no coin or input. Registers only gameplay uses (for example the float
   triangle path 0x088 to 0x100, fogColor changes, other chromaKey or alpha settings) would

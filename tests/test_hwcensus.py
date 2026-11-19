@@ -171,6 +171,57 @@ class Pairs(unittest.TestCase):
         image, analysis = _image(words)
         self.assertEqual(hwcensus.resolve(hwcensus.census(image, analysis)), [])
 
+    def test_unknown_store_disqualifies_a_holder(self):
+        words = [lui(A0, 0xA800), lui(AT, 0x8020), sw(A0, 0x10, AT),
+                 sw(A1, 0x10, AT),                      # a1 unknown
+                 lw(T0, 0x10, AT), sw(ZERO, 0x128, T0), JR_RA, NOP]
+        image, analysis = _image(words)
+        c = hwcensus.census(image, analysis)
+        self.assertEqual(hwcensus.holders(c)[0], {})
+        self.assertEqual(hwcensus.resolve(c), [])
+
+    def test_partial_store_disqualifies_a_holder(self):
+        words = [lui(A0, 0xA800), lui(AT, 0x8020), sw(A0, 0x10, AT),
+                 sh(ZERO, 0x10, AT), lw(T0, 0x10, AT), sw(ZERO, 4, T0), JR_RA, NOP]
+        image, analysis = _image(words)
+        self.assertEqual(hwcensus.holders(hwcensus.census(image, analysis))[0], {})
+
+    def test_copy_from_a_holder_and_from_a_non_holder(self):
+        words = [lui(A0, 0xA800), lui(AT, 0x8020), sw(A0, 0x10, AT),   # 0x80200010 = base
+                 lw(T0, 0x10, AT), sw(T0, 0x20, AT),                   # copied to 0x80200020
+                 lw(T1, 0x30, AT), sw(T1, 0x40, AT),                   # 0x80200030 unknown
+                 sw(A0, 0x40, AT),                                     # 0x80200040: mixed
+                 JR_RA, NOP]
+        image, analysis = _image(words)
+        known = hwcensus.holders(hwcensus.census(image, analysis))[0]
+        self.assertEqual(known, {(0x80200010,): 0xA8000000, (0x80200020,): 0xA8000000})
+
+    def test_constant_addresses_leave_out_small_integers(self):
+        words = [addiu(T0, ZERO, 5), ori(T1, ZERO, 0x4000), lui(A0, 0xB600),
+                 lw(V1, 4, A0), JR_RA, NOP]
+        image, analysis = _image(words)
+        self.assertEqual(hwcensus.constant_addresses(image, analysis), {0xB6000004: [_site(3)]})
+
+    def test_hardware_accesses_include_memory_held_bases_only_for_hardware(self):
+        words = [lui(A0, 0xA800), lui(AT, 0x8020), sw(A0, 0x10, AT),
+                 lw(T0, 0x10, AT), sw(ZERO, 0x128, T0), JR_RA, NOP]
+        image, analysis = _image(words)
+        accesses = hwcensus.hardware_accesses(image, analysis)
+        self.assertEqual([(a.addr, a.via) for a in accesses], [(0xA8000128, (0x80200010,))])
+        self.assertEqual(hwcensus.constant_addresses(image, analysis),
+                         {0x80200010: [_site(2), _site(3)]})
+
+    def test_call_arguments(self):
+        words = [addiu(A0, ZERO, 4), jal(0x800C4154), addiu(A1, ZERO, 0x6903),
+                 jal(0x800C4154), addiu(A1, ZERO, 0x6900), JR_RA, NOP]
+        image, analysis = _image(words)
+        calls = hwcensus.call_arguments(image, analysis, [0x800C4154])
+        self.assertEqual([(c.site, c.args.get(4), c.args.get(5)) for c in calls],
+                         [(_site(1), 4, 0x6903), (_site(3), None, 0x6900)])
+        counts, other = hwcensus.ioctl_calls(image, analysis)
+        self.assertEqual(counts, {(4, 0x6903): 1})
+        self.assertEqual([c.site for c in other], [_site(3)])
+
     def test_known_return_value(self):
         words = [jal(0x800C419C), NOP, sw(ZERO, 0x128, V0), JR_RA, NOP]
         image, analysis = _image(words)
@@ -258,11 +309,41 @@ class GameExe(unittest.TestCase):
         self.assertEqual(used, set(), "unclassified addresses dereferenced")
         self.assertEqual(sorted(other), hwcensus.NOT_ADDRESSES["GAME.EXE"])
 
-    def test_voodoo_base_held_in_memory(self):
+    def test_holders_under_the_sound_rule(self):
         known, _rams = hwcensus.holders(self.census)
-        self.assertEqual(known[(0x801E756C,)], 0xA8000000)  # set from the PCI set-up slot
-        via = {hwcensus.register_name(a.addr) for a in hwcensus.resolve(self.census)}
-        self.assertTrue({"lfbMode", "fbzMode", "textureMode", "vdstatus"} <= via, via)
+        # The sound FIFO base is the image's initial word and is never overwritten.
+        self.assertEqual(known[(0x801A25CC,)], 0xB3000000)
+        # The Glide context word gets the Voodoo base (0x801612D0) but also an unknown
+        # store (0x80164AF4, a table field folded onto it), so it is not a holder.
+        self.assertNotIn((0x801E756C,), known)
+        self.assertEqual({hwcensus.classify(a.addr) for a in hwcensus.resolve(self.census)},
+                         {"sound_fifo"})
+
+    def test_hardware_accesses(self):
+        accesses = hwcensus.hardware_accesses(self.image, functions.read_toml(FUNCTIONS),
+                                              hwcensus.GAME_RETURNS)
+        self.assertEqual([(a.site, a.addr) for a in accesses],
+                         [(a.site, a.addr) for a in self.accesses
+                          if hwcensus.classify(a.addr) not in ("ram", "unknown")
+                          and hwcensus.is_kseg01(a.addr)])
+        self.assertIn(0xB3000000, {a.addr for a in accesses})  # through memory
+        self.assertTrue(all(hwcensus.classify(a.addr) != "ram" for a in accesses))
+
+    def test_constant_addresses_are_kseg_only(self):
+        found = hwcensus.constant_addresses(self.image, functions.read_toml(FUNCTIONS))
+        self.assertTrue(all(hwcensus.is_kseg01(v) for v in found))
+        self.assertIn(0xB6800004, found)       # the gun, a lui-based constant
+        self.assertNotIn(0xB3000000, found)    # the FIFO base comes from memory
+
+    def test_ioctl_calls(self):
+        counts, other = hwcensus.ioctl_calls(self.image, functions.read_toml(FUNCTIONS),
+                                             hwcensus.GAME_RETURNS)
+        self.assertEqual(sum(counts.values()) + len(other), 160)
+        self.assertEqual(counts[(3, 0x6300)], 23)
+        self.assertEqual(counts[(4, 0x6903)], 17)
+        self.assertEqual(sorted(c.args[5] for c in other if c.function == 0x800C6480),
+                         [0x7000, 0x7001, 0x7002])
+        self.assertEqual(len(other), 12)
 
 
 @requires_boot_rom
@@ -284,9 +365,12 @@ class Loader(unittest.TestCase):
             self.assertIn(name, names)
 
     def test_loader_regions(self):
-        for name in ("gt64010", "ide", "ide_cs1", "ioasic", "cmos", "cmos_protect",
+        for name in ("gt64010", "ide", "ide_cs1", "ioasic", "cmos_protect",
                      "watchdog", "interrupt_enable", "vblank_clear"):
             self.assertIn(name, self.regions)
+        # The CMOS position word 0x80014D78 also receives the caller's address (ioctl
+        # 0x6300), a value the census cannot know: the CMOS data accesses stay unresolved.
+        self.assertNotIn("cmos", self.regions)
         used, other = _strict(self.census)
         self.assertEqual(used, set(), "unclassified addresses dereferenced")
         self.assertEqual(sorted(other), hwcensus.NOT_ADDRESSES["loader"])
