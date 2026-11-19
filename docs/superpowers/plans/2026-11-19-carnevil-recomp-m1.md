@@ -29,7 +29,7 @@ Three choices are made here. Each is recorded in the spec's corrections so the s
 - Tests that need game data use `tests/gamedata.py` and skip when the file is missing. Tests that need a C compiler skip, with a message naming `cc`, when there is none. The suite must pass with `python3 -W error -m unittest`.
 - C flags for every C file, generated or not: `-std=c11 -O2 -ffp-contract=off -fno-strict-aliasing -fwrapv`, and never `-ffast-math`. The R5000's `madd` is a multiply then an add with two roundings; a host compiler that fuses them gives different bits. Runtime C also builds with `-Wall -Wextra -Werror`; generated C with `-Wall -Werror -Wno-unused-label -Wno-unused-variable -Wno-unused-but-set-variable`.
 - Generated C and the interpreter have no undefined behaviour: the test harness is also built with `-fsanitize=undefined -fno-sanitize-recover=undefined`.
-- The instruction set to support is the census of reached code in `docs/analysis/functions.md` ("Census of reached code"): 105 mnemonics. An instruction outside it is an error naming the address and mnemonic, never a silent no-op.
+- The instruction set to support is the census of reached code in `docs/analysis/functions.md` ("Census of reached code"): 98 mnemonics. An instruction outside it is an error naming the address and mnemonic, never a silent no-op.
 - General registers are 32 bits wide. Reached code has no 64-bit integer instruction.
 - FR = 0: there are 32 FP register halves of 32 bits. A single is one half. A double in register `n` (even) is half `n` (low word) and half `n + 1` (high word).
 
@@ -37,7 +37,7 @@ Three choices are made here. Each is recorded in the spec's corrections so the s
 
 1. **A delay slot that changes what its branch reads or writes:** `beq a0,zero,L` with `addiu a0,a0,-1` in the slot, `jal` with a slot that reads or writes `ra`, `jalr t9` with a slot that overwrites `t9`. The branch decides, and the call target is read, before the slot runs. Tests in Task 4.
 2. **A branch whose target is a delay slot,** and a branch-likely whose slot must not run when the branch is not taken. Tests in Task 4.
-3. **Arithmetic that is undefined in C but defined on MIPS:** division by zero, `INT_MIN / -1`, a variable shift by 32 or more, signed overflow in `addiu`, `trunc.w.s` of a value outside the `int32` range or of a NaN. No crash, no sanitizer report, and the result MAME gives. Tests in Tasks 2 and 3.
+3. **Arithmetic that is undefined in C but defined on MIPS:** division by zero, `INT_MIN / -1`, a variable shift by 32 or more, signed overflow in `addiu`, `trunc.w.s` of a value outside the `int32` range or of a NaN. No crash, no sanitizer report, and the result MAME gives; for `INT_MIN / -1`, which MAME cannot run (its host division faults), `lo = 0x80000000` and `hi = 0`, what the R5000 produces. Tests in Tasks 2 and 3.
 4. **A call or jump to an address with no recompiled function** (an unreached leaf, a mid-function address, a null pointer) and **a load or store outside RAM:** the interpreter or the bus takes it and the address is logged; the host process does not crash. Tests in Tasks 2 and 5.
 5. **An input the generated code was not made from:** a `GAME.EXE` whose hash differs from `exe_sha256` in the functions file, or an instruction the emitter does not know. `recompile` stops with a message naming both hashes or the address and mnemonic, and leaves no output folder that `make linkcheck` would accept. Tests in Task 5.
 
@@ -68,7 +68,7 @@ Three choices are made here. Each is recorded in the spec's corrections so the s
 - A case is a small program, not one word. It is placed at `0x80100000`, entered with `ra = 0x80100F00`, and is finished when the PC reaches `ra`. Its memory operands lie in `0x80200000` to `0x80200FFF`. Programs end in `jr ra` and `nop`. A branch case sets a marker register differently on the two paths, so no PC needs comparing.
 
 - [ ] **Step 1: Write the failing tests** in `tests/test_vectors.py`:
-  - `test_every_census_mnemonic_has_cases`: the set of mnemonics decoded from all case words (with `mips.decode`) contains every mnemonic of the reached census (the 105 names, kept as a constant in `vectors.py` and asserted equal to a list copied from `functions.md`).
+  - `test_every_census_mnemonic_has_cases`: the set of mnemonics decoded from all case words (with `mips.decode`) contains every mnemonic of the reached census (the 98 names, kept as a constant in `vectors.py` and asserted equal to a list copied from `functions.md`).
   - `test_cases_are_deterministic`: `cases(1) == cases(1)`, and `cases(2) != cases(1)`.
   - `test_edge_operands_present`: for `div`, `divu`, `sllv`, `addiu`, `mult`, `trunc.w.s`, `trunc.w.d` there are cases whose operands include 0, 1, `0xFFFFFFFF`, `0x80000000`, `0x7FFFFFFF` (and for the two `trunc`, 3e9, -3e9 and a NaN).
   - `test_fp_cc_cases`: there are `c.lt.s` and `bc1f`/`bc1fl` cases with condition codes 1 and 2, and `movf`/`movt` cases.
@@ -112,7 +112,7 @@ Where MAME's result is not a hardware fact (the bits of a generated NaN, `trunc`
   - `test_fcsr_round_trip_and_rounding`: after `ctc1` with rounding mode 1, `rt_get_fcsr` returns the value written, and `cvt.s.w` of `0x01000001` rounds toward zero.
   - `test_flush_to_zero`: with FS set, the product of two singles whose exact result is denormal is zero; with FS clear it is the denormal.
 - [ ] **Step 2: Run** `python3 -m unittest tests.test_interp`: fails to build.
-- [ ] **Step 3: Implement** the header, `call.c`, `fpu.c`, `interp.c`, the harness and `charness.py`. The interpreter covers the 105 census mnemonics plus `cfc1`.
+- [ ] **Step 3: Implement** the header, `call.c`, `fpu.c`, `interp.c`, the harness and `charness.py`. The interpreter covers the 98 census mnemonics plus `cfc1`.
 - [ ] **Step 4: Run** the tests: pass, including under the sanitizer.
 - [ ] **Step 5: Commit** `git commit -m "runtime: contract header, reference interpreter and C test harness"`.
 
