@@ -26,7 +26,7 @@ note = "loader jump table: 72 j/nop slots, ROM 0xBFC00F20; slots 0x000/0x080/0x1
 addr = 0x80000240
 size = 0x15A00
 source = "boot_rom_copy"
-note = "rest of the resident loader (code, then initialised data), ROM 0xBFC01160-0xBFC16B60; 276 bytes of its data in 0x80014084-0x800158D0 differ from the ROM (state the loader changed, e.g. the upper-cased name GAME.EXE)"
+note = "rest of the resident loader (code, then initialised data), ROM 0xBFC01160-0xBFC16B60; 186 bytes (69 words) of its data in 0x80014084-0x80015AD3 differ from the ROM (state the loader changed, e.g. the upper-cased name GAME.EXE)"
 
 [[ram_preload]]
 addr = 0x80016308

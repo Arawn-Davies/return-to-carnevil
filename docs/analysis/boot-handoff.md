@@ -123,7 +123,8 @@ loader. Checked:
 ## Finding: the last block of the extracted GAME.EXE is wrong
 
 The RAM image at GAME.EXE's entry equals `part0_files/GAME.EXE` except in its last 556 bytes,
-0x801A3FF8 to 0x801A4224 (file offsets 917,504 to 918,060), where 452 bytes differ. 917,504
+0x801A3FF8 to 0x801A4224 (file offsets 917,504 to 918,060), where 315 bytes (in 113 words)
+differ, the first at 0x801A3FF8 and the last at 0x801A4217. 917,504
 is exactly 224 × 4096, so the extractor read the file's last 4 KB block from the wrong place.
 The loader's file system follows a chain of 16-bit block numbers (a FAT: two entries per
 word, read by 0x80007CCC), while `carnevil_tools/disk.py` assumes a file's blocks are
