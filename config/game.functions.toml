@@ -1,6 +1,6 @@
 # Function discovery: python3 -m carnevil_tools functions <exe> -o <this file>
 # Addresses, sizes, names and sources only. See docs/analysis/functions.md.
-format = 2
+format = 3
 exe_sha256 = "f9455ce801d2e5c26a7b6e00eff88efa573deb7ab15fa29f9c90100623bfd3a6"
 text_start = 0x800C4000
 text_end = 0x8016DC4C
@@ -13553,11 +13553,17 @@ targets = [
   0x80166B7C, 0x80166A54,
 ]
 
-[[interpreted]]
-addr = 0x80151AC0
+[[host_switch]]
+addr = 0x80151B48
+kind = "yield"
 
-[[interpreted]]
-addr = 0x80151B50
+[[host_switch]]
+addr = 0x80151B78
+kind = "exit"
+
+[[host_switch]]
+addr = 0x80151E88
+kind = "resume"
 
 [[unreached]]
 start = 0x800C42CC

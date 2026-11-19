@@ -94,7 +94,7 @@ def _functions(path, out, manual_path=None):
         return status
     try:
         res, notes = functions.discover(image, image.load_addr, m.starts, m.stub_blocks,
-                                        m.jump_tables, m.interpreted)
+                                        m.jump_tables, m.interpreted, m.host_switches)
     except ValueError as exc:  # a manual entry the analysis contradicts
         print(f"error: {manual_path}: {exc}", file=sys.stderr)
         return 1
@@ -105,7 +105,7 @@ def _functions(path, out, manual_path=None):
         return 1
     print(f"manual input {manual_path or '-'}: {len(m.starts)} starts, "
           f"{len(m.stub_blocks)} stub blocks, {len(m.jump_tables)} jump tables, "
-          f"{len(m.interpreted)} interpreted")
+          f"{len(m.interpreted)} interpreted, {len(m.host_switches)} host switches")
     span = res.text_end - res.text_start
     by_source = {s: sum(s in f.sources for f in res.functions) for s in functions.SOURCES}
     islands = [f.addr for f in res.functions if f.addr >= res.text_end]
@@ -122,6 +122,8 @@ def _functions(path, out, manual_path=None):
     print(f"jump tables {len(res.jump_tables)} ({entries} entries), {manual_tables} of them "
           f"from the manual file")
     print(f"interpreted functions {len(res.interpreted)}: {_hex_list(res.interpreted)}")
+    switches = " ".join(f"0x{a:08X} {k}" for a, k in sorted(res.host_switches.items())) or "-"
+    print(f"host-switch points {len(res.host_switches)}: {switches}")
     print(f"unresolved jr (no table found) {len(notes.unresolved_jr)}: {_hex_list(sorted(notes.unresolved_jr))}")
     print(f"unreached {len(res.unreached)} ranges, {gap} bytes, {100 * gap / span:.2f}% of the text")
     print(f"rejected pointers into unreached code {len(notes.rejected_pointers)}: "
@@ -260,7 +262,7 @@ def _hwcensus(path, rom, ioctl=False, reach=False):
     return 0
 
 
-def _recompile(path, out, functions_path):
+def _recompile(path, out, functions_path, trace_pc=False):
     """C for every function of the functions file, from the EXE it was made from."""
     try:
         analysis = functions.read_toml(functions_path)
@@ -280,7 +282,7 @@ def _recompile(path, out, functions_path):
               file=sys.stderr)
         return 1
     try:
-        m = recomp.recompile(image, analysis, out)
+        m = recomp.recompile(image, analysis, out, trace_pc)
     except (recomp.RecompileError, ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -294,8 +296,8 @@ def _call_edges(image, analysis):
     """(edges, unclean): function start -> the starts control can leave it for (a direct call,
     a branch, `j` or jump-table entry outside it, running off its end), and the starts that
     are not clean themselves, with the reason. Not clean: a stub, an interpreted function, or
-    one holding a `break`, a `jalr`, a `jr` (not on ra) without a jump table, or a call or
-    jump to an address that is neither its own nor a function start."""
+    one holding a `break`, a `jalr`, a `jr` (not on ra) without a jump table, a host-switch
+    point, or a call or jump to an address that is neither its own nor a function start."""
     insn = mips.Decoder(image).insn
     starts = {f.addr for f in analysis.functions}
     tables = {t.jr_addr: t for t in analysis.jump_tables}
@@ -326,6 +328,9 @@ def _call_edges(image, analysis):
 
         for a in sorted(words):
             i = insn(a)
+            switch = analysis.host_switches.get(a)
+            if switch is not None:
+                unclean.setdefault(start, "host switch")
             if i.mnemonic == "break":
                 unclean.setdefault(start, "break")
             elif i.kind == "call_reg":
@@ -336,12 +341,12 @@ def _call_edges(image, analysis):
                 else:
                     for t in tables[a].targets:
                         leave(t, "jump-table entry outside the function")
-            elif i.kind in ("call", "jump", "branch", "branch_likely"):
+            elif i.kind in ("call", "jump", "branch", "branch_likely") and switch is None:
                 leave(i.target, "transfer to an address that is not a function start")
             # where execution goes on after this word, if anywhere: after a transfer's delay
             # slot, or the next word (a slot's own successor is its transfer's business)
             if i.kind in recomp._TRANSFERS:
-                ends = i.kind in ("jump", "jump_reg") or (
+                ends = (i.kind in ("jump", "jump_reg") and switch != "resume") or (
                     i.kind in ("branch", "branch_likely") and recomp._condition(i) is True)
                 after = None if ends else a + 8
             elif a - 4 in words and insn(a - 4).kind in recomp._TRANSFERS:
@@ -510,6 +515,9 @@ def main(argv=None):
                      help="output folder (replaced only if it holds a manifest.toml)")
     rec.add_argument("--functions", default=GAME_FUNCTIONS, metavar="TOML",
                      help="the analysis to recompile (default: config/game.functions.toml)")
+    rec.add_argument("--trace-pc", action="store_true",
+                     help="store the guest pc in c->pc before each load, store and call, so "
+                          "the runtime can name the instruction (off by default)")
     pure = sub.add_parser("pure-functions",
                           help="functions statically pure by the census: their call closure "
                                "touches no loader stub, attributable hardware, break, indirect "
@@ -554,7 +562,7 @@ def main(argv=None):
     if args.command == "disasm":
         return _disasm(args.file, args.base, args.start, args.count)
     if args.command == "recompile":
-        return _recompile(args.exe, args.out, args.functions)
+        return _recompile(args.exe, args.out, args.functions, args.trace_pc)
     if args.command == "pure-functions":
         return _pure_functions(args.exe, args.functions)
     if args.command == "verify":

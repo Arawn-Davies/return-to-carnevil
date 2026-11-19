@@ -72,11 +72,27 @@ def programs():
     return _build["smoke"], _build["replay"]
 
 
+def _require_ubsan(tmp):
+    """Skip, naming `cc`, unless it compiles and links a program under the sanitizer flags (a
+    GCC without libubsan, for one, cannot)."""
+    src, out = os.path.join(tmp, "ubsan-probe.c"), os.path.join(tmp, "ubsan-probe")
+    with open(src, "w", encoding="utf-8") as f:
+        f.write("int main(void)\n{\n    return 0;\n}\n")
+    cc = charness._cc()
+    res = subprocess.run([cc, *charness.SANITIZE, src, "-o", out], capture_output=True,
+                         text=True)
+    if res.returncode != 0:
+        raise unittest.SkipTest(f"`cc` ({cc}) cannot build with {' '.join(charness.SANITIZE)} "
+                                "(no undefined-behaviour sanitizer runtime)")
+
+
 def ubsan_replay():
     """replay built again, from the same recompile, with every file (the whole generated image
-    and the runtime) under -fsanitize=undefined -fno-sanitize-recover=undefined."""
+    and the runtime) under -fsanitize=undefined -fno-sanitize-recover=undefined. Skips when
+    `cc` has no sanitizer runtime."""
     if "ubsan_replay" not in _build:
         programs()
+        _require_ubsan(_build["tmp"])
         build = os.path.join(_build["tmp"], "build-ubsan")
         res = subprocess.run([_make(), "-C", charness.REPO, "replay",
                               f"GENERATED={_build['generated']}", f"BUILD={build}",
@@ -214,9 +230,11 @@ class SmokeTest(unittest.TestCase):
     def test_smoke_reaches_the_first_loader_call(self):
         res = self.res
         self.assertEqual(res.returncode, 0, res.stderr[-4000:])
-        # nothing but the run's own lines: no bus access, break or interpreter entry
+        # nothing but the run's own lines: no bus access, break, host switch, FP trap or
+        # interpreter entry
         self.assertEqual([l for l in res.stderr.splitlines()
-                          if re.search(r"bus_(read|write)|rt_break|interp_run|rt_interrupt", l)],
+                          if re.search(r"bus_(read|write)|rt_break|rt_host_switch|rt_fp_trap|"
+                                       r"interp_run", l)],
                          [])
         want = boot_state().get("first_loader_call")
         self.assertIsNotNone(want, "config/boot_state.toml has no [first_loader_call]")

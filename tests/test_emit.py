@@ -244,17 +244,21 @@ class EmitStaticTest(unittest.TestCase):
         self.assertEqual(ctc1, [f"rt_set_fcsr(c, c->r[{T0}]);"])
 
     def test_fp_divide_goes_through_the_shared_helpers(self):
-        # rc_div_s / rc_div_d in recomp.h are where M2 adds the divide-by-zero trap: emitted
-        # code and the interpreter both divide through them, never with a plain `/`
+        # rc_div_s / rc_div_d in recomp.h hold the divide-by-zero trap: emitted code and the
+        # interpreter both divide through them (recip.s as 1 / x), never with a plain `/`
         div_s = emit.statement(mips.decode(A("div.s", fd=0, fs=1, ft=2), 0), 0)
-        self.assertEqual(div_s, ["rc_set_fs(c, 0, rc_div_s(rc_fs(c, 1), rc_fs(c, 2)));"])
+        self.assertEqual(div_s, ["rc_set_fs(c, 0, rc_div_s(c, rc_fs(c, 1), rc_fs(c, 2)));"])
         div_d = emit.statement(mips.decode(A("div.d", fd=4, fs=6, ft=8), 0), 0)
-        self.assertEqual(div_d, ["rc_set_fd(c, 4, rc_div_d(rc_fd(c, 6), rc_fd(c, 8)));"])
+        self.assertEqual(div_d, ["rc_set_fd(c, 4, rc_div_d(c, rc_fd(c, 6), rc_fd(c, 8)));"])
+        recip = emit.statement(mips.decode(A("recip.s", fd=0, fs=1), 0), 0)
+        self.assertEqual(recip, ["rc_set_fs(c, 0, rc_div_s(c, 1.0f, rc_fs(c, 1)));"])
         with open(os.path.join(REPO, "runtime", "interp", "interp.c")) as f:
             interp = f.read()
-        self.assertIn("rc_div_s(a, b)", interp)
-        self.assertIn("rc_div_d(a, b)", interp)
+        self.assertIn("rc_div_s(c, a, b)", interp)
+        self.assertIn("rc_div_d(c, a, b)", interp)
+        self.assertIn("rc_div_s(c, 1.0f, a)", interp)
         self.assertNotIn("a / b", interp)
+        self.assertNotIn("1.0f / a", interp)
 
     def test_write_to_zero_is_dropped_statically(self):
         for word in ZERO_WRITES:

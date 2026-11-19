@@ -9,10 +9,16 @@ tests/harness/harness.c. Modes: "interp" runs each case in the reference interpr
 "recomp" calls, per case, the linked C function that `functions` names for it (see
 `wrap_function`, `register_named` and `write_generated`, which build the C file to link).
 
+A case may carry `slice`, a pair (cpu_t.slice at the start, the value the harness's rt_tick
+reloads it with); without it the harness starts every case with more check points than any
+case program makes.
+
 Each returned `vectors.State` also carries, as attributes outside its dataclass fields (so
 equality with a recorded State is unaffected):
 - `calls`: the runtime calls in order, as tuples ("bus_read", addr, size),
-  ("bus_write", addr, size, value), ("loader", slot), ("break", pc, code), ("interrupt",);
+  ("bus_write", addr, size, value), ("loader", slot), ("break", pc, code),
+  ("tick", r0, ..., r31) (the general registers at the check point),
+  ("host_switch", kind, sp) and ("fp_trap", cause_bit);
 - `unrecompiled`: the addresses `rt_log_unrecompiled` reported, in order.
 """
 import hashlib
@@ -200,9 +206,9 @@ def _input(cases, functions):
         lines.append(f"hilo {_hex(b.hi)} {_hex(b.lo)}")
         lines.append("fpr " + " ".join(_hex(v) for v in b.fpr))
         lines.append(f"fcsr {_hex(b.fcsr)}")
-        irq = getattr(case, "irq_pending", 0)
-        if irq:
-            lines.append(f"irq {_hex(irq)}")
+        slice_ = getattr(case, "slice", None)  # (start, reload), else the harness's default
+        if slice_ is not None:
+            lines.append(f"slice {_hex(slice_[0])} {_hex(slice_[1])}")
         for i, word in enumerate(case.words):
             lines.append(f"mem {_hex(vectors.CODE_BASE + 4 * i)} {_hex(word)}")
         for addr, value in sorted(b.mem.items()):

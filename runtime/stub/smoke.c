@@ -3,16 +3,16 @@
  * Usage: smoke RAM_IN RAM_OUT [NAME=VALUE ...]. RAM_IN is the 8 MB of RAM at GAME.EXE's entry
  * (MAME's dump, mame/dumps/ram-at-game-entry.bin). Each NAME=VALUE (hexadecimal with 0x, or
  * decimal) sets a general register by its ABI name (sp, gp, ra, a0, ...), "hi", "lo" or FCSR
- * ("fcsr", as ctc1 writes it); every other register is 0 and no interrupt is ever pending. The
- * program
- * calls fn_800C4000 (it must be recompiled) and, at the first rt_loader call, prints
+ * ("fcsr", as ctc1 writes it); every other register is 0 and no interrupt is ever delivered
+ * (rt_tick only reloads slice). The program calls fn_800C4000 (it must be recompiled) and, at
+ * the first rt_loader call, prints
  * "slot S" and the state (common.h, print_state) to stdout, writes the 8 MB of RAM to RAM_OUT
  * and exits 0. If the entry function returns without a loader call it exits 1.
  *
  * Anything else the run does before that is printed to stderr, one line each, prefixed
  * "smoke: ": every bus access ("bus_read ADDR size N", "bus_write ADDR size N value V"; after
- * MAX_BUS_LINES of them only their number, at the end), every rt_break and rt_interrupt, and
- * every address the interpreter is entered at.
+ * MAX_BUS_LINES of them only their number, at the end), every rt_break, rt_host_switch and
+ * rt_fp_trap (each returns), and every address the interpreter is entered at.
  */
 #include "common.h"
 
@@ -67,11 +67,22 @@ void rt_break(uint8_t *ram, cpu_t *c, uint32_t pc, uint32_t code)
     fprintf(stderr, "smoke: rt_break pc 0x%08" PRIX32 " code 0x%05" PRIX32 "\n", pc, code);
 }
 
-void rt_interrupt(uint8_t *ram, cpu_t *c)
+void rt_tick(uint8_t *ram, cpu_t *c)
 {
     (void)ram;
+    c->slice = STUB_SLICE;
+}
+
+void rt_host_switch(uint8_t *ram, cpu_t *c, int kind)
+{
+    (void)ram;
+    fprintf(stderr, "smoke: rt_host_switch kind %d sp 0x%08" PRIX32 "\n", kind, c->r[29]);
+}
+
+void rt_fp_trap(cpu_t *c, uint32_t cause_bit)
+{
     (void)c;
-    fprintf(stderr, "smoke: rt_interrupt\n");
+    fprintf(stderr, "smoke: rt_fp_trap cause 0x%05" PRIX32 "\n", cause_bit);
 }
 
 static void log_unrecompiled(uint32_t addr)
@@ -90,6 +101,7 @@ int main(int argc, char **argv)
         return 2;
     }
     memset(&c, 0, sizeof c);
+    c.slice = STUB_SLICE;
     for (int k = 3; k < argc; k++) {
         char name[8], *end;
         const char *eq = strchr(argv[k], '=');

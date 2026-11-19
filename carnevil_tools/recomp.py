@@ -22,6 +22,9 @@ emitted here, with the order of the reference interpreter (runtime/interp/interp
   into a stub block: `rt_loader(ram, c, addr - block_start)`, `return` (a call: no
   `return`). A branch into a stub block, or a branch or jump to any other address outside
   the function: `RecompileError`;
+- a host-switch point (`Analysis.host_switches`; the interpreter finds the same points with
+  `rt_switch_kind`): the slot, `rt_host_switch(ram, c, RT_SWITCH_<KIND>)`, then for a resume
+  (a `jr ra`) the code at addr + 8, for a yield or an exit (a `j`) `return`;
 - `break`: `rt_break(ram, c, addr, code)`, then the next instruction;
 - `RT_CHECK(ram, c)` at entry and, after the slot, before every `goto` to an address at or
   below the transfer's own; never before a transfer that leaves through a call (the
@@ -30,7 +33,9 @@ emitted here, with the order of the reference interpreter (runtime/interp/interp
   returns; `RecompileError` if none does;
 - a function in a stub block is a thunk whose body is the `rt_loader` call; a function the
   analysis lists as interpreted is a thunk whose body is `interp_run(ram, c, addr)` (its
-  own words are never emitted or checked).
+  own words are never emitted or checked);
+- with trace_pc, `c->pc = <addr>;` before each load and store (emit.ACCESSES) and before the
+  call of each `jal` and `jalr` (after its slot); without it no line names c->pc.
 
 A control transfer in a delay slot, or an instruction outside the reached census, is a
 `RecompileError` naming its address.
@@ -38,7 +43,8 @@ A control transfer in a delay slot, or an instruction outside the reached census
 `recompile(image, analysis, out_dir)` writes the whole image: `funcs.h` (one prototype per
 function), `funcs_000.c` ... (FUNCTIONS_PER_FILE functions each, in address order, each file
 including recomp.h and funcs.h), `func_table.c` (`recomp_lookup`, a binary search over every
-function start, stub slots and interpreted functions included) and, last, `manifest.toml`.
+function start, stub slots and interpreted functions included, and `rt_switch_kind`, over
+the host-switch points) and, last, `manifest.toml`.
 Everything goes to a working folder this run creates next to out_dir, renamed to out_dir
 when complete, so a folder with a manifest is always a complete output. The only path
 `recompile` ever deletes that it did not create is out_dir itself, and only when it holds a
@@ -60,6 +66,9 @@ _M32 = 0xFFFFFFFF
 _TRANSFERS = frozenset(("branch", "branch_likely", "jump", "jump_reg", "call", "call_reg"))
 _SIGN_TESTS = {"blez": "<=", "bgtz": ">", "bltz": "<", "bgez": ">="}
 _SIGN_OF_ZERO = {"blez": True, "bgtz": False, "bltz": False, "bgez": True}
+# host-switch kind (functions.HOST_SWITCH_KINDS) -> its recomp.h constant
+SWITCH_KINDS = {"resume": "RT_SWITCH_RESUME", "yield": "RT_SWITCH_YIELD",
+                "exit": "RT_SWITCH_EXIT"}
 
 
 class RecompileError(Exception):
@@ -111,10 +120,11 @@ def _condition(insn):
 
 
 class _Function:
-    def __init__(self, image, analysis, fn):
+    def __init__(self, image, analysis, fn, trace_pc=False):
         self.image = image
         self.analysis = analysis
         self.fn = fn
+        self.trace_pc = trace_pc
         self.insn = mips.Decoder(image).insn
         alone = dataclasses.replace(analysis, functions=[fn])  # reached_words of fn only
         self.words = sorted(functions.reached_words(alone)[fn.addr])
@@ -150,14 +160,18 @@ class _Function:
         raise RecompileError(at, f"{what} {target:08X}: outside the function and not a "
                                  "function start")
 
-    def call(self, target):
+    def trace(self, addr):
+        """The line that stores the guest pc, with trace_pc; otherwise none."""
+        return [f"c->pc = {_u(addr)};"] if self.trace_pc else []
+
+    def call(self, target, at):
         slot = self.stub_slot(target)
         if slot is not None:
-            return [f"rt_loader(ram, c, {_u(slot)});"]
+            return self.trace(at) + [f"rt_loader(ram, c, {_u(slot)});"]
         if target in self.starts:
             self.callees.add(target)
-            return [f"{c_name(target)}(ram, c);"]
-        return [f"rt_call(ram, c, {_u(target)});"]
+            return self.trace(at) + [f"{c_name(target)}(ram, c);"]
+        return self.trace(at) + [f"rt_call(ram, c, {_u(target)});"]
 
     def dynamic_jump(self, var):
         return [f"rt_jump(ram, c, {var});", "return;"]
@@ -168,7 +182,8 @@ class _Function:
         if insn.mnemonic == "break":
             return [f"rt_break(ram, c, {_u(addr)}, {_u(insn.word >> 6 & 0xFFFFF)});"]
         try:
-            return emit.statement(insn, addr)
+            lines = emit.statement(insn, addr)
+            return self.trace(addr) + lines if insn.mnemonic in emit.ACCESSES else lines
         except emit.UnsupportedInstruction:
             raise RecompileError(addr, f"unsupported instruction {insn.mnemonic}") from None
 
@@ -188,6 +203,12 @@ class _Function:
         if insn.mnemonic not in emit.CONTROL:
             raise RecompileError(addr, f"unsupported instruction {insn.mnemonic}")
         name, kind, slot = insn.mnemonic, insn.kind, self.delay_slot(addr)
+        switch = self.analysis.host_switches.get(addr)
+        if switch is not None:  # checked by functions.discover: a `j`, or a `jr ra` to resume
+            lines = slot + [f"rt_host_switch(ram, c, {SWITCH_KINDS[switch]});"]
+            if switch == "resume":
+                return lines, True
+            return lines + ["return;"], False
         if kind in ("branch", "branch_likely"):
             cond = _condition(insn)
             if cond is True:
@@ -202,11 +223,12 @@ class _Function:
         if name == "j":
             return slot + self.transfer(insn.target, addr, "jump to"), False
         if name == "jal":
-            return [f"c->r[31] = {_u(addr + 8)};", *slot, *self.call(insn.target)], True
+            return [f"c->r[31] = {_u(addr + 8)};", *slot, *self.call(insn.target, addr)], True
         if name == "jalr":
             link = [f"c->r[{insn.rd}] = {_u(addr + 8)};"] if insn.rd else []
-            return ["{", f"    uint32_t target = {_reg(insn.rs)};", *_indent(link + slot),
-                    "    rt_call(ram, c, target);", "}"], True
+            return ["{", f"    uint32_t target = {_reg(insn.rs)};",
+                    *_indent(link + slot + self.trace(addr)), "    rt_call(ram, c, target);",
+                    "}"], True
         # jr
         if insn.rs == mips.RA:
             return slot + ["return;"], False
@@ -290,12 +312,12 @@ class _Function:
                                    "}"]) + "\n"
 
 
-def function_c(image, analysis, fn, prototypes=True):
+def function_c(image, analysis, fn, prototypes=True, trace_pc=False):
     """The C for one function of `analysis` (a functions.Analysis of the ExeImage `image`).
     With prototypes, the text is preceded by a prototype of each function it calls, so it
     compiles on its own; without, it relies on a header declaring them (`recompile`'s
-    funcs.h)."""
-    return _Function(image, analysis, fn).text(prototypes)
+    funcs.h). trace_pc: store the guest pc in c->pc before each load, store and call."""
+    return _Function(image, analysis, fn, trace_pc).text(prototypes)
 
 
 @dataclasses.dataclass
@@ -321,13 +343,29 @@ def _write(path, text):
         f.write(text)
 
 
-def _sources(image, analysis):
+def _switch_kind(analysis):
+    """The lines of `rt_switch_kind` in func_table.c: a search of the host-switch points."""
+    head = "int rt_switch_kind(uint32_t pc)"
+    if not analysis.host_switches:
+        return [head, "{", "    (void)pc;", "    return -1;", "}"]
+    entries = [f"    {{{_u(a)}, {SWITCH_KINDS[k]}}},"
+               for a, k in sorted(analysis.host_switches.items())]
+    return ["/* every host-switch point, ascending */",
+            "static const struct {", "    uint32_t pc;", "    int kind;", "} switches[] = {",
+            *entries, "};", "", head, "{",
+            "    for (size_t i = 0; i < sizeof switches / sizeof switches[0]; i++)",
+            "        if (switches[i].pc == pc)",
+            "            return switches[i].kind;",
+            "    return -1;", "}"]
+
+
+def _sources(image, analysis, trace_pc=False):
     """{file name: text} of every C file, and the Manifest. Raises RecompileError."""
     fns = sorted(analysis.functions, key=lambda f: f.addr)
     sha = analysis.exe_sha256
     texts, unresolved = [], 0
     for fn in fns:
-        emitted = _Function(image, analysis, fn)
+        emitted = _Function(image, analysis, fn, trace_pc)
         texts.append(emitted.text(prototypes=False))
         unresolved += len(emitted.unresolved)
     files = {"funcs.h": _HEAD.format(name="funcs.h", sha=sha) + "\n".join(
@@ -355,7 +393,7 @@ def _sources(image, analysis):
          "            return table[mid].fn;",
          "    }",
          "    return NULL;",
-         "}"]) + "\n"
+         "}", "", *_switch_kind(analysis)]) + "\n"
     stubs = sum(any(lo <= f.addr < hi for lo, hi in analysis.stub_blocks) for f in fns)
     manifest = Manifest(MANIFEST_FORMAT, sha, len(fns),
                         -(-len(fns) // FUNCTIONS_PER_FILE), stubs, len(analysis.interpreted),
@@ -370,11 +408,11 @@ def _manifest_toml(m):
                       for k, v in dataclasses.asdict(m).items()))
 
 
-def recompile(image, analysis, out_dir):
+def recompile(image, analysis, out_dir, trace_pc=False):
     """Write the C of every function of `analysis` (made from the ExeImage `image`) to
-    out_dir; the Manifest. Raises RecompileError (nothing is written), ValueError when the
-    image is not the one the analysis was made from or out_dir exists without a
-    manifest.toml (it is left as it is), OSError."""
+    out_dir; the Manifest. trace_pc: as for `function_c`. Raises RecompileError (nothing is
+    written), ValueError when the image is not the one the analysis was made from or out_dir
+    exists without a manifest.toml (it is left as it is), OSError."""
     if image.sha256 != analysis.exe_sha256:
         raise ValueError(f"the EXE has SHA-256 {image.sha256 or '(none)'}, the functions were "
                          f"analysed from SHA-256 {analysis.exe_sha256 or '(none)'}")
@@ -383,7 +421,7 @@ def recompile(image, analysis, out_dir):
             os.path.isdir(out_dir) and os.path.isfile(os.path.join(out_dir, MANIFEST))):
         raise ValueError(f"{out_dir} exists and holds no {MANIFEST}: it is not a recompile "
                          "output, so it is not replaced")
-    files, manifest = _sources(image, analysis)
+    files, manifest = _sources(image, analysis, trace_pc)
     parent, base = os.path.split(out_dir)
     parent = parent or os.curdir
     os.makedirs(parent, exist_ok=True)

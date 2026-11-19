@@ -11,12 +11,15 @@
  * - jr ra: after the slot, the run ends;
  * - any other jr, and j: after the slot, if recomp_lookup knows the target it is a tail call
  *   (rt_call, then the run ends), otherwise execution continues at the target;
+ * - a j or jr that rt_switch_kind names a host-switch point: after the slot, rt_host_switch;
+ *   then a resume continues at the instruction after the slot, a yield or an exit ends the
+ *   run (as the generated code does at the same addresses);
  * - a branch decides before its slot runs; a branch-likely not taken skips its slot;
  * - break: rt_break(ram, c, pc, code), then the next instruction.
  * A control transfer in a delay slot is an error. Interrupt check points (RT_CHECK, see
  * recomp.h): at entry, and after the delay slot of a taken branch or jump that continues in
- * this run at an address at or below its own; a jump that leaves through rt_call does not
- * check (the callee's entry does).
+ * this run at an address at or below its own; a jump that leaves through rt_call or
+ * rt_host_switch does not check (the callee's entry does).
  */
 #include <stdarg.h>
 #include <stdio.h>
@@ -147,7 +150,7 @@ static void exec_fp_s(cpu_t *c, uint32_t pc, uint32_t w)
     case 0x00: rc_set_fs(c, fd, a + b); return;                        /* add.s */
     case 0x01: rc_set_fs(c, fd, a - b); return;                        /* sub.s */
     case 0x02: rc_set_fs(c, fd, a * b); return;                        /* mul.s */
-    case 0x03: rc_set_fs(c, fd, rc_div_s(a, b)); return;               /* div.s */
+    case 0x03: rc_set_fs(c, fd, rc_div_s(c, a, b)); return;            /* div.s */
     default: break;
     }
     if (FUNCT(w) >= 0x30) {
@@ -167,7 +170,7 @@ static void exec_fp_s(cpu_t *c, uint32_t pc, uint32_t w)
     case 0x06: c->fpr[fd] = c->fpr[fs]; return;                        /* mov.s */
     case 0x07: rc_set_fs(c, fd, -a); return;                           /* neg.s */
     case 0x0D: c->fpr[fd] = rc_trunc_w_s(a); return;                   /* trunc.w.s */
-    case 0x15: rc_set_fs(c, fd, 1.0f / a); return;                     /* recip.s */
+    case 0x15: rc_set_fs(c, fd, rc_div_s(c, 1.0f, a)); return;         /* recip.s */
     case 0x21: rc_set_fd(c, fd, (double)a); return;                    /* cvt.d.s */
     default: unsupported(pc, w);
     }
@@ -181,7 +184,7 @@ static void exec_fp_d(cpu_t *c, uint32_t pc, uint32_t w)
     case 0x00: rc_set_fd(c, fd, a + b); return;                        /* add.d */
     case 0x01: rc_set_fd(c, fd, a - b); return;                        /* sub.d */
     case 0x02: rc_set_fd(c, fd, a * b); return;                        /* mul.d */
-    case 0x03: rc_set_fd(c, fd, rc_div_d(a, b)); return;               /* div.d */
+    case 0x03: rc_set_fd(c, fd, rc_div_d(c, a, b)); return;            /* div.d */
     default: break;
     }
     if (FUNCT(w) >= 0x30) {
@@ -396,6 +399,16 @@ void interp_run(uint8_t *ram, cpu_t *c, uint32_t pc)
             continue;
         }
         delay_slot(ram, c, pc + 4);
+        if (x == X_RETURN || x == X_JUMP) {
+            int kind = rt_switch_kind(pc);
+            if (kind >= 0) {
+                rt_host_switch(ram, c, kind);
+                if (kind != RT_SWITCH_RESUME)
+                    return;
+                pc += 8;
+                continue;
+            }
+        }
         switch (x) {
         case X_BRANCH:
             if (taken && target <= pc)

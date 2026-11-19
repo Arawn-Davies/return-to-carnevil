@@ -13,8 +13,13 @@
 #   (an entry for a jr it resolves is refused). Recorded with table_addr = 0.
 # [[interpreted]]: addr: a function start left to the interpreter (the recompiler emits a
 #   thunk calling interp_run).
+# [[host_switch]]: addr, kind ("yield", "exit" or "resume"): a transfer of the task switch
+#   that the runtime takes over (rt_host_switch in runtime/include/recomp.h). Checked when
+#   read: the kind is one of the three, one entry per addr, and the instruction is a `j`
+#   (yield, exit) or a `jr ra` (resume) in reached code of a function. After a resume the
+#   analysis goes on after the delay slot.
 #
-# Errors, each naming the entry: a top-level table other than these four, an entry without a
+# Errors, each naming the entry: a top-level table other than these five, an entry without a
 # reason, an entry missing one of its keys, an entry with a key its kind does not take.
 
 [[stub_block]]
@@ -127,12 +132,21 @@ targets = [0x80165318, 0x80165310, 0x80165308, 0x80165300, 0x80165308, 0x8016531
 reason = "table 0x80176C78, 7 words, the labels of the tail 0x80165300: v0 = lw 0(s1) at 0x801652F4, s1 = v1 * 4 (sll at 0x80165208) + 0x80176C78, addu at 0x8016521C, the only write of s1 before the epilogue; the lw is reached only past beq t5,zero at 0x801652EC, t5 = sltiu v1,7 at 0x801651FC"
 
 # The hand-written context switch around 0x80151AC0 to 0x80152008 (functions.md, "Jumps
-# out of their function"): its two `j 0x80151E90` cannot be recompiled.
+# out of their function"; task-switch.md, "The mechanism"): its three transfers between a
+# task and the scheduler 0x80151BC0 become calls of the runtime's rt_host_switch, so the
+# yield, the exit and the scheduler are all recompiled.
 
-[[interpreted]]
-addr = 0x80151AC0
-reason = "swaps sp and k1 (three xor at 0x80151AE4), saves s0-s7, fp, ra and FP registers below the stack it switched to, then j 0x80151E90 at 0x80151B48, a label inside 0x80151BC0 (the scheduler's restore path). A manual start at 0x80151E90 does not recompile: 0x80151BC0 then jumps into it (j 0x80151F9C at 0x80151CF4) and it jumps back (j 0x80151CE4 at 0x80151F94), neither target a function start"
+[[host_switch]]
+addr = 0x80151B48
+kind = "yield"
+reason = "the yield 0x80151AC0 swaps sp and k1 (three xor at 0x80151AE4), saves s0-s7, fp, ra and FP registers below the stack it switched to, then j 0x80151E90 here (slot sw k1,8(t1): the task's sp into its record), a label inside 0x80151BC0 (the scheduler's restore path), not a function start. A manual start at 0x80151E90 does not recompile: 0x80151BC0 then jumps into it (j 0x80151F9C at 0x80151CF4) and it jumps back (j 0x80151CE4 at 0x80151F94)"
 
-[[interpreted]]
-addr = 0x80151B50
-reason = "calls 0x80149C58, swaps sp and k1 (xor at 0x80151B70, 0x80151B74 and the slot 0x80151B7C) and j 0x80151E90 at 0x80151B78, the same restore path inside 0x80151BC0 as 0x80151AC0"
+[[host_switch]]
+addr = 0x80151B78
+kind = "exit"
+reason = "the exit 0x80151B50 of a finished task calls 0x80149C58 (which frees the task), swaps sp and k1 (xor at 0x80151B70, 0x80151B74 and the slot 0x80151B7C) and j 0x80151E90 here, the same restore path inside 0x80151BC0 as the yield"
+
+[[host_switch]]
+addr = 0x80151E88
+kind = "resume"
+reason = "the scheduler 0x80151BC0 resumes a task: it loads the task's saved registers, swaps sp and k1 (xor at 0x80151E80, 0x80151E84 and the slot 0x80151E8C) and jr ra here into the task, not a return to its caller. 0x80151E90 (addi sp,sp,0xCC), after the slot, is the restore path the yield and the exit jump to, so it runs when the task switches back"

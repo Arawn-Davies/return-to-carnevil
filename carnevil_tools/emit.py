@@ -212,9 +212,9 @@ def _fp_binary(op, fmt):
 
 
 def _fp_divide(fmt):
-    """fd = fs / ft through recomp.h's rc_div_s / rc_div_d (where M2 adds the trap)."""
+    """fd = fs / ft through recomp.h's rc_div_s / rc_div_d, the divide-by-zero trap's seam."""
     get, put = (_fs, "rc_set_fs") if fmt == "s" else (_fd, "rc_set_fd")
-    return lambda i: [f"{put}(c, {i.sa}, rc_div_{fmt}({get(i.rd)}, {get(i.rt)}));"]
+    return lambda i: [f"{put}(c, {i.sa}, rc_div_{fmt}(c, {get(i.rd)}, {get(i.rt)}));"]
 
 
 def _fp_unary(fmt, expr):
@@ -269,7 +269,7 @@ _FLOAT = {
     "sqrt.s": _fp_unary("s", lambda a: f"rc_sqrt_s({a})"),
     "neg.s": _fp_unary("s", lambda a: f"-{a}"),
     "neg.d": _fp_unary("d", lambda a: f"-{a}"),
-    "recip.s": _fp_unary("s", lambda a: f"1.0f / {a}"),
+    "recip.s": _fp_unary("s", lambda a: f"rc_div_s(c, 1.0f, {a})"),  # 1 / x, the same seam
     "mov.s": _mov_s,
     "mov.d": _mov_d,
     "trunc.w.s": _trunc("s"),
@@ -308,3 +308,5 @@ def statement(insn, addr):
 
 # Every census mnemonic `statement` emits; with CONTROL, the whole census.
 STRAIGHT = frozenset(_STRAIGHT)
+# The loads and stores among them (the instructions that touch memory or the bus).
+ACCESSES = frozenset(_MEMORY) - {"cache"}

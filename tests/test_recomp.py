@@ -47,6 +47,11 @@ def _cc(fcsr, n):
     return fcsr >> vectors._FCC_SHIFT[n] & 1
 
 
+def _kinds(calls):
+    """The kinds of the runtime calls a state recorded ("tick", "bus_read", ...)."""
+    return [call[0] for call in calls]
+
+
 class Asm:
     """Words from CODE upwards; items are words or callables (labels, addr) -> word."""
 
@@ -96,19 +101,28 @@ def _registration(fns, entry_name):
             f"{lines}}}\n\n" + charness.register_named([entry_name]))
 
 
+def _switch_registration(host_switches):
+    """C registering each host-switch point with the harness's rt_switch_kind."""
+    lines = "".join(f"    harness_register_switch(0x{addr:08X}u, {recomp.SWITCH_KINDS[kind]});\n"
+                    for addr, kind in sorted(host_switches.items()))
+    return ("static void __attribute__((constructor)) register_switches(void)\n{\n"
+            f"{lines}}}\n\n")
+
+
 class Program:
     """An analysed, emitted and built image."""
 
     def __init__(self, asm, manual=(), stub_blocks=(), native=(), jump_tables=(),
-                 interpreted=()):
+                 interpreted=(), host_switches=None):
         self.labels = dict(asm.labels)
         self.words = asm.words()
         self.image = image_of(self.words)
         self.analysis = functions.analyse(self.image, CODE, manual, stub_blocks, jump_tables,
-                                          interpreted)
+                                          interpreted, host_switches=host_switches)
         self.fns = sorted(self.analysis.functions, key=lambda f: f.addr)
         self.c = {f.addr: recomp.function_c(self.image, self.analysis, f) for f in self.fns}
         source = "".join(self.c[f.addr] + "\n" for f in self.fns)
+        source += _switch_registration(self.analysis.host_switches)
         entry = recomp.c_name(CODE)
         in_interp = [f for f in self.fns if f.sources == {"stub"} or f.addr in native]
         self.recomp_exe = charness.build(
@@ -119,16 +133,18 @@ class Program:
     def at(self, label):
         return self.labels[label]
 
-    def cases(self, name, setup, n=RANDOM_STATES, irq=0):
-        """n seeded random before-states, each changed by setup(state, rng, i)."""
+    def cases(self, name, setup, n=RANDOM_STATES, slice=None):
+        """n seeded random before-states, each changed by setup(state, rng, i). slice: the
+        cpu_t.slice a case starts with and the harness's rt_tick reloads (1: every check
+        point ticks); by default large enough that no case reaches 0."""
         rng = random.Random(f"recomp.{name}")
         out = []
         for i in range(n):
             s = vectors._state(rng)
             setup(s, rng, i)
             case = vectors.Case(f"{name}.{i}", self.words, s)
-            if irq:
-                case.irq_pending = irq
+            if slice is not None:
+                case.slice = (slice, slice)
             out.append(case)
         return out
 
@@ -197,6 +213,28 @@ class StaticTest(unittest.TestCase):
                           for f in sorted(analysis.functions, key=lambda f: f.addr)])
         self.assertEqual(texts[0], texts[1])
         self.assertEqual(len(texts[0]), 2)
+
+    def test_trace_pc_stores_the_guest_pc(self):
+        """With trace_pc, c->pc is set to the instruction's address before each load, store
+        and call (a jal after its delay slot); without it, no line stores c->pc."""
+        p = Asm()
+        p(A("lw", rt=V0, rs=A0, imm=0))
+        p(A("cache", op=0x15, base=T0, imm=4))
+        p(A("jal", target=CODE + 0x20))
+        p(A("sw", rt=V0, rs=A0, imm=4))  # the slot
+        p(A("jalr", rd=RA, rs=T9), 0)
+        p(JR_RA, 0)
+        p.pad_to(CODE + 0x20)
+        p(JR_RA, 0)
+        image = image_of(p.words())
+        analysis = functions.analyse(image, CODE)
+        main = analysis.functions[0]
+        plain = recomp.function_c(image, analysis, main)
+        self.assertNotIn("c->pc", plain)
+        traced = recomp.function_c(image, analysis, main, trace_pc=True)
+        self.assertEqual(re.findall(r"c->pc = 0x([0-9A-F]{8})u;", traced),
+                         ["%08X" % a for a in (CODE, CODE + 12, CODE + 8, CODE + 16)])
+        self.assertEqual(re.sub(r"\n\s*c->pc = 0x[0-9A-F]{8}u;", "", traced), plain)
 
 
 def jump_table_asm():
@@ -609,11 +647,11 @@ class FunctionTest(RecompTestCase):
 
         def setup(s, rng, i):
             s.r[A0] = rng.randrange(-1, 8) & _M32
-        cases = prog.cases("irq", setup, irq=1)
+        cases = prog.cases("irq", setup, slice=1)
         got = self.assertSameAsInterpreter(prog, cases)
         for case, state in zip(cases, got):
             n = max(_s32(case.before.r[A0]), 1)
-            self.assertEqual(state.calls, [("interrupt",)] * n, case.name)
+            self.assertEqual(_kinds(state.calls), ["tick"] * n, case.name)
         quiet = prog.cases("quiet", setup)
         for state in self.assertSameAsInterpreter(prog, quiet):
             self.assertEqual(state.calls, [])
@@ -648,11 +686,11 @@ class FunctionTest(RecompTestCase):
 
         def setup(s, rng, i):
             s.r[T3] = f
-        cases = prog.cases("calls", setup, irq=1)
+        cases = prog.cases("calls", setup, slice=1)
         got = self.assertSameAsInterpreter(prog, cases)
         for case, state in zip(cases, got):
             # entries: main, b1, f, b2, f, f
-            self.assertEqual(state.calls, [("interrupt",)] * 6, case.name)
+            self.assertEqual(_kinds(state.calls), ["tick"] * 6, case.name)
             self.assertEqual(state.r[V0], (case.before.r[V0] + 3) & _M32)
 
     def test_rt_check_at_backward_jump_table_case(self):
@@ -677,11 +715,11 @@ class FunctionTest(RecompTestCase):
 
         def setup(s, rng, i):
             s.r[A0] = rng.randrange(-1, 8) & _M32
-        cases = prog.cases("table-loop", setup, irq=1)
+        cases = prog.cases("table-loop", setup, slice=1)
         got = self.assertSameAsInterpreter(prog, cases)
         for case, state in zip(cases, got):
             n = max(_s32(case.before.r[A0]), 1)
-            self.assertEqual(state.calls, [("interrupt",)] * n, case.name)
+            self.assertEqual(_kinds(state.calls), ["tick"] * n, case.name)
 
     def test_rt_check_documented_exceptions(self):
         """A conditional branch to another function's start, and running off the end into
@@ -702,12 +740,72 @@ class FunctionTest(RecompTestCase):
 
         def setup(s, rng, i):
             s.r[A0] = i % 2 if i < 50 else s.r[A0]
-        cases = prog.cases("exceptions", setup, irq=1)
+        cases = prog.cases("exceptions", setup, slice=1)
         want, got = prog.run("interp", cases), prog.run("recomp", cases)
         for case, u, v in zip(cases, want, got):
             self.assertIsNone(charness.first_difference(u, v), case.name)
             # entries: main, g (the call), g (the branch or the run-on)
-            self.assertEqual(v.calls, [("interrupt",)] * 3, case.name)
+            self.assertEqual(_kinds(v.calls), ["tick"] * 3, case.name)
+
+    def test_host_switch_shapes(self):
+        """One synthetic scheduler `s` with each kind of host-switch point: `y` and `x` end in
+        a `j` into the middle of `s` (as the yield and the exit do), `s` holds a `jr ra` that
+        resumes a task. Each delay slot moves sp, so the recorded sp shows the slot ran before
+        rt_host_switch. `resume` goes on at its addr + 8, which nothing else reaches;
+        `yield` and `exit` return to their caller. The interpreter does the same."""
+        p = Asm()
+        p(A("addu", rd=S0, rs=RA, rt=0))
+        p.j("jal", "s")
+        p(0)
+        p(A("addu", rd=RA, rs=S0, rt=0))
+        p(JR_RA, 0)
+        p.label("s")
+        p(A("addu", rd=A3, rs=RA, rt=0))
+        p.j("jal", "y")
+        p(0)
+        p.j("jal", "x")
+        p(0)
+        p.label("resume")
+        p(JR_RA, A("addiu", rt=SP, rs=SP, imm=-16))
+        p(A("ori", rt=T1, rs=0, imm=6))  # addr + 8: reached only through the resume
+        p.label("restore")
+        p(A("addu", rd=RA, rs=A3, rt=0))
+        p(JR_RA, 0)
+        p.label("y")
+        p(A("ori", rt=T2, rs=0, imm=7))
+        p.label("yield")
+        p.j("j", "restore")
+        p(A("addiu", rt=SP, rs=SP, imm=-32))
+        p.label("x")
+        p(A("ori", rt=T3, rs=0, imm=8))
+        p.label("exit")
+        p.j("j", "restore")
+        p(A("addiu", rt=SP, rs=SP, imm=-48))
+        L = p.labels
+        switches = {L["resume"]: "resume", L["yield"]: "yield", L["exit"]: "exit"}
+        prog = Program(p, host_switches=switches)
+        self.assertEqual(prog.analysis.host_switches, switches)
+        self.assertEqual({f.addr for f in prog.fns}, {CODE, L["s"], L["y"], L["x"]})
+        # the resume's addr + 8 is reached code of `s`
+        self.assertIn(L["resume"] + 8, functions.reached_words(prog.analysis)[L["s"]])
+        sp_slot = f"c->r[{SP}] = c->r[{SP}] + 0x{-16 & _M32:08X}u;"
+        self.assertRegex(prog.c[L["s"]], re.escape(sp_slot) + r"\n\s*rt_host_switch\(ram, c, "
+                         r"RT_SWITCH_RESUME\);\n\s*c->r\[9\] = 0u \| 0x00000006u;")
+        for label, kind, imm in (("y", "YIELD", -32), ("x", "EXIT", -48)):
+            slot = f"c->r[{SP}] = c->r[{SP}] + 0x{imm & _M32:08X}u;"
+            self.assertRegex(prog.c[L[label]], re.escape(slot) + r"\n\s*rt_host_switch\(ram, c, "
+                             rf"RT_SWITCH_{kind}\);\n\s*return;")
+
+        def setup(s, rng, i):
+            s.r[SP] = 0x80200800
+        cases = prog.cases("switch", setup)
+        got = self.assertSameAsInterpreter(prog, cases)
+        for case, state in zip(cases, got):
+            self.assertEqual(state.calls, [("host_switch", 1, 0x80200800 - 32),
+                                           ("host_switch", 2, 0x80200800 - 80),
+                                           ("host_switch", 0, 0x80200800 - 96)], case.name)
+            self.assertEqual((state.r[T1], state.r[T2], state.r[T3]), (6, 7, 8))
+            self.assertEqual(state.r[SP], 0x80200800 - 96)
 
     def test_branch_into_stub_block_raises(self):
         block = CODE + 0x100
@@ -1098,6 +1196,71 @@ class ManualEntriesTest(RecompTestCase):
         for i, state in enumerate(got):
             self.assertEqual(state.r[V0], 10 + i % 2)
             self.assertEqual(state.r[V1], 7)  # g ran, in the interpreter
+
+    def test_manual_host_switch_validation(self):
+        """A [[host_switch]] is checked when the manual file is read (its keys, kind and
+        reason) and against the analysis (a `j` for yield and exit, a `jr ra` for resume, in
+        reached code of a function); each error names the entry."""
+        p = Asm()
+        p(A("addu", rd=S0, rs=RA, rt=0))
+        p.label("jal")
+        p.j("jal", "f")
+        p(0)
+        p(A("addu", rd=RA, rs=S0, rt=0))
+        p.label("ret")
+        p(JR_RA, 0)
+        p.label("f")
+        p.label("j")
+        p.j("j", "away")
+        p(0)
+        p.label("away")
+        p(JR_RA, 0)
+        p(0x7FFFFFFF)  # data
+        p.label("data")
+        p(JR_RA, 0)  # never reached
+        L = p.labels
+        image = image_of(p.words())
+        good = functions.analyse(image, CODE, host_switches={L["j"]: "yield",
+                                                              L["ret"]: "resume"})
+        self.assertEqual(good.host_switches, {L["j"]: "yield", L["ret"]: "resume"})
+        bad = [
+            ({L["jal"]: "yield"}, L["jal"], "the instruction there is jal, not a j"),
+            ({L["ret"]: "exit"}, L["ret"], "the instruction there is jr ra, not a j"),
+            ({L["j"]: "resume"}, L["j"], "the instruction there is j, not a jr ra"),
+            ({L["data"]: "resume"}, L["data"], "not reached code of a function"),
+            ({L["j"]: "sleep"}, L["j"], "unknown kind 'sleep'"),
+        ]
+        for switches, addr, reason in bad:
+            with self.subTest(reason=reason):
+                with self.assertRaisesRegex(ValueError, r"\[\[host_switch\]\] addr = 0x%08X: "
+                                            "%s" % (addr, re.escape(reason))):
+                    functions.analyse(image, CODE, host_switches=switches)
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        path = os.path.join(tmp, "m.toml")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write('[[host_switch]]\naddr = 0x80100010\nkind = "yield"\nreason = "r"\n'
+                    '[[host_switch]]\naddr = 0x80100018\nkind = "resume"\nreason = "r"\n')
+        self.assertEqual(functions.read_manual(path).host_switches,
+                         {0x80100010: "yield", 0x80100018: "resume"})
+        unreadable = [
+            ('[[host_switch]]\naddr = 0x80100010\nkind = "yield"\n',
+             r"a \[\[host_switch\]\] entry has no reason \(\[\[host_switch\]\] entry 1 "
+             r"\(addr = 0x80100010\)\)"),
+            ('[[host_switch]]\naddr = 0x80100010\nkind = "sleep"\nreason = "r"\n',
+             r"\[\[host_switch\]\] entry 1 \(addr = 0x80100010\): unknown kind 'sleep' \(it "
+             r"is one of resume, yield, exit\)"),
+            ('[[host_switch]]\naddr = 0x80100010\nreason = "r"\n',
+             r"\[\[host_switch\]\] entry 1 \(addr = 0x80100010\) has no `kind`"),
+            ('[[host_switch]]\naddr = 0x80100010\nkind = "yield"\nreason = "r"\n' * 2,
+             r"two \[\[host_switch\]\] entries for addr = 0x80100010"),
+        ]
+        for text, message in unreadable:
+            with self.subTest(message=message):
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(text)
+                with self.assertRaisesRegex(ValueError, message):
+                    functions.read_manual(path)
 
 
 def _make():

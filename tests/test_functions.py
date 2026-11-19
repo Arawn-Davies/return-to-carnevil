@@ -627,14 +627,17 @@ class Discovery(unittest.TestCase):
         res.exe_sha256 = "ab" * 32
         res.jump_tables.append(functions.JumpTable(BASE + 0x40, 0, [BASE + 0x48, BASE + 0x44]))
         res.interpreted = [BASE]
+        res.host_switches = {BASE + 0x48: "resume", BASE + 0x40: "yield"}
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "f.toml")
             functions.write_toml(res, path)
             self.assertEqual(functions.read_toml(path), res)
             with open(path, encoding="utf-8") as f:
                 first = f.read()
-            self.assertIn("\nformat = 2\n", first)
+            self.assertIn("\nformat = 3\n", first)
             self.assertIn("\n[[interpreted]]\naddr = 0x%08X\n" % BASE, first)
+            self.assertIn('\n[[host_switch]]\naddr = 0x%08X\nkind = "yield"\n\n[[host_switch]]\n'
+                          'addr = 0x%08X\nkind = "resume"\n' % (BASE + 0x40, BASE + 0x48), first)
             self.assertIn("\ntable_addr = 0x00000000\n", first)
             self.assertIn('\nexe_sha256 = "%s"\n' % ("ab" * 32), first)
             functions.write_toml(functions.read_toml(path), path)
@@ -644,7 +647,7 @@ class Discovery(unittest.TestCase):
     def test_read_toml_rejects_a_missing_or_unknown_format(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "f.toml")
-            for header in ("", "format = 3\n"):
+            for header in ("", "format = 2\n", "format = 4\n"):
                 with open(path, "w", encoding="utf-8") as f:
                     f.write(header + 'exe_sha256 = ""\ntext_start = 0\ntext_end = 0\n')
                 with self.assertRaisesRegex(ValueError, "format"):
@@ -660,7 +663,7 @@ class Discovery(unittest.TestCase):
             message = str(err.exception)
             self.assertIn(path, message)
             self.assertIn("format 1", message)
-            self.assertIn("format = 2", message)
+            self.assertIn("format = 3", message)
             self.assertIn("python3 -m carnevil_tools functions", message)
 
     def test_read_manual(self):
@@ -760,7 +763,7 @@ class Cli(unittest.TestCase):
             with open(out, "rb") as f, open(COMMITTED, "rb") as g:
                 self.assertTrue(f.read() == g.read(), "config/game.functions.toml is stale")
         self.assertIn("unknown words reached as code 0", printed.getvalue())
-        self.assertIn("3 starts, 1 stub blocks, 16 jump tables, 2 interpreted",
+        self.assertIn("3 starts, 1 stub blocks, 16 jump tables, 0 interpreted, 3 host switches",
                       printed.getvalue())
 
 
@@ -771,7 +774,7 @@ class GameExe(unittest.TestCase):
         m = functions.read_manual(MANUAL)
         manual = m.starts
         res = functions.analyse(image, 0x800C4000, m.starts, m.stub_blocks, m.jump_tables,
-                                m.interpreted)
+                                m.interpreted, m.host_switches)
         # The committed file is this analysis (I2): format, hash, every entry.
         self.assertEqual(functions.read_toml(COMMITTED), res)
         self.assertEqual(res.exe_sha256, exe.GAME_EXE_SHA256)
@@ -805,12 +808,15 @@ class GameExe(unittest.TestCase):
         for addr in (0x80151BD4, 0x80151CE4, 0x80151F9C, 0x800D1588):
             self.assertNotIn(addr, addrs)
         self.assertIn(0x800C4524, addrs)  # main, reached by _start's tail `j`
-        # The manual jump tables (table_addr 0) are the 16 jr the analysis left unresolved,
-        # and the two hand-written context-switch entries are left to the interpreter.
+        # The manual jump tables (table_addr 0) are the 16 jr the analysis left unresolved;
+        # nothing is left to the interpreter, and the task switch's three transfers are
+        # host-switch points.
         self.assertEqual(sorted(t.jr_addr for t in res.jump_tables if t.table_addr == 0),
                          sorted(t.jr_addr for t in m.jump_tables))
         self.assertEqual(len(m.jump_tables), 16)
-        self.assertEqual(res.interpreted, [0x80151AC0, 0x80151B50])
+        self.assertEqual(res.interpreted, [])
+        self.assertEqual(res.host_switches, {0x80151B48: "yield", 0x80151B78: "exit",
+                                             0x80151E88: "resume"})
         starts = set(addrs)
         unreached = set(range(*STUB_BLOCK, 4))
         for lo, hi in res.unreached:

@@ -58,6 +58,28 @@ class WholeImageTest(unittest.TestCase):
                          sorted(["funcs.h", "func_table.c", "manifest.toml"]
                                 + ["funcs_%03d.c" % k for k in range(m.files)]))
 
+    def test_no_interpreted_functions(self):
+        """With the task switch's three transfers as host-switch points, nothing is left to
+        the interpreter: the yield 0x80151AC0, the exit 0x80151B50 and the scheduler
+        0x80151BC0 are recompiled functions in the lookup, and rt_switch_kind knows the three
+        points."""
+        self.assertEqual(self.manifest.interpreted, 0)
+        self.assertEqual(self.analysis.interpreted, [])
+        with open(os.path.join(self.gen, "func_table.c"), encoding="utf-8") as f:
+            table = f.read()
+        lookup = dict(re.findall(r"\{0x([0-9A-F]{8})u, (fn_[0-9A-F]{8})\}", table))
+        for addr in ("80151AC0", "80151B50", "80151BC0"):
+            self.assertEqual(lookup.get(addr), "fn_" + addr)
+        self.assertEqual(re.findall(r"\{0x([0-9A-F]{8})u, (RT_SWITCH_[A-Z]+)\}", table),
+                         [("80151B48", "RT_SWITCH_YIELD"), ("80151B78", "RT_SWITCH_EXIT"),
+                          ("80151E88", "RT_SWITCH_RESUME")])
+        bodies = ""
+        for name in sorted(os.listdir(self.gen)):
+            if name.startswith("funcs_"):
+                with open(os.path.join(self.gen, name), encoding="utf-8") as f:
+                    bodies += f.read()
+        self.assertNotIn("interp_run(", bodies)
+
     def test_recompile_is_deterministic(self):
         again = os.path.join(self.tmp, "again")
         recomp.recompile(self.image, self.analysis, again)

@@ -2,10 +2,11 @@
 contract of runtime/include/recomp.h that the harness exercises: memory routing, calls,
 FCSR and the host FP environment."""
 import os
+import re
 import struct
 import unittest
 
-from carnevil_tools import vectors
+from carnevil_tools import exe, functions, recomp, vectors
 from tests import charness
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -14,7 +15,8 @@ RECORDED = os.path.join(REPO, "tests", "vectors", "insn.json")
 A = vectors.assemble
 NOP = 0
 JR_RA = A("jr", rs=31)
-T0, T1, T2, T3, V0 = 8, 9, 10, 11, 2
+T0, T1, T2, T3, V0, A0 = 8, 9, 10, 11, 2, 4
+INF, FCSR_EZ, CAUSE_Z = 0x7F800000, 1 << 10, 1 << 15  # FCSR enable and cause, divide by zero
 
 
 def _f32(value):
@@ -23,6 +25,23 @@ def _f32(value):
 
 _case = charness.make_case
 first_difference = charness.first_difference
+
+
+def _emitted(cases):
+    """A harness binary holding each case's program emitted by recomp.function_c (its
+    functions renamed per case: every program sits at vectors.CODE_BASE), and the map from
+    case name to its entry function, for "recomp" mode."""
+    sources, names = [], {}
+    for k, case in enumerate(cases):
+        image = exe.ExeImage(0, vectors.CODE_BASE,
+                             struct.pack("<%dI" % len(case.words), *case.words), "")
+        analysis = functions.analyse(image, vectors.CODE_BASE)
+        for f in sorted(analysis.functions, key=lambda f: f.addr):
+            text = recomp.function_c(image, analysis, f)
+            sources.append(re.sub(r"\bfn_(?=[0-9A-F]{8}\b)", f"c{k}_", text))
+        names[case.name] = f"c{k}_{vectors.CODE_BASE:08X}"
+    source = "\n".join(sources) + "\n" + charness.register_named(sorted(set(names.values())))
+    return charness.build([charness.write_generated(source)]), names
 
 
 class InterpTest(unittest.TestCase):
@@ -174,6 +193,75 @@ class InterpTest(unittest.TestCase):
         fs, no_fs, again = self.run_cases(self.flush_programs())
         self.assertEqual((fs.fpr[0], no_fs.fpr[0], again.fpr[0]), (1 << 9, 1 << 9, 1 << 9))
         self.assertEqual(fs.fcsr, 1 << 24)
+
+    def assertSameInBothModes(self, cases):
+        """The after-states and runtime calls of `cases` in the interpreter and as emitted C
+        agree; returns the interpreter's."""
+        exe_path, names = _emitted(cases)
+        want = charness.run(exe_path, "interp", cases)
+        got = charness.run(exe_path, "recomp", cases, names)
+        for case, u, v in zip(cases, want, got):
+            self.assertIsNone(first_difference(u, v), case.name)
+            self.assertEqual(u.calls, v.calls, case.name)
+        return want
+
+    def test_slice_counts_checks(self):
+        # a0 = 10, then a loop whose bgez is taken 10 times (a0 = 9 down to 0): 11 check
+        # points, the entry and 10 back edges; at the k-th back edge a0 = 10 - k. Each check
+        # decrements slice and calls rt_tick when it reaches 0; the harness's rt_tick records
+        # the general registers and reloads slice with the case's reload value.
+        loop = [A("ori", rt=A0, rs=0, imm=10), A("addiu", rt=A0, rs=A0, imm=-1),
+                A("bgez", rs=A0, imm=-2), NOP]
+        runs = [((4, 4), [7, 3]), ((11, 100), [0]), ((12, 100), []),
+                ((1, 1), [0, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0]), (None, [])]
+        cases = []
+        for k, (slice_, _a0s) in enumerate(runs):
+            case = _case(f"slice{k}", *loop)
+            if slice_ is not None:
+                case.slice = slice_
+            cases.append(case)
+        for case, (slice_, a0s), got in zip(cases, runs, self.assertSameInBothModes(cases)):
+            self.assertEqual([call[0] for call in got.calls], ["tick"] * len(a0s), case.name)
+            self.assertEqual([call[1 + A0] for call in got.calls], a0s, case.name)
+            self.assertEqual(got.r[A0], 0xFFFFFFFF)
+
+    def test_fp_trap_seam(self):
+        # rc_div_s / rc_div_d call rt_fp_trap(c, cause Z) when the divisor is zero, the
+        # dividend finite and non-zero and the enable FCSR bit 10 set; the harness's
+        # rt_fp_trap records and returns, so the IEEE result follows. recip.s divides 1 by
+        # its operand through the same seam.
+        one, two, zero, nan = _f32(1.0), _f32(2.0), 0, 0x7FC00000
+        div_s = A("div.s", fd=0, fs=2, ft=4)
+        div_d = A("div.d", fd=0, fs=2, ft=4)
+        recip = A("recip.s", fd=0, fs=4)
+        d_one = 0x3FF00000  # high word of 1.0
+        runs = [  # name, word, fs, ft, fcsr, trapped, result (f0)
+            ("one-by-zero", div_s, one, zero, FCSR_EZ, True, INF),
+            ("not-enabled", div_s, one, zero, 0, False, INF),
+            ("zero-by-zero", div_s, zero, zero, FCSR_EZ, False, None),
+            ("minus-one", div_s, _f32(-1.0), zero, FCSR_EZ, True, 0xFF800000),
+            ("by-minus-zero", div_s, one, 0x80000000, FCSR_EZ, True, 0xFF800000),
+            ("inf-by-zero", div_s, INF, zero, FCSR_EZ, False, INF),
+            ("nan-by-zero", div_s, nan, zero, FCSR_EZ, False, None),
+            ("by-two", div_s, one, two, FCSR_EZ, False, _f32(0.5)),
+            ("recip-zero", recip, None, zero, FCSR_EZ, True, INF),
+            ("recip-not-enabled", recip, None, zero, 0, False, INF),
+        ]
+        cases = []
+        for name, word, fs, ft, fcsr, _t, _r in runs:
+            fpr = {4: ft} if fs is None else {2: fs, 4: ft}
+            cases.append(_case(name, word, fpr=fpr, fcsr=fcsr))
+        cases.append(_case("d-one-by-zero", div_d, fpr={3: d_one}, fcsr=FCSR_EZ))
+        cases.append(_case("d-zero-by-zero", div_d, fcsr=FCSR_EZ))
+        got = self.assertSameInBothModes(cases)
+        for (name, _w, _fs, _ft, fcsr, trapped, result), state in zip(runs, got):
+            self.assertEqual(state.calls, [("fp_trap", CAUSE_Z)] if trapped else [], name)
+            if result is not None:
+                self.assertEqual(state.fpr[0], result, name)
+            self.assertEqual(state.fcsr, fcsr, name)
+        self.assertEqual(got[-2].calls, [("fp_trap", CAUSE_Z)])
+        self.assertEqual((got[-2].fpr[0], got[-2].fpr[1]), (0, 0x7FF00000))
+        self.assertEqual(got[-1].calls, [])
 
     def test_flush_to_zero_when_fs_is_honoured(self):
         # built with RT_HONOUR_FS = 1: FS = 1 flushes, as the R5000 documents

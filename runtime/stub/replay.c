@@ -8,11 +8,12 @@
  * at the call).
  *
  * The program loads the before-state, calls the function through recomp_lookup (it must be
- * recompiled) with no interrupt pending, and compares every general register, hi, lo, the 32
- * FP halves, FCSR with its condition codes, and all 8 MB of RAM with the after-state. It
+ * recompiled) with no interrupt delivered (rt_tick only reloads slice), and compares every
+ * general register, hi, lo, the 32 FP halves, FCSR with its condition codes, and all 8 MB of
+ * RAM with the after-state. It
  * prints each difference (registers by name with both values; RAM as address ranges and byte
- * counts only) and exits 1 on any. An rt_loader, rt_break, rt_interrupt or interpreter entry
- * during the call is printed and is a difference too.
+ * counts only) and exits 1 on any. An rt_loader, rt_break, rt_host_switch, rt_fp_trap or
+ * interpreter entry during the call is printed and is a difference too.
  *
  * The first bus access ends the run instead: the program prints "bus read ADDR size N" or
  * "bus write ADDR size N value V", the state at that moment (common.h, print_state: before
@@ -101,12 +102,24 @@ void rt_break(uint8_t *ram, cpu_t *c, uint32_t pc, uint32_t code)
     printf("rt_break pc 0x%08" PRIX32 " code 0x%05" PRIX32 "\n", pc, code);
 }
 
-void rt_interrupt(uint8_t *ram, cpu_t *c)
+void rt_tick(uint8_t *ram, cpu_t *c)
 {
     (void)ram;
+    c->slice = STUB_SLICE;
+}
+
+void rt_host_switch(uint8_t *ram, cpu_t *c, int kind)
+{
+    (void)ram;
+    events++;
+    printf("rt_host_switch kind %d sp 0x%08" PRIX32 "\n", kind, c->r[29]);
+}
+
+void rt_fp_trap(cpu_t *c, uint32_t cause_bit)
+{
     (void)c;
     events++;
-    printf("rt_interrupt\n");
+    printf("rt_fp_trap cause 0x%05" PRIX32 "\n", cause_bit);
 }
 
 static void log_unrecompiled(uint32_t addr)
@@ -320,6 +333,7 @@ int main(int argc, char **argv)
         return 2;
     }
     memset(&c, 0, sizeof c);
+    c.slice = STUB_SLICE;
     memcpy(c.r, cap.before.r, sizeof c.r);
     c.r[0] = 0;
     c.hi = cap.before.hi;

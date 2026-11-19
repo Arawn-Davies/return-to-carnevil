@@ -10,8 +10,10 @@
  * The runtime entry points log to stderr, one line each, prefixed "stub: ":
  * - bus_read returns 0; bus_read and bus_write log an address the first time each sees it
  *   ("bus_read ADDR size N", "bus_write ADDR size N value V");
- * - rt_loader, rt_break and rt_interrupt log their arguments and return ("rt_loader slot S",
- *   "rt_break pc P code C", "rt_interrupt");
+ * - rt_loader, rt_break, rt_host_switch and rt_fp_trap log their arguments and return
+ *   ("rt_loader slot S", "rt_break pc P code C", "rt_host_switch kind K sp SP",
+ *   "rt_fp_trap cause C"; after rt_fp_trap the division gives its IEEE result);
+ * - rt_tick reloads slice with STUB_SLICE and does nothing else: no clock, no interrupt;
  * - every address the interpreter is entered at, once ("interp_run entered at ADDR").
  */
 #include <inttypes.h>
@@ -23,6 +25,7 @@
 
 #define STACK_TOP 0x807FFFF0u
 #define SEEN_SIZE 4096u /* addresses remembered per bus function; past that, all are logged */
+#define STUB_SLICE INT32_MAX
 
 struct seen {
     uint32_t addr[SEEN_SIZE];
@@ -79,11 +82,22 @@ void rt_break(uint8_t *ram, cpu_t *c, uint32_t pc, uint32_t code)
     fprintf(stderr, "stub: rt_break pc 0x%08" PRIX32 " code 0x%05" PRIX32 "\n", pc, code);
 }
 
-void rt_interrupt(uint8_t *ram, cpu_t *c)
+void rt_tick(uint8_t *ram, cpu_t *c)
 {
     (void)ram;
+    c->slice = STUB_SLICE;
+}
+
+void rt_host_switch(uint8_t *ram, cpu_t *c, int kind)
+{
+    (void)ram;
+    fprintf(stderr, "stub: rt_host_switch kind %d sp 0x%08" PRIX32 "\n", kind, c->r[29]);
+}
+
+void rt_fp_trap(cpu_t *c, uint32_t cause_bit)
+{
     (void)c;
-    fprintf(stderr, "stub: rt_interrupt\n");
+    fprintf(stderr, "stub: rt_fp_trap cause 0x%05" PRIX32 "\n", cause_bit);
 }
 
 static void log_unrecompiled(uint32_t addr)
@@ -151,6 +165,7 @@ int main(int argc, char **argv)
         return 1;
     memset(&c, 0, sizeof c);
     c.r[29] = STACK_TOP;
+    c.slice = STUB_SLICE;
     rt_log_unrecompiled = log_unrecompiled;
     rt_call(ram, &c, entry);
     printf("r");

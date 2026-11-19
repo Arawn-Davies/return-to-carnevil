@@ -29,8 +29,8 @@ typedef struct cpu {
     uint32_t fpr[32];
     uint32_t fcsr;  /* FCSR without its condition bits (FCSR bits 23 and 25..31 are 0 here) */
     uint8_t fcc;    /* bit n is FP condition code n */
-    uint32_t pc;    /* used by the interpreter only */
-    volatile uint32_t irq_pending;
+    uint32_t pc;    /* kept by the interpreter, and by generated code built with --trace-pc */
+    int32_t slice;  /* check points left until RT_CHECK calls rt_tick (below) */
     void *rt;       /* the runtime's own data */
 } cpu_t;
 
@@ -44,9 +44,10 @@ typedef void (*recomp_fn)(uint8_t *ram, cpu_t *c);
  * outside the mapped RAM). size is 1, 2 or 4 (lb/lbu/sb, lh/lhu/sh, the word accesses; ldc1
  * and sdc1 are two word accesses). The caller masks a read's result to the size, so a
  * runtime may return a wider value; a write's value arrives masked to the size. The address
- * is not checked for alignment (see "memory" below). The generated code passes no guest PC
- * (c->pc is kept by the interpreter only), so a runtime cannot tell which instruction made
- * the access. */
+ * is not checked for alignment (see "memory" below). The generated code passes no guest PC:
+ * c->pc names the instruction that made the access only in the interpreter and in generated
+ * code emitted with --trace-pc (recompile --trace-pc stores it before each load, store and
+ * call). */
 uint32_t bus_read(cpu_t *c, uint32_t addr, int size);
 void bus_write(cpu_t *c, uint32_t addr, int size, uint32_t value);
 
@@ -60,7 +61,8 @@ void bus_write(cpu_t *c, uint32_t addr, int size, uint32_t value);
  * caller then goes on after a jal, and returns to its own caller after a j or from a stub
  * thunk (a function whose body is this call). rt_loader may re-enter game code through
  * rt_call (a registered callback or handler). It is not an interrupt check point: a service
- * that waits (for DMA, a frame) must poll or call rt_interrupt itself. */
+ * that waits (for DMA, a frame) must advance the clock and deliver interrupts itself (what
+ * rt_tick does). */
 void rt_loader(uint8_t *ram, cpu_t *c, uint32_t slot);
 
 /* rt_break: a break instruction at pc; code is the 20-bit field of the break word, bits 6 to
@@ -68,16 +70,40 @@ void rt_loader(uint8_t *ram, cpu_t *c, uint32_t slot);
  * a break the game treats as fatal (0x407, an assert). */
 void rt_break(uint8_t *ram, cpu_t *c, uint32_t pc, uint32_t code);
 
-/* rt_interrupt: called by RT_CHECK (below) when irq_pending is non-zero, with the guest state
- * in *c. It must leave all guest state (r, hi, lo, fpr, fcsr and fcc, and RAM apart from what
- * the handlers write) and the host FP environment as an exception return would, apart from
- * what the handlers' ABI changes. The runtime clears irq_pending (or masks the source) before
- * it runs a handler: the game's handlers are recompiled functions with RT_CHECK at their
- * entry, so otherwise rt_interrupt re-enters itself. It may call rt_call. Handlers run on
- * whatever host context (stack, fiber, thread) is current at the check point. irq_pending is
- * volatile only: a runtime that sets it from another thread must use its own
- * synchronisation or an atomic store of a word. */
-void rt_interrupt(uint8_t *ram, cpu_t *c);
+/* rt_tick: called by RT_CHECK (below) when slice reaches 0, with the guest state in *c. Time
+ * is counted in check points: the runtime accounts the checks used since it last set slice,
+ * advances its virtual clock by them, runs the events that are due and delivers the
+ * interrupts that are pending, then reloads slice (at least 1). It must leave all guest state
+ * (r, hi, lo, fpr, fcsr and fcc, and RAM apart from what the handlers write) and the host FP
+ * environment as an exception return would, apart from what the handlers' ABI changes. It
+ * may call rt_call: the game's handlers are recompiled functions with RT_CHECK at their
+ * entry, so slice must be reloaded (or the source masked) before a handler runs, or rt_tick
+ * re-enters itself. Handlers run on whatever host context (stack, fiber, thread) is current
+ * at the check point. slice belongs to the thread running the guest; nothing else writes it. */
+void rt_tick(uint8_t *ram, cpu_t *c);
+
+/* rt_host_switch: a transfer of the game's task switch that leaves guest control flow for the
+ * runtime (config/game.manual.toml, [[host_switch]]). At entry the delay slot has run; kind is
+ * RT_SWITCH_YIELD (the `j` that ends the yield), RT_SWITCH_EXIT (the `j` that ends a finished
+ * task's exit) or RT_SWITCH_RESUME (the scheduler's `jr ra` into a task). On return the caller
+ * goes on as the kind says: after a resume, at the instruction after its delay slot (the
+ * scheduler's restore path, reached when the task yields); after a yield, by returning from
+ * the C function (to whatever host frame resumed the task); after an exit, the same, though
+ * the runtime never returns from an exit. rt_switch_kind (below) gives the interpreter the
+ * same points. */
+enum { RT_SWITCH_RESUME, RT_SWITCH_YIELD, RT_SWITCH_EXIT };
+void rt_host_switch(uint8_t *ram, cpu_t *c, int kind);
+
+/* rt_fp_trap: the FP exception the board raises, with cause_bit its FCSR cause bit (1 << 15,
+ * divide by zero, is the only one raised: by rc_div_s and rc_div_d below). The runtime does
+ * not return from it: on the board the game's catch-all handler runs and ends at the reset
+ * vector. A test or stub runtime that does return gets the IEEE result of the operation. */
+void rt_fp_trap(cpu_t *c, uint32_t cause_bit);
+
+/* rt_switch_kind: the RT_SWITCH_* kind of the host-switch point at pc, or -1 when pc is none.
+ * The generated func_table.c provides it for the game; a test harness may provide its own. The
+ * interpreter asks it at every `j` and `jr`. */
+int rt_switch_kind(uint32_t pc);
 
 /* recomp_lookup: the recompiled function at addr, or NULL when there is none. The generated
  * func_table.c provides it for the game; a test harness may provide its own. rt_call and the
@@ -114,17 +140,19 @@ uint32_t rt_get_fcsr(const cpu_t *c);
 extern void (*rt_log_unrecompiled)(uint32_t addr);
 
 /* Interrupt check points, the same in recompiled code and the interpreter: at the entry of
- * every function (and of interp_run), and before a backward transfer (target at or below the
- * transferring instruction) that stays in the current function or run: a goto in generated
- * C, an inline continue in the interpreter. A transfer that leaves through a call (a direct
- * call, rt_call, rt_jump, rt_loader) does not check; the callee's entry does. Where the
- * interpreter runs on inline into another function's start that generated C calls (a branch
- * to it, a fall-through off the end, a jump to an unregistered start), the counts differ by
- * that entry check. A pending interrupt is only ever delayed to the next check point. */
+ * every function (and of interp_run) except the stub thunks (whose body is the rt_loader
+ * call), and before a backward transfer (target at or below the transferring instruction)
+ * that stays in the current function or run: a goto in generated C, an inline continue in the
+ * interpreter. A transfer that leaves through a call (a direct call, rt_call, rt_jump,
+ * rt_loader, rt_host_switch) does not check; the callee's entry does. Where the interpreter
+ * runs on inline into another function's start that generated C calls (a branch to it, a
+ * fall-through off the end, a jump to an unregistered start), the counts differ by that entry
+ * check. Each check counts one unit of the runtime's clock; an interrupt is delivered at the
+ * check where slice reaches 0. */
 #define RT_CHECK(ram, c)                                                                    \
     do {                                                                                    \
-        if ((c)->irq_pending)                                                               \
-            rt_interrupt((ram), (c));                                                       \
+        if (--(c)->slice <= 0)                                                              \
+            rt_tick((ram), (c));                                                            \
     } while (0)
 
 /* --- provided by runtime/interp ------------------------------------------------------- */
@@ -299,19 +327,31 @@ static inline void rc_set_fd(cpu_t *c, unsigned n, double d)
 
 /* --- FP divide -------------------------------------------------------------------------- */
 
-/* div.s and div.d, in generated code and in the interpreter: the seam for the FP
- * divide-by-zero trap. The game enables that trap: main installs FPU exception handlers
- * through the loader (slot 0x1E8, which also sets the matching FCSR enable), from 0x800C46A0
- * for cause 5 (handler 0x80150860) and from 0x800C46C0 for cause 3, divide by zero (handler
- * 0x8014FEF0). MAME raises the exception when the enable is set; the port does not yet: it
- * returns the IEEE result (an infinity, or a NaN for 0 / 0). M2 adds the trap here. */
-static inline float rc_div_s(float a, float b)
+/* div.s, div.d and recip.s (1 / x), in generated code and in the interpreter: the one place
+ * an FP division raises the divide-by-zero trap. The game enables that trap: main installs
+ * FPU exception handlers through the loader (slot 0x1E8, which also sets the matching FCSR
+ * enable), from 0x800C46A0 for cause 5 (handler 0x80150860) and from 0x800C46C0 for cause 3,
+ * divide by zero (handler 0x8014FEF0). MAME raises the exception when the enable is set. Here
+ * a division of a finite non-zero value by zero (of either sign) with FCSR bit 10 (enable Z)
+ * set calls rt_fp_trap with cause bit 15 (Z): the IEEE 754 divide-by-zero case. 0 / 0 (invalid
+ * in IEEE 754), inf / 0 (exact) and NaN / 0 do not; what MAME does with them is not measured.
+ * Otherwise, or when rt_fp_trap returns, the IEEE result. recip.s is 1 / x, so recip.s of 0
+ * divides through rc_div_s too (the M1 re-review's reading of the R5000 manual: it raises Z
+ * there; whether MAME raises it for recip.s is not measured). */
+#define RC_FCSR_ENABLE_Z (1u << 10)
+#define RC_FCSR_CAUSE_Z (1u << 15)
+
+static inline float rc_div_s(cpu_t *c, float a, float b)
 {
+    if (b == 0.0f && a != 0.0f && isfinite(a) && (c->fcsr & RC_FCSR_ENABLE_Z))
+        rt_fp_trap(c, RC_FCSR_CAUSE_Z);
     return a / b;
 }
 
-static inline double rc_div_d(double a, double b)
+static inline double rc_div_d(cpu_t *c, double a, double b)
 {
+    if (b == 0.0 && a != 0.0 && isfinite(a) && (c->fcsr & RC_FCSR_ENABLE_Z))
+        rt_fp_trap(c, RC_FCSR_CAUSE_Z);
     return a / b;
 }
 
