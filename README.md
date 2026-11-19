@@ -8,7 +8,7 @@ too slow for full speed.
 ## Status
 
 Early. Milestone M0 (tools that extract the game's files and analyse its executable) is in
-progress on the [`m0-analysis`](../../tree/m0-analysis) branch, which holds the code, tests and
+progress on the `m0-analysis` branch, which holds the code, tests and
 analysis notes. It merges here when M0 is complete. Nothing is playable yet; the
 [roadmap](docs/roadmap.md) has the details.
 
