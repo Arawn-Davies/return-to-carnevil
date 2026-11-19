@@ -2,7 +2,9 @@
 
 A native port of CarnEvil (Midway, 1998, Seattle arcade hardware) by static recompilation:
 the game's own MIPS code is translated to C ahead of time and linked against a runtime that
-stands in for the arcade board.
+stands in for the arcade board. Builds come in this order: macOS, then Linux (including WSL2),
+then PlayStation 4 Linux, the machine the project exists for, where emulation is too slow for
+full speed.
 
 Status: early. Milestone M0 (extraction and analysis tooling) is in progress. See
 `docs/superpowers/specs/` for the design and `docs/superpowers/plans/` for the plan.
@@ -51,6 +53,7 @@ Start at [`docs/README.md`](docs/README.md): how it works, getting started, the 
 - The disk format was learned from [xclusivor/CarnEvil-Research](https://github.com/xclusivor/CarnEvil-Research),
   itself based on daemon1's tools from the XenTaX forums. See `docs/analysis/disk-format.md`.
 - MAME's `seattle` driver is the hardware reference.
+- The recompiler will build on [N64Recomp](https://github.com/N64Recomp/N64Recomp).
 
 ## Licence
 
