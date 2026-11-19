@@ -1,15 +1,29 @@
 /* fpu.c: FCSR, and the host FP environment that follows it.
  *
  * The rounding mode FCSR.RM (bits 0-1: 0 nearest, 1 toward zero, 2 toward +inf, 3 toward
- * -inf) becomes the host rounding mode, and FCSR.FS (bit 24) host flush-to-zero, so that
- * plain C arithmetic in generated code and in the interpreter rounds as the R5000 would.
- * Host FS: arm64 FPCR.FZ flushes denormal inputs and results; on x86-64 MXCSR FTZ and DAZ
- * are both set, so the two hosts agree. Any other host is a compile error.
+ * -inf) becomes the host rounding mode, so that plain C arithmetic in generated code and in
+ * the interpreter rounds as the R5000 would. Any host but arm64 and x86-64 is a compile
+ * error.
+ *
+ * FCSR.FS (bit 24, flush to zero; the game sets it in _start and keeps it) is kept in FCSR
+ * either way. What it does to arithmetic is the one compile-time switch RT_HONOUR_FS:
+ * - 0, the default: FS changes nothing, as in MAME 0.276, which ignores it (the FS vectors
+ *   of tests/vectors/insn.json: with FS = 1 it returns denormal results and uses denormal
+ *   operands as they are). Every later milestone is checked against MAME, so the port
+ *   follows it;
+ * - 1: FS = 1 sets host flush-to-zero, as the R5000 documents. arm64 FPCR.FZ flushes
+ *   denormal inputs and results; on x86-64 MXCSR FTZ and DAZ are both set, so the two hosts
+ *   agree. Denormal arithmetic is slow on x86, so this is also the setting to measure in the
+ *   performance work.
  *
  * FCSR's flag and cause bits change only through ctc1: MAME does not accumulate them
  * (no recorded vector changes them), so neither does this runtime.
  */
 #include "recomp.h"
+
+#ifndef RT_HONOUR_FS
+#define RT_HONOUR_FS 0
+#endif
 
 #if defined(__aarch64__)
 
@@ -50,7 +64,7 @@ void rt_set_fcsr(cpu_t *c, uint32_t value)
 {
     c->fcsr = value & ~FCSR_CC_MASK;
     c->fcc = (uint8_t)((value >> 23 & 1u) | (value >> 24 & 0xFEu));
-    host_fp(value & 3u, (value & FCSR_FS) != 0);
+    host_fp(value & 3u, RT_HONOUR_FS && (value & FCSR_FS) != 0);
 }
 
 uint32_t rt_get_fcsr(const cpu_t *c)

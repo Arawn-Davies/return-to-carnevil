@@ -80,6 +80,12 @@ MAME_SPECIFIC = {
     "msub.s.9": _MADD,
     "nmsub.s.11": _MADD,
 }
+_RECIP = ("recip.s: MAME computes 1.0f / x, correctly rounded; the R5000's accuracy for recip "
+          "is not verified")
+MAME_SPECIFIC.update({f"recip.s.{i}": _RECIP for i in range(12)})
+_FS = ("FCSR.FS = 1: MAME does not model FS (it keeps denormal results and operands); the "
+       "R5000 documents flushing them to zero (runtime/core/fpu.c, RT_HONOUR_FS)")
+# MAME_SPECIFIC gains the FS = 1 cases below, after _FS_CASES
 
 
 # Cases that are not run in MAME (Case.no_mame), so have no recorded result, and why.
@@ -623,6 +629,68 @@ def _edges(rng):
     return out
 
 
+# FCSR.FS (flush to zero), which the game sets in _start (ctc1 at 0x800C4064) and keeps.
+FCSR_FS = 1 << 24
+
+
+# The FS cases: (mnemonic, label, operand bits by role). Singles are bits, doubles (low,
+# high) words. "denormal-result": normal operands whose exact result is denormal;
+# "denormal-operand": a denormal operand whose result, unflushed, is normal (or a compare
+# that a flushed operand would decide the other way).
+_DEN_S = 0x00400000  # 2^-127
+_DEN_D = _f64_words(2.0 ** -1023)
+_FS_CASES = (
+    ("mul.s", "denormal-result", {"fs": _f32_bits(2.0 ** -70), "ft": _f32_bits(1.5 * 2.0 ** -70)}),
+    ("div.s", "denormal-result", {"fs": _f32_bits(2.0 ** -100), "ft": _f32_bits(2.0 ** 30)}),
+    ("sub.s", "denormal-result", {"fs": 0x00C00000, "ft": 0x00800000}),
+    ("add.s", "denormal-result", {"fs": 0x00C00000, "ft": 0x80800000}),
+    ("cvt.s.d", "denormal-result", {"fs": _f64_words(1.5 * 2.0 ** -140)}),
+    ("mul.d", "denormal-result", {"fs": _f64_words(2.0 ** -520),
+                                  "ft": _f64_words(1.5 * 2.0 ** -520)}),
+    ("div.d", "denormal-result", {"fs": _f64_words(2.0 ** -1000), "ft": _f64_words(2.0 ** 60)}),
+    ("sub.d", "denormal-result", {"fs": _f64_words(1.5 * 2.0 ** -1022),
+                                  "ft": _f64_words(2.0 ** -1022)}),
+    ("add.d", "denormal-result", {"fs": _f64_words(1.5 * 2.0 ** -1022),
+                                  "ft": _f64_words(-(2.0 ** -1022))}),
+    ("mul.s", "denormal-operand", {"fs": _DEN_S, "ft": _f32_bits(2.0 ** 30)}),
+    ("add.s", "denormal-operand", {"fs": _DEN_S, "ft": 0x00800000}),
+    ("cvt.d.s", "denormal-operand", {"fs": _DEN_S}),
+    ("c.eq.s", "denormal-operand", {"fs": _DEN_S, "ft": 0}),
+    ("c.lt.s", "denormal-operand", {"fs": 0, "ft": _DEN_S}),
+    ("mul.d", "denormal-operand", {"fs": _DEN_D, "ft": _f64_words(2.0 ** 100)}),
+    ("add.d", "denormal-operand", {"fs": _DEN_D, "ft": _f64_words(2.0 ** -1022)}),
+)
+MAME_SPECIFIC.update({f"{name}.edge.fs1.{label}": _FS for name, label, _ops in _FS_CASES})
+
+
+def _fs_edges(rng):
+    """(name, words, before) of the FS cases: each of _FS_CASES with FCSR.FS = 1, then the same
+    program and state with FS = 0 as its control. Rounding mode 0, no enables."""
+    out = []
+    for name, label, operands in _FS_CASES:
+        s = _state(rng)
+        # even registers throughout, so a double (source or destination) is a valid pair
+        fields = dict(zip(("fd", "fs", "ft"), rng.sample(range(0, 32, 2), 3)))
+        for role, bits in operands.items():
+            if name.endswith(".d"):  # the source format
+                _set_double(s, fields[role], bits)
+            else:
+                s.fpr[fields[role]] = bits
+        if name.startswith("c."):
+            # cc0 starts opposite to the unflushed result (c.eq false, c.lt true), so that
+            # result shows as a change and a flushed operand as none
+            s.fcsr = s.fcsr & ~(1 << 23) | (name == "c.eq.s") << 23
+            word = assemble(name, cc=0, fs=fields["fs"], ft=fields["ft"])
+        elif "ft" in operands:
+            word = assemble(name, **fields)
+        else:
+            word = assemble(name, fd=fields["fd"], fs=fields["fs"])
+        for fs in (1, 0):
+            before = State(list(s.r), s.hi, s.lo, list(s.fpr), s.fcsr | fs * FCSR_FS)
+            out.append((f"{name}.edge.fs{fs}.{label}", _prog(word), before))
+    return out
+
+
 def _clean(state):
     state.mem = {a: v for a, v in state.mem.items() if v}
     return state
@@ -630,14 +698,15 @@ def _clean(state):
 
 def cases(seed=1):
     """The instruction test cases: RANDOM_PER_MNEMONIC random ones per census mnemonic,
-    then the named edge cases. Deterministic for a given seed."""
+    then the named edge cases, then the FS cases (appended last, so the cases before them
+    are the same as before they existed). Deterministic for a given seed."""
     rng = random.Random(seed)
     out = []
     for name in CENSUS:
         for i in range(RANDOM_PER_MNEMONIC):
             words, before = _GENERATORS[name](rng, i)
             out.append(Case(f"{name}.{i}", words, _clean(before), name in NO_MAME))
-    for name, words, before in _edges(rng):
+    for name, words, before in _edges(rng) + _fs_edges(rng):
         no_mame = name in NO_MAME or name.split(".edge.")[0] in NO_MAME
         out.append(Case(name, words, _clean(before), no_mame))
     return out

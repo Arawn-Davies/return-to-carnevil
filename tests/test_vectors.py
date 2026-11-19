@@ -131,7 +131,9 @@ class CasesTest(unittest.TestCase):
             for addr, value in b.mem.items():
                 self.assertTrue(vectors.SCRATCH <= addr < vectors.SCRATCH + 0x1000, case.name)
                 self.assertEqual((addr % 4, value != 0), (0, True), case.name)
-            self.assertEqual(b.fcsr & ~vectors.FCSR_CC_MASK, 0, case.name)
+            # condition bits only, and FS in the FS cases: rounding mode 0, no enables
+            fs = vectors.FCSR_FS if ".edge.fs1." in case.name else 0
+            self.assertEqual(b.fcsr & ~vectors.FCSR_CC_MASK, fs, case.name)
         no_mame = {c.name for c in self.cases if c.no_mame}
         breaks = {c.name for c in self.cases if _first(c).mnemonic == "break"}
         self.assertEqual(no_mame, breaks | {"div.edge.80000000.FFFFFFFF"})
@@ -177,6 +179,53 @@ class CasesTest(unittest.TestCase):
                 else:
                     exp = (case.before.fpr[reg & ~1 | 1] >> 20) & 0x7FF
                     self.assertTrue(0 < exp < 0x7FF, case.name)
+
+    def test_fs_cases(self):
+        """Each FS case runs with FCSR.FS = 1 and has a control with FS = 0, the same program
+        and the same state otherwise; the denormal-result ones have normal operands whose
+        exact result is denormal, the denormal-operand ones a denormal operand."""
+        fs = {c.name: c for c in self.cases if ".edge.fs" in c.name}
+        self.assertEqual(len(fs), 32)
+        self.assertEqual(list(fs), [c.name for c in self.cases[-32:]])  # appended last
+        kinds = set()
+        for name, case in fs.items():
+            if ".edge.fs0." in name:
+                continue
+            control = fs[name.replace(".edge.fs1.", ".edge.fs0.")]
+            self.assertEqual(case.before.fcsr, control.before.fcsr | vectors.FCSR_FS, name)
+            self.assertEqual((case.words, case.before.r, case.before.fpr),
+                             (control.words, control.before.r, control.before.fpr), name)
+            insn = _first(case)
+            fmt = insn.mnemonic[-1]
+            regs = [insn.rd] + ([insn.rt] if insn.mnemonic[:4] in ("mul.", "div.", "add.",
+                                                                    "sub.", "c.eq", "c.lt")
+                                else [])
+            values = [_fp(case.before.fpr, r, fmt) for r in regs]
+            tiny = Fraction(2) ** (-126 if fmt == "s" else -1022)
+            denormal = [v != 0 and abs(v) < tiny for v in values]
+            label = name.rsplit(".", 1)[1]
+            kinds.add((insn.mnemonic, label))
+            if label == "denormal-result":
+                self.assertFalse(any(denormal), name)
+                op = insn.mnemonic.split(".")[0]
+                exact = {"mul": lambda a, b: a * b, "div": lambda a, b: a / b,
+                         "add": lambda a, b: a + b, "sub": lambda a, b: a - b,
+                         "cvt": lambda a: a}[op](*values)
+                out = "s" if insn.mnemonic == "cvt.s.d" else fmt
+                low, limit = ((Fraction(2) ** -149, Fraction(2) ** -126) if out == "s"
+                              else (Fraction(2) ** -1074, Fraction(2) ** -1022))
+                self.assertTrue(low <= abs(exact) < limit, name)  # in the denormal range
+            else:
+                self.assertEqual(label, "denormal-operand", name)
+                self.assertTrue(any(denormal), name)
+        self.assertEqual(len(kinds), 16)
+        # MAME ignores FS, so every FS = 1 result is MAME's, not the R5000's
+        fs1 = {n for n in fs if ".edge.fs1." in n}
+        self.assertEqual({n for n, why in vectors.MAME_SPECIFIC.items()
+                          if "MAME does not model FS" in why}, fs1)
+        self.assertEqual({m for m, _ in kinds},
+                         {"mul.s", "div.s", "add.s", "sub.s", "cvt.s.d", "mul.d", "div.d",
+                          "add.d", "sub.d", "cvt.d.s", "c.eq.s", "c.lt.s"})
 
     def test_fp_cc_cases(self):
         def ccs(name):
@@ -302,6 +351,11 @@ class RecordedTest(unittest.TestCase):
         self.assertEqual(differ, listed)
 
     def test_recip_and_sqrt_are_correctly_rounded(self):
+        # MAME's recip.s is 1.0f / x; the R5000's accuracy for recip is not verified, so every
+        # recip.s case is listed as MAME-specific
+        recip = {c.name for c, _a in self._of("recip.s")}
+        self.assertEqual(len(recip), 12)
+        self.assertLessEqual(recip, set(vectors.MAME_SPECIFIC))
         for case, after in self.recorded:
             insn = _first(case)
             if insn.mnemonic not in ("recip.s", "sqrt.s"):

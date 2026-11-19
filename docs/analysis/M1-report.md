@@ -32,12 +32,12 @@ Every fact below carries its basis, as in the [M0 report](M0-report.md):
   4-core Debian container, with zero warnings under `-Wall -Werror` on both; an up-to-date
   rerun takes 0.04 s. `game_stub` is 4,806,904 bytes on the Mac (`__TEXT` 4,620,288) and
   3,570,992 bytes on Linux x86-64 (text 3,445,765) (static, measured now).
-- **Instruction vectors**: 1,337 cases from `carnevil_tools/vectors.py`, 12 random ones for
-  each of the 98 mnemonics of the census plus 161 edge cases. 1,320 ran in MAME
-  (`tools/mame/insnvec.lua`, 36 s) and are committed as `tests/vectors/insn.json` (950,282
-  bytes, synthetic words and values only): 1,080 straight-line and 240 branch, jump and call
-  programs. The other 17 have no MAME result (below). 24 recorded cases are listed as
-  MAME-specific (MAME, test).
+- **Instruction vectors**: 1,369 cases from `carnevil_tools/vectors.py`, 12 random ones for
+  each of the 98 mnemonics of the census plus 161 edge cases and 32 flush-to-zero cases (16
+  with FCSR.FS = 1, each with an FS = 0 control). 1,352 ran in MAME (`tools/mame/insnvec.lua`,
+  35 s) and are committed as `tests/vectors/insn.json` (973,468 bytes, synthetic words and
+  values only): 1,112 straight-line and 240 branch, jump and call programs. The other 17 have
+  no MAME result (below). 52 recorded cases are listed as MAME-specific (MAME, test).
 - **Replayed game functions**: 787 functions are statically pure by the census; 781 could be
   armed in MAME, 156 were hit in 90 emulated seconds of attract mode, 152 were captured
   (`tools/mame/funcreplay.lua`, 960 s wall). 127 replay with MAME's results; 25 are impure at
@@ -49,7 +49,7 @@ Every fact below carries its basis, as in the [M0 report](M0-report.md):
 
 ### Instruction programs
 
-Each of the 1,320 recorded cases is a short program (the instruction, or a branch layout that
+Each of the 1,352 recorded cases is a short program (the instruction, or a branch layout that
 marks which path ran, then `jr ra`) run on MAME's R5000 core from a chosen state. The
 interpreter and the generated C each reproduce every one exactly: all general registers, `hi`,
 `lo`, the 32 FP halves, FCSR and the scratch page (test). On top of that, the generated C is
@@ -62,10 +62,17 @@ calls, `break` and the interrupt check points (test). The test harness runs unde
 `-fsanitize=undefined`.
 
 How strong: every mnemonic's semantics is pinned on the operands chosen, edge values included
-(0, 1, 0x7FFFFFFF, 0x80000000, 0xFFFFFFFF, shifts of 32 and more, 3e9, NaN). 24 of the
-recorded results are MAME's behaviour rather than an established R5000 fact (division by zero,
-`trunc.w` of a NaN or an out-of-range value, three multiply-add results where one rounding
-would differ from MAME's two; [recompiler](recompiler.md) lists them). Matching those means
+(0, 1, 0x7FFFFFFF, 0x80000000, 0xFFFFFFFF, shifts of 32 and more, 3e9, NaN, denormals). 52
+of the recorded results are MAME's behaviour rather than an established R5000 fact (division
+by zero, `trunc.w` of a NaN or an out-of-range value, three multiply-add results where one
+rounding would differ from MAME's two, `recip.s`, and the 16 cases with FCSR.FS = 1;
+[recompiler](recompiler.md) lists them).
+
+The game runs with FCSR.FS = 1 (flush to zero) from `_start` on (read). MAME 0.276 ignores FS:
+in all 16 FS = 1 cases it kept the denormal result, or used the denormal operand as it is,
+exactly as in the FS = 0 control (MAME). The port therefore follows MAME and does not flush
+by default (`RT_HONOUR_FS` = 0 in `runtime/core/fpu.c`; set to 1, it flushes as the R5000
+documents, and a test checks that build too) (test). Matching those means
 the port agrees with its oracle, not necessarily with the board. That matters because the
 game would see the difference: on the board, an out-of-range `trunc.w` may raise an
 Unimplemented Operation exception, and the game registers an FPU handler for exactly that cause
@@ -157,6 +164,11 @@ wrong.
   traps); it was shown on x86-64 by hand.
 - **`-frounding-math` was added to the C flags** for every file, so that the compiler does not
   fold FP expressions as if the rounding mode were fixed once `ctc1` can change it.
+- **FCSR.FS does not flush by default.** The plan had `rt_set_fcsr` set host flush-to-zero
+  from FS, as the R5000 documents. MAME does not model FS (the FS = 1 vectors keep denormals),
+  and every later milestone is checked against MAME, so the port follows it: host
+  flush-to-zero is behind one compile-time switch, `RT_HONOUR_FS` in `runtime/core/fpu.c`
+  (0, the default, follows MAME; 1 flushes). The FS = 1 cases are listed as MAME-specific.
 - **The bits of a generated NaN are the host's** (0x7FC00000 on arm64, 0xFFC00000 on x86-64;
   the R5000's default is 0x7FBFFFFF). Accepted and documented in `recomp.h`: canonicalising
   would cost a branch per FP operation, for bits the game would have to inspect as integers.
@@ -384,6 +396,14 @@ gives the number of tasks, the yield rate and the stack sizes the design needs.
   roundings) follow MAME; where the board would trap into the game's own FPU handler, the port
   does not. Logging the first occurrence of each in the runtime would show whether attract mode
   or play ever reaches them.
+- **Flush to zero.** The game runs with FS = 1, which MAME ignores and the port, by default,
+  ignores too. If the board flushes and the game ever depends on it (a denormal that becomes 0
+  on the board, a compare against 0), the port and MAME agree with each other and both differ
+  from the board, unseen by every check. `RT_HONOUR_FS` = 1 gives the R5000 behaviour for a
+  comparison run. For the performance work (M7): denormal arithmetic is much slower than normal
+  arithmetic on many x86 cores (not measured here), so the default can cost speed exactly where
+  the board would have flushed; the switch exists, and measuring how often the game makes
+  denormals tells whether it matters.
 - **The FP divide-by-zero trap is not implemented.** `main` installs FPU exception handlers
   through the loader (from 0x800C46A0 for cause 5, handler 0x80150860; from 0x800C46C0 for
   cause 3, divide by zero, handler 0x8014FEF0), and the loader service sets the matching FCSR

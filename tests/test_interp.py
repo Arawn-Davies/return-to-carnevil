@@ -48,7 +48,7 @@ class InterpTest(unittest.TestCase):
         self.assertEqual(failures, [], f"{len(failures)} cases differ:\n" + "\n".join(failures))
 
     def test_interp_matches_mame_vectors(self):
-        self.assertEqual(len(self.recorded), 1320)
+        self.assertEqual(len(self.recorded), 1352)
         self.assertMatches(self.recorded)
 
     def test_division_edges_do_not_trap(self):
@@ -142,15 +142,27 @@ class InterpTest(unittest.TestCase):
             self.assertTrue(is_nan(got.fpr[reg]), f"fpr[{reg}] = {got.fpr[reg]:08X}")
         self.assertEqual(got.fpr[3], payload)
 
-    def test_flush_to_zero(self):
+    @staticmethod
+    def flush_programs():
         tiny = 57 << 23  # 2^-70: the exact product 2^-140 is denormal
         product = A("mul.s", fd=0, fs=2, ft=4)
 
         def program(name, fcsr):
             return _case(name, product, fcsr=fcsr, fpr={0: 0xFFFFFFFF, 2: tiny, 4: tiny})
 
-        flushed, denormal, again = self.run_cases(
-            [program("fs", 1 << 24), program("no-fs", 0), program("fs-again", 1 << 24)])
+        return [program("fs", 1 << 24), program("no-fs", 0), program("fs-again", 1 << 24)]
+
+    def test_fs_is_not_honoured_by_default(self):
+        # RT_HONOUR_FS = 0 (fpu.c), as MAME: FS = 1 is kept in FCSR, but the denormal result
+        # is not flushed (the FS vectors pin the same against MAME's results)
+        fs, no_fs, again = self.run_cases(self.flush_programs())
+        self.assertEqual((fs.fpr[0], no_fs.fpr[0], again.fpr[0]), (1 << 9, 1 << 9, 1 << 9))
+        self.assertEqual(fs.fcsr, 1 << 24)
+
+    def test_flush_to_zero_when_fs_is_honoured(self):
+        # built with RT_HONOUR_FS = 1: FS = 1 flushes, as the R5000 documents
+        exe = charness.build([], extra_flags=("-DRT_HONOUR_FS=1",))
+        flushed, denormal, again = charness.run(exe, "interp", self.flush_programs())
         self.assertEqual(flushed.fpr[0], 0)
         self.assertEqual(flushed.fcsr, 1 << 24)
         self.assertEqual(denormal.fpr[0], 1 << 9)

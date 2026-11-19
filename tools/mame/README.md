@@ -99,9 +99,12 @@ words of the scratch page after the case). Unlike the other scripts, its output 
 `tests/vectors/insn.json`. It boots to `GAME.EXE`'s entry, clears Status IE, EXL and ERL, and
 from then on overwrites the pages 0x80100000 (code) and 0x80200000 (scratch) for each case; it
 reads back nothing but the registers and the scratch page. It needs `-nodrc`, because it sets
-the PC from inside the debugger's instruction hook. Input is `$CARNEVIL_VECTORS`. The run of
-1,320 cases took 36 s wall time (`date` around the run), nearly all of it the boot: a run of
-16 cases took 33 s.
+the PC from inside the debugger's instruction hook. Input is `$CARNEVIL_VECTORS`; FCSR,
+FS included, is set from each case's before-state through `ctc1`. The run of 1,352 cases took
+35 s wall time (`date` around the run), nearly all of it the boot: a run of 16 cases took 33
+s. Every case is re-run when the cases change; `merge` writes the whole file again, and cases
+appended at the end leave the earlier entries unchanged (the 1,320 entries recorded before the
+FS cases were identical after the re-run that added them).
 
 ```
 python3 -m carnevil_tools vectors --write-cases <share>/mame/scripts/insnvec-cases.json
@@ -223,8 +226,16 @@ R5000 does in each is not verified here against its documentation):
   them (`nmadd.s.5`, `msub.s.9`, `nmsub.s.11`) a single rounding gives other bits, and those
   are the ones listed. Whether the R5000 rounds once or twice is not verified.
 
-`recip.s` (`1.0f / x`) and `sqrt.s` (`sqrt` in double, then to single) are correctly rounded
-in all 12 recorded cases each, so none of them is listed.
+- `recip.s`: MAME computes `1.0f / x`, correctly rounded in all 12 recorded cases. The
+  R5000's accuracy for `recip` is not verified, so all 12 are listed.
+- FCSR.FS = 1 (the 16 `*.edge.fs1.*` cases): MAME does not model FS. Each case gives exactly
+  the result of its FS = 0 control (`*.edge.fs0.*`, the same program and state): denormal
+  results are kept and denormal operands used as they are, where the R5000 documents flushing
+  both to zero. The game runs with FS = 1 throughout. The port follows MAME by default
+  (`runtime/core/fpu.c`, `RT_HONOUR_FS`; [recompiler](../../docs/analysis/recompiler.md)).
+
+`sqrt.s` (`sqrt` in double, then to single) is correctly rounded in all 12 recorded cases, so
+none of them is listed.
 
 Also MAME-only, but invisible in the vectors: `cache` is a
 no-op (MAME models no caches); MAME raises no FP exception except division by zero with its

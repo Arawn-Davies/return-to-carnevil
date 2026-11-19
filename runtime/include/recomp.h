@@ -97,7 +97,8 @@ void rt_call(uint8_t *ram, cpu_t *c, uint32_t addr);
 void rt_jump(uint8_t *ram, cpu_t *c, uint32_t addr);
 
 /* rt_set_fcsr: FCSR as ctc1 $31 writes it (condition bits in place); also sets the host
- * rounding mode from RM and host flush-to-zero from FS (runtime/core/fpu.c says how).
+ * rounding mode from RM, and host flush-to-zero from FS only when runtime/core/fpu.c is
+ * built with RT_HONOUR_FS=1 (by default FS is kept but ignored, as MAME ignores it).
  * rt_get_fcsr: FCSR as cfc1 $31 reads it.
  *
  * The host FP environment: rt_set_fcsr is the only thing that sets it, and it belongs to the

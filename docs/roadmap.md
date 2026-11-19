@@ -23,7 +23,7 @@ The first milestone, M0 (tools that extract the game's files and analyse its exe
 
 - Recompiler: done. A Python emitter, built on M0's decoder and function analysis, turns all 2,093 functions of `GAME.EXE` into C. Its output has the shape N64Recomp's has; N64Recomp itself does not handle this game's instructions or byte order.
 - Reference interpreter and the contract header the generated C, the interpreter and the runtime share: done.
-- Instruction checks against MAME: done. Both the generated C and the interpreter reproduce all 1,320 instruction programs recorded from MAME's processor emulation.
+- Instruction checks against MAME: done. Both the generated C and the interpreter reproduce all 1,352 instruction programs recorded from MAME's processor emulation.
 - Whole image: done. `make recomp` writes the C and `make linkcheck` links it against a stub runtime with no undefined symbol, on macOS (Apple clang) and Linux (GCC).
 - Real game code against MAME: done. From the entry, the recompiled code reaches the game's first loader call with MAME's registers and RAM, and 127 game functions captured in MAME's attract mode replay with MAME's results.
 - M1 report: done.

@@ -323,8 +323,8 @@ class EmitTest(unittest.TestCase):
         self.assertEqual(failures, [], f"{len(failures)} cases differ:\n" + "\n".join(failures))
 
     def test_recompiled_matches_mame_vectors(self):
-        # 1320 recorded cases (break has none) less the 240 of the 20 branches and jumps
-        self.assertEqual(len(self.recorded), 1080)
+        # 1352 recorded cases (break has none) less the 240 of the 20 branches and jumps
+        self.assertEqual(len(self.recorded), 1112)
         self.compare([c for c, _ in self.recorded], [after for _, after in self.recorded])
 
     def assertSameAsInterpreter(self, cases):

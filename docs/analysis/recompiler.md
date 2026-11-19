@@ -86,8 +86,8 @@ The generated C, the interpreter and any runtime share one header.
   current.
 - **Provided by `runtime/core`**: `rt_call` and `rt_jump` (the recompiled function at an
   address if there is one, otherwise the interpreter), `rt_set_fcsr` and `rt_get_fcsr` (FCSR's
-  rounding mode and flush-to-zero become the host's: FPCR on arm64, MXCSR on x86-64; any other
-  host is a compile error), and `rt_log_unrecompiled`, called once per address the
+  rounding mode becomes the host's, and so does flush-to-zero when built with `RT_HONOUR_FS`
+  = 1, below: FPCR on arm64, MXCSR on x86-64; any other host is a compile error), and `rt_log_unrecompiled`, called once per address the
   interpreter is entered at. The host FP environment is the process's (per thread), and only
   `rt_set_fcsr` sets it, so a runtime that loads a state or switches host context or thread
   re-applies it with `rt_set_fcsr(c, rt_get_fcsr(c))`.
@@ -216,7 +216,7 @@ the runtime of M2.
 The instruction vectors are recorded from MAME's R5000 core, and the port is made to match
 them, so the port and its oracle agree. Where MAME's result is not an established hardware
 fact, `carnevil_tools/vectors.py` lists the case in `MAME_SPECIFIC` with its reason; a real
-board might differ there. 24 cases:
+board might differ there. 52 cases:
 
 - **Division by zero** (10: `div` and `divu` of 0, 1, 0x7FFFFFFF, 0x80000000 and 0xFFFFFFFF by
   0): MAME leaves `hi` and `lo` unchanged. MIPS leaves the result undefined.
@@ -227,6 +227,9 @@ board might differ there. 24 cases:
   product to the format and then the sum, two roundings, and `nmadd`/`nmsub` negate the rounded
   sum. All 60 recorded cases of the family equal that result; in these 3 a single rounding
   gives other bits. Whether the R5000 rounds once or twice is not verified.
+- **`recip.s`** (12: every recorded case): MAME computes `1.0f / x`, correctly rounded. The
+  R5000's `recip` is not verified to be that accurate. The game has one `recip.s` site.
+- **FCSR.FS = 1** (16: the `*.edge.fs1.*` cases): MAME does not model FS (below).
 
 Two more results have no MAME vector at all (`vectors.NO_MAME`):
 
@@ -247,6 +250,24 @@ NaN operand's payload propagates the same way on both hosts.
 MAME-only behaviour the vectors cannot show: `cache` is a no-op, no FP exception is raised
 except division by zero with its enable set, and `addi` never traps on overflow
 ([tools/mame/README.md](../../tools/mame/README.md)).
+
+## Flush to zero (FCSR.FS): the port follows MAME
+
+`_start` writes FCSR with FS = 1 (the `ctc1` at 0x800C4064, the only one in reached code), so
+the game runs in flush-to-zero mode throughout (read). MAME 0.276 does not model FS: the 16
+FS = 1 vector cases (denormal results from normal operands of `mul`, `div`, `add` and `sub` in
+both formats and `cvt.s.d` of a tiny double; denormal operands of `mul`, `add`, `cvt.d.s`,
+`c.eq.s` and `c.lt.s`) give exactly the results of their FS = 0 controls: denormal results are
+kept, and denormal operands are used as they are (MAME, `insnvec.lua`). The R5000 documents
+flushing both to zero.
+
+The port follows MAME, because every later milestone is checked against it. One compile-time
+switch in `runtime/core/fpu.c` decides: `RT_HONOUR_FS` = 0 (the default) keeps FS in FCSR but
+does not change the host FP environment for it; `RT_HONOUR_FS` = 1 sets host flush-to-zero
+when FS = 1, as the R5000 documents (arm64 FPCR.FZ; x86-64 MXCSR FTZ and DAZ). The FS = 1
+cases are listed in `MAME_SPECIFIC` ("MAME does not model FS"), and the test suite checks the
+flush in a separate build with the switch set to 1. On x86, denormal arithmetic is much slower
+than normal arithmetic, so the default can cost speed where the board would have flushed.
 
 ## A divergence from MAME: the FP divide-by-zero trap
 
