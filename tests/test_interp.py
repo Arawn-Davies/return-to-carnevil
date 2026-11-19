@@ -142,7 +142,7 @@ class InterpTest(unittest.TestCase):
         self.assertEqual(got.r[T0], 1)
 
     def test_fcsr_round_trip_and_rounding(self):
-        written = 0x00800001 | 1 << 26 | 0x7C  # cc0, cc3, flags, rounding mode 1 (to zero)
+        written = 0x00800001 | 1 << 26 | 0x7C  # cc0, cc2, flags, rounding mode 1 (to zero)
 
         def program(name, fcsr):
             return _case(
@@ -155,6 +155,22 @@ class InterpTest(unittest.TestCase):
         self.assertEqual(to_zero.fpr[0], _f32(16777216.0))
         self.assertEqual(to_zero.fpr[1], _f32(16777218.0))  # toward zero
         self.assertEqual(nearest.fpr[1], _f32(16777220.0))  # nearest even, the case after
+
+    def test_nan_results(self):
+        # A generated NaN's sign and payload are the host's (recomp.h): only NaN-ness is
+        # pinned. A NaN operand's payload propagates.
+        def is_nan(bits):
+            return bits >> 23 & 0xFF == 0xFF and bits & 0x7FFFFF != 0
+
+        inf, payload = 0x7F800000, 0x7FC12345
+        got = self.run_one(_case(
+            "nan", A("div.s", fd=0, fs=10, ft=10), A("sub.s", fd=1, fs=11, ft=11),
+            A("sqrt.s", fd=2, fs=12), A("add.s", fd=3, fs=13, ft=14),
+            fpr={0: 1, 1: 1, 2: 1, 3: 1, 10: 0, 11: inf, 12: _f32(-1.0), 13: payload,
+                 14: _f32(1.0)}))
+        for reg in (0, 1, 2):
+            self.assertTrue(is_nan(got.fpr[reg]), f"fpr[{reg}] = {got.fpr[reg]:08X}")
+        self.assertEqual(got.fpr[3], payload)
 
     def test_flush_to_zero(self):
         tiny = 57 << 23  # 2^-70: the exact product 2^-140 is denormal

@@ -29,7 +29,8 @@ RUNTIME = [os.path.join(REPO, "runtime", "core", "call.c"),
            os.path.join(REPO, "runtime", "core", "fpu.c"),
            os.path.join(REPO, "runtime", "interp", "interp.c")]
 
-CFLAGS = ("-std=c11", "-O2", "-ffp-contract=off", "-fno-strict-aliasing", "-fwrapv")
+CFLAGS = ("-std=c11", "-O2", "-ffp-contract=off", "-frounding-math", "-fno-strict-aliasing",
+          "-fwrapv")
 RUNTIME_WARNINGS = ("-Wall", "-Wextra", "-Werror")
 GENERATED_WARNINGS = ("-Wall", "-Werror", "-Wno-unused-label", "-Wno-unused-variable",
                       "-Wno-unused-but-set-variable")
@@ -103,7 +104,7 @@ def build(sources, extra_flags=()):
         for i, (src, warnings) in enumerate(units):
             obj = os.path.join(tmp, f"{i}-{os.path.basename(src)}.o")
             _cc_run([cc, *CFLAGS, *warnings, *SANITIZE, *extra_flags, "-I", INCLUDE,
-                     "-c", src, "-o", obj])
+                     "-I", os.path.dirname(HARNESS), "-c", src, "-o", obj])
             objs.append(obj)
         _cc_run([cc, *SANITIZE, *extra_flags, *objs, "-lm", "-o", os.path.join(tmp, "harness")])
         try:

@@ -8,7 +8,7 @@
  * Results that are MAME's own behaviour rather than an established R5000 fact (the oracle
  * the port is checked against, see vectors.MAME_SPECIFIC) are marked "MAME:" below.
  *
- * Build every file including this one with -std=c11 -O2 -ffp-contract=off
+ * Build every file including this one with -std=c11 -O2 -ffp-contract=off -frounding-math
  * -fno-strict-aliasing -fwrapv, never -ffast-math.
  */
 #ifndef RECOMP_H
@@ -177,6 +177,12 @@ static inline void rc_multu(cpu_t *c, uint32_t rs, uint32_t rt)
 }
 
 /* --- FP registers ----------------------------------------------------------------------- */
+
+/* NaNs: FP arithmetic here is plain host arithmetic, and no helper canonicalises NaNs. A NaN
+ * an operation generates (0/0, inf - inf, sqrt of a negative) has the host's bits:
+ * 0x7FC00000 on arm64, 0xFFC00000 on x86-64; the R5000 (legacy NaN encoding) gives
+ * 0x7FBFFFFF. An accepted host divergence. A NaN operand's payload propagates the same on
+ * both hosts. */
 
 static inline float rc_fs(const cpu_t *c, unsigned n)
 {

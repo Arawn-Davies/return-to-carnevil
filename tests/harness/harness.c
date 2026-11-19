@@ -37,8 +37,9 @@
  * The bus records each access; a read returns 0xDEADBEEF masked to its size. rt_loader,
  * rt_break and rt_interrupt record their call and return (irq_pending is left as it is).
  *
- * Recompiled functions: a C file linked into the harness registers its functions with
- * harness_register(addr, fn), typically from a constructor; recomp_lookup finds them. No
+ * Recompiled functions: a C file linked into the harness includes harness.h and registers
+ * its functions with harness_register(addr, fn), typically from a constructor;
+ * recomp_lookup finds them. No
  * function is registered unless a linked file registers it.
  */
 #include <fenv.h>
@@ -47,7 +48,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "recomp.h"
+#include "harness.h"
 
 #define SCRATCH 0x80200000u
 #define SCRATCH_SIZE 0x1000u
@@ -67,8 +68,6 @@ static _Noreturn void die(const char *msg, const char *detail)
 static uint32_t reg_addr[REGISTRY_SIZE];
 static recomp_fn reg_fn[REGISTRY_SIZE];
 static uint32_t reg_count;
-
-void harness_register(uint32_t addr, recomp_fn fn);
 
 void harness_register(uint32_t addr, recomp_fn fn)
 {
