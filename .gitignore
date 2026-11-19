@@ -9,3 +9,5 @@
 *.u32
 *.u95
 *.u96
+/.superpowers/
+__pycache__/
