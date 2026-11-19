@@ -30,7 +30,7 @@ JR_RA = A("jr", rs=31)
 RANDOM_STATES = 100
 _M32 = 0xFFFFFFFF
 
-AT, V0, V1, A0, A1, A2 = 1, 2, 3, 4, 5, 6
+AT, V0, V1, A0, A1, A2, A3 = 1, 2, 3, 4, 5, 6, 7
 T0, T1, T2, T3, T4, T5 = 8, 9, 10, 11, 12, 13
 S0, T9, SP, RA = 16, 25, 29, 31
 
@@ -526,6 +526,41 @@ class FunctionTest(RecompTestCase):
         for state in got:
             self.assertEqual(state.calls, [("loader", 0x1A8), ("loader", 0x10)])
             self.assertEqual(state.r[V0], 1)
+
+    def test_kuseg_ram_mapping(self):
+        """The loader's TLB maps kuseg 0x00040000-0x007FFFFF onto RAM at the same physical
+        address (MAME: GAME.EXE stores through such addresses, task 6); the first 256 KB of
+        kuseg and kuseg from 8 MB up are not RAM and go to the bus."""
+        p = Asm()
+        p(A("lui", rt=T0, imm=0x0020))           # 0x00200000: kuseg view of the scratch page
+        p(A("sw", rt=A0, rs=T0, imm=0x10))
+        p(A("lui", rt=T1, imm=0x8020))
+        p(A("lw", rt=V0, rs=T1, imm=0x10))       # the same word through kseg0
+        p(A("sh", rt=A1, rs=T1, imm=0x20))
+        p(A("lhu", rt=V1, rs=T0, imm=0x20))      # and back through kuseg
+        p(A("lui", rt=T2, imm=0x0003))
+        p(A("sw", rt=A0, rs=T2, imm=-4))         # 0x0002FFFC: unmapped
+        p(A("lui", rt=T3, imm=0x0080))
+        p(A("lw", rt=A2, rs=T3, imm=0))          # 0x00800000: past RAM
+        p(A("lui", rt=T4, imm=0x0004))
+        p(A("lw", rt=A3, rs=T4, imm=0))          # 0x00040000: the first mapped word
+        p(JR_RA, 0)
+        prog = Program(p)
+
+        def setup(s, rng, i):
+            s.r[A0] = rng.getrandbits(32)
+            s.r[A1] = rng.getrandbits(32)
+        cases = prog.cases("kuseg", setup, n=8)
+        got = self.assertSameAsInterpreter(prog, cases)
+        for case, state in zip(cases, got):
+            a0, a1 = case.before.r[A0], case.before.r[A1]
+            self.assertEqual(state.r[V0], a0)
+            self.assertEqual(state.r[V1], a1 & 0xFFFF)
+            self.assertEqual(state.mem.get(vectors.SCRATCH + 0x10), a0)
+            self.assertEqual(state.calls, [("bus_write", 0x0002FFFC, 4, a0),
+                                           ("bus_read", 0x00800000, 4)])
+            self.assertEqual(state.r[A2], charness.BUS_READ_VALUE)
+            self.assertEqual(state.r[A3], 0)
 
     def test_break_passes_code_and_address(self):
         self.assertEqual(A("break", code=0x1C00), 0x0007000D)

@@ -32,3 +32,11 @@ __pycache__/
 part[0-9]*
 nvram/
 /mame/
+# MAME captures (tools/mame/firstcall.lua, funcreplay.lua) and the programs that read them
+capture.txt
+before.diff
+after.diff
+first-loader-call.txt
+funcreplay-log.txt
+smoke
+replay

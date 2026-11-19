@@ -17,6 +17,8 @@ STUB_START, STUB_END = 0x800C408C, 0x800C42CC  # the stub block, end exclusive
 RAM_START, RAM_END = 0x80000000, 0x80800000
 SOURCES = {"boot_rom_copy", "diag_leftover", "loader_data", "unknown"}
 REGIONS = {"boot_rom", "stub_block", "other"}
+REGISTERS = ("zero at v0 v1 a0 a1 a2 a3 t0 t1 t2 t3 t4 t5 t6 t7 s0 s1 s2 s3 s4 s5 s6 s7 t8 t9 "
+             "k0 k1 gp sp fp ra").split()
 
 
 class BootState(unittest.TestCase):
@@ -33,6 +35,28 @@ class BootState(unittest.TestCase):
         for key in ("gp", "status", "config", "fcr31", "ra"):
             self.assertIsInstance(s[key], int, key)
             self.assertTrue(0 <= s[key] <= 0xFFFFFFFF, key)
+
+    def test_entry_leftover_registers(self):
+        # the loader's leftovers at entry: only general registers, each a 32-bit value
+        known = {"entry", "sp", "gp", "status", "config", "fcr31", "ra"}
+        leftovers = {k: v for k, v in self.state.items()
+                     if k not in known and not isinstance(v, (dict, list))}
+        self.assertEqual(sorted(leftovers),
+                         sorted("at v0 v1 a0 a1 a3 t0 t1 t2 t4 t5 s0 s1 s2 t9 k0 k1".split()))
+        for name, value in leftovers.items():
+            self.assertIn(name, REGISTERS, name)
+            self.assertIsInstance(value, int, name)
+            self.assertTrue(0 < value <= 0xFFFFFFFF, name)
+
+    def test_first_loader_call(self):
+        call = self.state["first_loader_call"]
+        self.assertEqual(sorted(call), sorted(["slot", "a0", "a1", "a2", "a3", "ra", "sp"]))
+        self.assertIn(call["slot"], loader.game_slots(BOOT_STATE))
+        self.assertTrue(RAM_START <= call["sp"] < RAM_END, hex(call["sp"]))
+        text = range(self.analysis.text_start, self.analysis.text_end)
+        self.assertIn(call["ra"], text, hex(call["ra"]))
+        # a3 is the entry's leftover, passed through unchanged
+        self.assertEqual(call["a3"], self.state["a3"])
 
     def test_ram_preload_below_the_image(self):
         preload = self.state["ram_preload"]

@@ -113,6 +113,81 @@ python3 -m carnevil_tools vectors --merge <share>/mame/scripts/insnvec-cases.jso
   insnvec.jsonl -o tests/vectors/insn.json
 ```
 
+**`firstcall.lua`**: GAME.EXE from its entry to its first loader call, for the smoke run of
+`tests/test_against_mame.py` (`runtime/stub/smoke.c`). It boots to the entry, records the
+registers there, sets a breakpoint on each of the stub block's 72 slots and stops at the first
+one reached. There it writes `first-loader-call.txt` (the registers at the entry and at the
+call, the slot, the number of exceptions taken) and `ram-at-first-loader-call.bin` (8 MB) to
+`$CARNEVIL_MAME_OUT`, and quits. `config/boot_state.toml` [first_loader_call] and the loader's
+leftover registers at the entry come from the text file; the test reads the RAM from
+`mame/dumps/ram-at-first-loader-call.bin`. Breakpoints on the exception vectors log every
+exception on the way; a write watchpoint on 0x800C4000-0x807FFFFF that fires only for code
+below GAME.EXE logs whether an exception handler wrote there, and a control watchpoint with
+the opposite condition on the first byte `_start` clears shows the mechanism works (it must
+log one write). Watchpoints take physical addresses, and `pc` in a condition is the
+sign-extended 64-bit value, so the conditions mask it. Two runs gave the same RAM byte for
+byte. About 35 s wall time (`date` around the run), nearly all of it the boot.
+
+```
+CARNEVIL_MAME_OUT=<share>/mame/firstcall timeout 1200 mame carnevil -rompath <roms> -nodrc \
+  -debug -debugger none -debuglog -video none -sound none -nothrottle -cfg_directory cfg \
+  -nvram_directory nvram -snapshot_directory snap -diff_directory diff \
+  -autoboot_script tools/mame/firstcall.lua
+cp <share>/mame/firstcall/ram-at-first-loader-call.bin <share>/mame/dumps/
+grep -c "FIRSTCALL loader write" debug.log; grep -c "FIRSTCALL control write" debug.log
+```
+
+**`funcreplay.lua`**: captures of pure functions (`python3 -m carnevil_tools pure-functions`)
+for `runtime/stub/replay.c`. From GAME.EXE's entry it sets a breakpoint on every listed
+function (except the few whose first word follows a branch or jump, so may be a delay slot,
+where setting the PC is not safe) and, for the first hit of each, saves the registers and RAM,
+runs to `ra` with `sp` back at its entry value, and saves them again. An attempt during which
+an exception vector is reached, or that has not returned within 1 emulated second, is dropped
+and the function is tried again at a later hit, up to 3 attempts. MAME keeps FCSR's condition
+codes outside its state entries (see below), so at both points the script runs one injected
+`cfc1 k0,$31` at 0x807FFFF8 with Status IE cleared, then puts k0, Status, the two words and the
+PC back before it records anything. Inputs and limits are environment variables, described at
+the top of the script: `CARNEVIL_PURE` (the list), `CARNEVIL_MAME_OUT` (the capture folder),
+`CARNEVIL_TMP` (a local folder for the RAM saves), `CARNEVIL_REPLAY_SECONDS` (90 emulated
+seconds after the entry), `CARNEVIL_REPLAY_MAX` (200 captures; past that it only counts first
+hits) and `CARNEVIL_REPLAY_TRIES` (3).
+
+```
+python3 -m carnevil_tools pure-functions > <share>/mame/scripts/pure-functions.txt
+CARNEVIL_PURE=<share>/mame/scripts/pure-functions.txt CARNEVIL_MAME_OUT=<share>/mame/replay \
+  CARNEVIL_TMP=/tmp/funcreplay timeout 7200 mame carnevil -rompath <roms> -nodrc -debug \
+  -debugger none -debuglog -video none -sound none -nothrottle -cfg_directory cfg \
+  -nvram_directory nvram -snapshot_directory snap -diff_directory diff \
+  -autoboot_script tools/mame/funcreplay.lua
+```
+
+The capture folder (`$CARNEVIL_WORK/mame/replay` for the tests; game RAM, so on the share
+only) holds:
+
+- `base-NNN.bin`: 8 MB RAM images. A capture's RAM before the call is stored as a diff
+  against the current base; when that diff would exceed 1 MB, the RAM becomes a new base.
+- `<ADDR>/capture.txt`, for the function at ADDR (8 upper-case hexadecimal digits): text
+  lines `addr ADDR`, `base ../base-NNN.bin` (relative to the capture's folder), `attempt N`,
+  `time T` (emulated seconds after GAME.EXE's entry), and for `before` and then `after` the
+  five lines `<when> r R0 .. R31`, `<when> hi H`, `<when> lo L`, `<when> fpr F0 .. F31` (the 32
+  FP halves) and `<when> fcsr X` (FCSR as `cfc1` reads it, condition codes included), every
+  value 8 hexadecimal digits. Lines starting with `#` are comments.
+- `<ADDR>/before.diff`: the RAM at the call against the base; `<ADDR>/after.diff`: the RAM at
+  the return against the RAM at the call. A diff is a sequence of records, each a
+  little-endian u32 byte offset into the 8 MB, a little-endian u32 length, then that many
+  bytes, which replace RAM there. Offsets ascend and records do not overlap; the script
+  compares 256-byte blocks and writes each run of differing blocks as one record, so a record
+  can hold unchanged bytes too.
+- `funcreplay-log.txt`: one line per capture and per dropped attempt, the functions hit but
+  not captured, and a summary (candidates, hit, captured, dropped). Addresses and counts only.
+
+`pure-functions` is pure by the census only, so some captured functions touch hardware
+through pointers it cannot see. `replay` stops at its first bus access (exit 3, printing the
+access and the state there); `test_against_mame` counts the capture impure at run time when
+that address is a hardware region of `carnevil_tools.board` and `replay --interp` (every call
+in the interpreter) makes the same first access from the same state, and a failure otherwise.
+In the run of 2026-11-19, 127 of the 152 captures replay clean and 25 are impure at run time.
+
 How MAME exposes the state the script uses (MAME 0.276, `src/devices/cpu/mips/mips3.cpp`):
 the general registers are the 64-bit state entries `zero`, `at`, ... `ra` (ABI names; `R<n>`
 does not exist in this build), plus `HI`, `LO`, `PC`, `SR`, `Cause`, `EPC`. The FP registers

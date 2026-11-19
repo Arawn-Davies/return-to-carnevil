@@ -299,6 +299,17 @@ input), with breakpoints on the 10 probable callbacks and 16 unresolved indirect
 
 Not hit means not reached in that run, not unreachable.
 
+## kuseg is mapped onto RAM (confirmed, M1 task 6)
+
+The loader's routine at 0x80004160 sets Wired 0, PageMask 256 KB, and writes TLB entries 0-15
+mapping virtual 0x00000000-0x007FFFFF onto the same physical addresses (cacheable, dirty,
+valid, global), except the even page of entry 0 (0x00000000-0x0003FFFF), left invalid; entries
+16-47 (virtual 8 MB to 24 MB) get both pages invalid; Wired is then 32 (read, static). GAME.EXE
+writes no TLB entry. MAME confirms the mapping: 31 functions captured in attract mode store
+through kuseg pointers (0x002375C0-0x002378D0 from 0x8015E79C-0x80167CF0, and
+0x00317760-0x0031F430 from 0x800D1750-0x80100558), and the stores land in RAM at the same
+physical addresses. The runtime treats kuseg 0x00040000-0x007FFFFF as RAM (`mem_is_ram`).
+
 ## Code written to RAM
 
 Stores from GAME.EXE's reached code to 0x80000000 to 0x800001FF (or the KSEG1 alias), with

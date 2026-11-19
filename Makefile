@@ -4,6 +4,10 @@
 #   make linkcheck   compile the generated C in parallel and link it with the runtime and the
 #                    stub runtime into $(BUILD)/game_stub; refuses a folder without
 #                    manifest.toml. Nothing is rebuilt when nothing changed.
+#   make smoke       the same objects with the runtime and runtime/stub/smoke.c into
+#                    $(BUILD)/smoke: GAME.EXE from its entry to the first loader call
+#   make replay      ... with runtime/stub/replay.c into $(BUILD)/replay: one function
+#                    from a state captured in MAME (tools/mame/README.md)
 #   make test        the unit tests
 #
 # Generated C and objects never go in this repository: by default they are on the share.
@@ -24,30 +28,40 @@ GENERATED_WARNINGS := -Wall -Werror -Wno-unused-label -Wno-unused-variable \
                       -Wno-unused-but-set-variable
 INCLUDE := $(ROOT)/runtime/include
 
-RUNTIME_SRCS := $(ROOT)/runtime/core/call.c $(ROOT)/runtime/core/fpu.c \
-                $(ROOT)/runtime/interp/interp.c $(ROOT)/runtime/stub/stub.c
-RUNTIME_OBJS := $(patsubst $(ROOT)/runtime/%.c,$(BUILD)/runtime/%.o,$(RUNTIME_SRCS))
+CORE_SRCS := $(ROOT)/runtime/core/call.c $(ROOT)/runtime/core/fpu.c \
+             $(ROOT)/runtime/interp/interp.c
+CORE_OBJS := $(patsubst $(ROOT)/runtime/%.c,$(BUILD)/runtime/%.o,$(CORE_SRCS))
 GENERATED_SRCS := $(sort $(wildcard $(GENERATED)/funcs_*.c)) $(GENERATED)/func_table.c
 GENERATED_OBJS := $(patsubst $(GENERATED)/%.c,$(BUILD)/generated/%.o,$(GENERATED_SRCS))
 
-.PHONY: recomp linkcheck test
+.PHONY: recomp linkcheck smoke replay test
 .DELETE_ON_ERROR:
 
 recomp:
 	cd "$(ROOT)" && $(PYTHON) -m carnevil_tools recompile "$(GAME_EXE)" -o "$(GENERATED)" \
 	    --functions "$(FUNCTIONS)"
 
-linkcheck:
+linkcheck smoke replay:
 	@test -f "$(GENERATED)/manifest.toml" || { \
 	    echo "error: $(GENERATED)/manifest.toml not found: $(GENERATED) is not a complete" \
 	         "recompile output (run make recomp)" >&2; exit 1; }
-	@$(MAKE) --no-print-directory -f "$(ROOT)/Makefile" -j $(JOBS) "$(BUILD)/game_stub"
+	@$(MAKE) --no-print-directory -f "$(ROOT)/Makefile" -j $(JOBS) \
+	    "$(BUILD)/$(if $(filter linkcheck,$@),game_stub,$@)"
 
 test:
 	cd "$(ROOT)" && $(PYTHON) -W error -m unittest
 
-$(BUILD)/game_stub: $(GENERATED_OBJS) $(RUNTIME_OBJS)
+$(BUILD)/game_stub: $(GENERATED_OBJS) $(CORE_OBJS) $(BUILD)/runtime/stub/stub.o
 	$(CC) $^ -lm -o $@
+
+$(BUILD)/smoke: $(GENERATED_OBJS) $(CORE_OBJS) $(BUILD)/runtime/stub/smoke.o
+	$(CC) $^ -lm -o $@
+
+# replay provides rt_call and rt_jump itself (its --interp mode), in place of call.c
+$(BUILD)/replay: $(GENERATED_OBJS) $(filter-out %/call.o,$(CORE_OBJS)) $(BUILD)/runtime/stub/replay.o
+	$(CC) $^ -lm -o $@
+
+$(BUILD)/runtime/stub/smoke.o $(BUILD)/runtime/stub/replay.o: $(ROOT)/runtime/stub/common.h
 
 $(BUILD)/generated/%.o: $(GENERATED)/%.c $(GENERATED)/funcs.h $(INCLUDE)/recomp.h
 	@mkdir -p "$(@D)"

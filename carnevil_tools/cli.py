@@ -290,6 +290,122 @@ def _recompile(path, out, functions_path):
     return 0
 
 
+def _call_edges(image, analysis):
+    """(edges, unclean): function start -> the starts control can leave it for (a direct call,
+    a branch, `j` or jump-table entry outside it, running off its end), and the starts that
+    are not clean themselves, with the reason. Not clean: a stub, an interpreted function, or
+    one holding a `break`, a `jalr`, a `jr` (not on ra) without a jump table, or a call or
+    jump to an address that is neither its own nor a function start."""
+    insn = mips.Decoder(image).insn
+    starts = {f.addr for f in analysis.functions}
+    tables = {t.jr_addr: t for t in analysis.jump_tables}
+    edges, unclean = {}, {}
+
+    def stub(addr):
+        return any(lo <= addr < hi for lo, hi in analysis.stub_blocks)
+
+    for f in analysis.functions:
+        if stub(f.addr):
+            unclean[f.addr] = "stub"
+        elif f.addr in analysis.interpreted:
+            unclean[f.addr] = "interpreted"
+    for start, words in functions.reached_words(analysis).items():
+        out = edges.setdefault(start, set())
+        if start in unclean:
+            continue
+
+        def leave(target, why):
+            if target in words:
+                return
+            if stub(target):
+                unclean.setdefault(start, "stub call")
+            elif target in starts:
+                out.add(target)
+            else:
+                unclean.setdefault(start, why)
+
+        for a in sorted(words):
+            i = insn(a)
+            if i.mnemonic == "break":
+                unclean.setdefault(start, "break")
+            elif i.kind == "call_reg":
+                unclean.setdefault(start, "jalr")
+            elif i.kind == "jump_reg" and i.rs != mips.RA:
+                if a not in tables:
+                    unclean.setdefault(start, "unresolved jr")
+                else:
+                    for t in tables[a].targets:
+                        leave(t, "jump-table entry outside the function")
+            elif i.kind in ("call", "jump", "branch", "branch_likely"):
+                leave(i.target, "transfer to an address that is not a function start")
+            # where execution goes on after this word, if anywhere: after a transfer's delay
+            # slot, or the next word (a slot's own successor is its transfer's business)
+            if i.kind in recomp._TRANSFERS:
+                ends = i.kind in ("jump", "jump_reg") or (
+                    i.kind in ("branch", "branch_likely") and recomp._condition(i) is True)
+                after = None if ends else a + 8
+            elif a - 4 in words and insn(a - 4).kind in recomp._TRANSFERS:
+                after = None
+            else:
+                after = a + 4
+            if after is not None:
+                leave(after, "runs off its end into an address that is not a function start")
+    return edges, unclean
+
+
+def pure_functions(image, analysis, returns=hwcensus.GAME_RETURNS):
+    """(starts, stats): the functions statically pure by the census, whose call closure
+    (`_call_edges`) holds no stub call,
+    no hardware access (`hwcensus.hardware_accesses`), no `break`, no `jalr`, no unresolved
+    `jr` and no interpreted function, ascending. stats: "candidates" (the length of the list)
+    and "removed_by_interpreted", the functions the interpreted rule alone takes out. A
+    superset of the functions pure at run time: hardware reached through a pointer held in
+    memory or passed as an argument is invisible to the census (test_against_mame tells the
+    two apart from MAME captures)."""
+    edges, unclean = _call_edges(image, analysis)
+    for a in hwcensus.hardware_accesses(image, analysis, returns):
+        unclean.setdefault(a.function, "hardware access")
+    callers = {}
+    for start, targets in edges.items():
+        for t in targets:
+            callers.setdefault(t, set()).add(start)
+
+    def impure(seeds):
+        seen, stack = set(), list(seeds)
+        while stack:
+            f = stack.pop()
+            if f not in seen:
+                seen.add(f)
+                stack.extend(callers.get(f, ()))
+        return seen
+
+    every = {f.addr for f in analysis.functions}
+    pure = every - impure(unclean)
+    without = every - impure(a for a, why in unclean.items() if why != "interpreted")
+    return sorted(pure), {"candidates": len(pure), "removed_by_interpreted": len(without - pure)}
+
+
+def _pure_functions(path, functions_path):
+    try:
+        analysis = functions.read_toml(functions_path)
+    except (ValueError, KeyError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    image, status = _load(path)
+    if image is None:
+        return status
+    if image.sha256 != analysis.exe_sha256:
+        print(f"error: {path} has SHA-256 {image.sha256}, but {functions_path} was made from "
+              f"the EXE with SHA-256 {analysis.exe_sha256}", file=sys.stderr)
+        return 1
+    pure, stats = pure_functions(image, analysis)
+    for addr in pure:
+        print(f"0x{addr:08X}")
+    print(f"{stats['candidates']} pure functions of {len(analysis.functions)}; the interpreted "
+          f"rule alone removes {stats['removed_by_interpreted']}", file=sys.stderr)
+    return 0
+
+
 def _value_text(value):
     if isinstance(value, int):
         return f"0x{value:X}"
@@ -394,6 +510,19 @@ def main(argv=None):
                      help="output folder (replaced only if it holds a manifest.toml)")
     rec.add_argument("--functions", default=GAME_FUNCTIONS, metavar="TOML",
                      help="the analysis to recompile (default: config/game.functions.toml)")
+    pure = sub.add_parser("pure-functions",
+                          help="functions statically pure by the census: their call closure "
+                               "touches no loader stub, attributable hardware, break, indirect "
+                               "call or interpreted function (a superset of what is pure at "
+                               "run time: hardware reached through pointers held in memory is "
+                               "invisible to it)")
+    pure.add_argument("exe", nargs="?",
+                      default=os.path.join(os.environ.get("CARNEVIL_WORK", DEFAULT_WORK),
+                                           "part0_files", "GAME.EXE"),
+                      help="the EXE the functions file was made from (default: "
+                           "$CARNEVIL_WORK/part0_files/GAME.EXE)")
+    pure.add_argument("--functions", default=GAME_FUNCTIONS, metavar="TOML",
+                      help="the analysis (default: config/game.functions.toml)")
     vec = sub.add_parser("vectors", help="instruction test cases for MAME, and their results")
     vec_mode = vec.add_mutually_exclusive_group(required=True)
     vec_mode.add_argument("--write-cases", metavar="JSON",
@@ -421,6 +550,8 @@ def main(argv=None):
         return _disasm(args.file, args.base, args.start, args.count)
     if args.command == "recompile":
         return _recompile(args.exe, args.out, args.functions)
+    if args.command == "pure-functions":
+        return _pure_functions(args.exe, args.functions)
     if args.command == "verify":
         return _verify(args.partition)
     if args.command == "census":

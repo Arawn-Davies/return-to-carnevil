@@ -65,13 +65,25 @@ Turns every function of the functions file into C. It refuses an EXE whose SHA-2
 
 Everything is written to a working folder the command creates next to the output folder under a unique hidden name, and renamed into place when it is complete, so a folder holding `manifest.toml` is always a whole output. An instruction the recompiler does not handle stops it with the address and the mnemonic, and leaves no output. An existing output folder is replaced only if it holds a `manifest.toml`; anything else at that path is left alone and the command stops. Nothing else is ever deleted: only the folders a run creates are removed, on success or failure, and a failed run leaves an existing output as it was. The output is game code: it goes to the share (`make recomp` writes `$CARNEVIL_WORK/generated`), never into this repository.
 
+## pure-functions
+
+```
+python3 -m carnevil_tools pure-functions [<GAME.EXE>] [--functions config/game.functions.toml]
+```
+
+Prints, one address per line, the functions that are statically pure by the census: nothing in their call closure (direct calls, branches and jumps out of the function, jump-table entries, running off its end) calls a loader stub or an interpreted function, holds a `break`, a `jalr` or an unresolved `jr`, or makes a hardware access `hwcensus` can attribute. The counts go to stderr. The EXE defaults to `$CARNEVIL_WORK/part0_files/GAME.EXE`. The list is a superset of what is pure at run time: hardware reached through pointers held in memory or passed as arguments is invisible to the census, so some listed functions do touch hardware (25 of the 152 captured in MAME: the Voodoo, its texture memory, the CMOS). `tools/mame/funcreplay.lua` captures listed functions in MAME, and `test_against_mame` sorts each capture into a clean replay or impure at run time (`tools/mame/README.md`).
+
 ## make
 
 ```
 make recomp       # recompile $CARNEVIL_WORK/part0_files/GAME.EXE into $CARNEVIL_WORK/generated
 make linkcheck    # compile the generated C and link it into $BUILD/game_stub
+make smoke        # ... with runtime/stub/smoke.c into $BUILD/smoke
+make replay       # ... with runtime/stub/replay.c into $BUILD/replay
 make test         # the unit tests
 ```
+
+`smoke RAM_IN RAM_OUT [NAME=VALUE ...]` runs GAME.EXE's entry on MAME's RAM dump at the entry, with the registers given (ABI names and `fcsr`), to the first loader call, and prints the slot and the state there and writes the RAM. `replay [--interp] CAPTURE_DIR` runs one captured function and compares its result with MAME's; it stops at the first bus access, prints it and the state and exits 3; `--interp` runs every call in the interpreter instead. Both are described at the top of their source files.
 
 `make linkcheck` compiles the generated files and the runtime (`runtime/core`, `runtime/interp` and the stub runtime `runtime/stub/stub.c`) in parallel, one job per core, and links them into `game_stub`. `BUILD` defaults to `$CARNEVIL_WORK/build/<uname -s>-<uname -m>`; `GENERATED`, `BUILD`, `CARNEVIL_WORK`, `JOBS` and `CC` can be set on the command line. It stops with an error when the generated folder has no `manifest.toml`, and compiles or links nothing that is up to date. The whole image builds in about 4 s on the Mac (Apple clang, 10 cores) and about 25 s with GCC 14 in a 4-core container.
 

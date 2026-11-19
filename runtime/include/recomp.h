@@ -2,8 +2,9 @@
  *
  * The CPU is an R5000 run with 32-bit general registers and FR = 0: 32 FP register halves of
  * 32 bits; a single is one half, a double in even register n is half n (low word) and half
- * n + 1 (high word). The board has 8 MB of RAM, seen at 0x80000000 (kseg0) and 0xA0000000
- * (kseg1); every other address is the bus.
+ * n + 1 (high word). The board has 8 MB of RAM, seen at 0x80000000 (kseg0), 0xA0000000
+ * (kseg1) and, through the loader's TLB entries, 0x00040000 up in kuseg (mem_is_ram); every
+ * other address is the bus.
  *
  * Results that are MAME's own behaviour rather than an established R5000 fact (the oracle
  * the port is checked against, see vectors.MAME_SPECIFIC) are marked "MAME:" below.
@@ -86,9 +87,24 @@ void interp_forget_entries(void);
 
 /* --- memory ---------------------------------------------------------------------------- */
 
+/* Board/loader fact (docs/analysis/boot-handoff.md, "kuseg is mapped onto RAM"): the resident
+ * loader's routine at 0x80004160 sets PageMask to 256 KB pages and writes TLB entries 0-15
+ * mapping virtual 0x00000000-0x007FFFFF onto the same physical addresses, every page valid
+ * except the even page of entry 0 (0x00000000-0x0003FFFF), and entries 16-47 (virtual 8 MB
+ * to 24 MB) with both pages invalid; GAME.EXE writes no TLB entry (no mtc0 in its reached
+ * code). MAME 0.276 agrees: GAME.EXE's stores through 0x00237xxx and 0x00317xxx-0x0031Fxxx
+ * changed RAM at the same physical addresses (task 6 replay captures). So kuseg
+ * 0x00040000-0x007FFFFF is RAM; every other kuseg address (a TLB exception on the board) is
+ * the bus here. The interpreter's fetch goes through mem_is_ram too. */
+#define KUSEG_RAM_START 0x00040000u
+
+/* RAM is kseg0 and kseg1 below RAM_SIZE, and kuseg from KUSEG_RAM_START to RAM_SIZE; for
+ * all three, (addr & 0x1FFFFFFF) is the offset into ram. */
 static inline int mem_is_ram(uint32_t addr, uint32_t size)
 {
-    return addr >= 0x80000000u && addr <= 0xBFFFFFFFu && (addr & 0x1FFFFFFFu) + size <= RAM_SIZE;
+    if (addr < 0x80000000u)
+        return addr >= KUSEG_RAM_START && addr <= RAM_SIZE - size;
+    return addr <= 0xBFFFFFFFu && (addr & 0x1FFFFFFFu) + size <= RAM_SIZE;
 }
 
 static inline uint32_t mem_r8(uint8_t *ram, cpu_t *c, uint32_t addr)
