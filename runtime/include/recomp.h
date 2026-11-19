@@ -62,6 +62,14 @@ uint32_t rt_get_fcsr(const cpu_t *c);
 /* Called once per distinct address the interpreter is entered at; NULL: not called. */
 extern void (*rt_log_unrecompiled)(uint32_t addr);
 
+/* Interrupt check points, the same in recompiled code and the interpreter: at the entry of
+ * every function (and of interp_run), and before a backward transfer (target at or below the
+ * transferring instruction) that stays in the current function or run: a goto in generated
+ * C, an inline continue in the interpreter. A transfer that leaves through a call (a direct
+ * call, rt_call, rt_jump, rt_loader) does not check; the callee's entry does. Where the
+ * interpreter runs on inline into another function's start that generated C calls (a branch
+ * to it, a fall-through off the end, a jump to an unregistered start), the counts differ by
+ * that entry check. A pending interrupt is only ever delayed to the next check point. */
 #define RT_CHECK(ram, c)                                                                    \
     do {                                                                                    \
         if ((c)->irq_pending)                                                               \

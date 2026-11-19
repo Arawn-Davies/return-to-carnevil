@@ -559,6 +559,112 @@ class FunctionTest(RecompTestCase):
         for state in self.assertSameAsInterpreter(prog, quiet):
             self.assertEqual(state.calls, [])
 
+    def test_rt_check_not_at_transfers_that_call(self):
+        """Tail j (backward and forward) and an unresolved backward jr to a function that
+        both modes have registered: one check, the callee's entry, none at the transfer."""
+        p = Asm()
+        p(A("addu", rd=S0, rs=RA, rt=0))
+        p.j("jal", "b1")
+        p(0)
+        p.j("jal", "b2")
+        p(0)
+        p(A("addu", rd=RA, rs=S0, rt=0))
+        p.j("j", "f")  # forward tail jump
+        p(0)
+        p.label("f")
+        p(A("addiu", rt=V0, rs=V0, imm=1), JR_RA, 0)
+        p.label("b1")
+        p.j("j", "f")  # backward tail jump
+        p(0)
+        p.label("b2")
+        p(A("jr", rs=T3))  # backward, unresolved
+        p(0)
+        f = CODE + 4 * 8
+        prog = Program(p, manual=[f], native=[f])
+        self.assertEqual(prog.at("f"), f)
+        self.assertEqual(prog.analysis.jump_tables, [])
+        for label in ("b1", "b2"):
+            self.assertEqual(prog.c[prog.at(label)].count("RT_CHECK"), 1, label)
+        self.assertEqual(prog.c[CODE].count("RT_CHECK"), 1)
+
+        def setup(s, rng, i):
+            s.r[T3] = f
+        cases = prog.cases("calls", setup, irq=1)
+        got = self.assertSameAsInterpreter(prog, cases)
+        for case, state in zip(cases, got):
+            # entries: main, b1, f, b2, f, f
+            self.assertEqual(state.calls, [("interrupt",)] * 6, case.name)
+            self.assertEqual(state.r[V0], (case.before.r[V0] + 3) & _M32)
+
+    def test_rt_check_at_backward_jump_table_case(self):
+        p = Asm()
+        p.label("top")
+        p(A("addiu", rt=A0, rs=A0, imm=-1))
+        p(A("slt", rd=T3, rs=0, rt=A0))  # index: 1 while a0 > 0
+        p(A("sltiu", rt=AT, rs=T3, imm=2))
+        p(A("sll", rd=T0, rt=T3, sa=2))
+        p.items.append(lambda labels, addr: A("lui", rt=T1, imm=labels["table"] >> 16))
+        p(A("addu", rd=T1, rs=T1, rt=T0))
+        p.items.append(lambda labels, addr: A("lw", rt=T2, rs=T1, imm=labels["table"] & 0xFFFF))
+        p(A("jr", rs=T2))
+        p(A("addiu", rt=V0, rs=V0, imm=1))
+        p.label("exit")
+        p(JR_RA, 0)
+        p.label("table")
+        p.ptr("exit")
+        p.ptr("top")
+        prog = Program(p)
+        self.assertEqual(len(prog.analysis.jump_tables), 1)
+
+        def setup(s, rng, i):
+            s.r[A0] = rng.randrange(-1, 8) & _M32
+        cases = prog.cases("table-loop", setup, irq=1)
+        got = self.assertSameAsInterpreter(prog, cases)
+        for case, state in zip(cases, got):
+            n = max(_s32(case.before.r[A0]), 1)
+            self.assertEqual(state.calls, [("interrupt",)] * n, case.name)
+
+    def test_rt_check_documented_exceptions(self):
+        """A conditional branch to another function's start, and running off the end into
+        one: the C checks only at the callee's entry. The interpreter runs on inline there
+        (no check), so only the states are compared with it."""
+        p = Asm()
+        p(A("addu", rd=S0, rs=RA, rt=0))
+        p.j("jal", "g")
+        p(0)
+        p(A("addu", rd=RA, rs=S0, rt=0))
+        p.b("bne", "g", rs=A0, rt=0)
+        p(0)
+        p(A("addiu", rt=V0, rs=V0, imm=1))  # runs on into g
+        p.label("g")
+        p(A("addiu", rt=V1, rs=V1, imm=1), JR_RA, 0)
+        prog = Program(p)
+        self.assertEqual(prog.c[CODE].count("RT_CHECK"), 1)
+
+        def setup(s, rng, i):
+            s.r[A0] = i % 2 if i < 50 else s.r[A0]
+        cases = prog.cases("exceptions", setup, irq=1)
+        want, got = prog.run("interp", cases), prog.run("recomp", cases)
+        for case, u, v in zip(cases, want, got):
+            self.assertIsNone(charness.first_difference(u, v), case.name)
+            # entries: main, g (the call), g (the branch or the run-on)
+            self.assertEqual(v.calls, [("interrupt",)] * 3, case.name)
+
+    def test_branch_into_stub_block_raises(self):
+        block = CODE + 0x100
+        p = Asm()
+        p(A("beq", rs=A0, rt=0, imm=(block + 0x10 - CODE - 4) >> 2))
+        p(0)
+        p(JR_RA, 0)
+        p.pad_to(block + 0x40)
+        image = image_of(p.words())
+        analysis = functions.analyse(image, CODE, stub_blocks=[(block, block + 0x40)])
+        main = next(f for f in analysis.functions if f.addr == CODE)
+        with self.assertRaises(recomp.RecompileError) as err:
+            recomp.function_c(image, analysis, main)
+        self.assertEqual(err.exception.addr, CODE)
+        self.assertIn("stub block", str(err.exception))
+
     def test_bc1_with_condition_code_2(self):
         p = Asm()
         p(A("c.lt.s", fs=2, ft=4, cc=2))

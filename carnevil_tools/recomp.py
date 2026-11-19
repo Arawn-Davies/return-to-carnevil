@@ -18,12 +18,14 @@ emitted here, with the order of the reference interpreter (runtime/interp/interp
 - `jr ra`: the slot, `return`. `jr` with a jump table: the register read before the slot,
   then a `switch` with one `case` per distinct target and a `default` that calls `rt_jump`;
   `jr` without one: `rt_jump`, `return`;
-- a branch or jump to another function's start: the slot, a direct call, `return`; into a
-  stub block: `rt_loader(ram, c, addr - block_start)`, `return` (a call: no `return`). To
-  any other address outside the function: `RecompileError`;
+- a branch or jump to another function's start: the slot, a direct call, `return`; a jump
+  into a stub block: `rt_loader(ram, c, addr - block_start)`, `return` (a call: no
+  `return`). A branch into a stub block, or a branch or jump to any other address outside
+  the function: `RecompileError`;
 - `break`: `rt_break(ram, c, addr, code)`, then the next instruction;
-- `RT_CHECK(ram, c)` at entry and, after the slot, before every taken branch or jump whose
-  target is at or below its own address (for `jr`, tested at run time);
+- `RT_CHECK(ram, c)` at entry and, after the slot, before every `goto` to an address at or
+  below the transfer's own; never before a transfer that leaves through a call (the
+  callee's entry checks; see recomp.h);
 - a function whose code can run off its end calls the function starting there, then
   returns; `RecompileError` if none does;
 - a function in a stub block is a thunk whose body is the `rt_loader` call.
@@ -114,15 +116,17 @@ class _Function:
 
     def transfer(self, target, at, what):
         """Lines that leave `at` for `target` for good (a goto or a call and return)."""
-        lines = ["RT_CHECK(ram, c);"] if target <= at else []
         if target in self.wordset:  # labelled by collect_labels
-            return lines + [f"goto {_label(target)};"]
+            check = ["RT_CHECK(ram, c);"] if target <= at else []
+            return check + [f"goto {_label(target)};"]
         slot = self.stub_slot(target)
         if slot is not None:
-            return lines + [f"rt_loader(ram, c, {_u(slot)});", "return;"]
+            if what == "branch to":
+                raise RecompileError(at, f"branch to {target:08X}, in a stub block")
+            return [f"rt_loader(ram, c, {_u(slot)});", "return;"]
         if target in self.starts:
             self.callees.add(target)
-            return lines + [f"{c_name(target)}(ram, c);", "return;"]
+            return [f"{c_name(target)}(ram, c);", "return;"]
         raise RecompileError(at, f"{what} {target:08X}: outside the function and not a "
                                  "function start")
 
@@ -135,9 +139,8 @@ class _Function:
             return [f"{c_name(target)}(ram, c);"]
         return [f"rt_call(ram, c, {_u(target)});"]
 
-    def dynamic_jump(self, var, at):
-        return [f"if ({var} <= {_u(at)}) RT_CHECK(ram, c);", f"rt_jump(ram, c, {var});",
-                "return;"]
+    def dynamic_jump(self, var):
+        return [f"rt_jump(ram, c, {var});", "return;"]
 
     # --- instructions ------------------------------------------------------------------
 
@@ -190,12 +193,12 @@ class _Function:
         head = ["{", f"    uint32_t target = {_reg(insn.rs)};", *_indent(slot)]
         table = self.tables.get(addr)
         if table is None:
-            return head + _indent(self.dynamic_jump("target", addr)) + ["}"], False
+            return head + _indent(self.dynamic_jump("target")) + ["}"], False
         cases = []
         for target in sorted(set(table.targets)):
             cases += [f"case {_u(target)}:", *_indent(self.transfer(target, addr, "jump-table "
                                                                     "entry"))]
-        cases += ["default:", *_indent(self.dynamic_jump("target", addr))]
+        cases += ["default:", *_indent(self.dynamic_jump("target"))]
         return head + ["    switch (target) {", *_indent(cases), "    }", "}"], False
 
     # --- the function ------------------------------------------------------------------
