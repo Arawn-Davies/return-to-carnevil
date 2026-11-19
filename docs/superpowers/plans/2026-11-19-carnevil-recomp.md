@@ -4,13 +4,13 @@
 
 **Goal:** Run Midway's CarnEvil natively at full speed on PS4 Linux by statically recompiling `GAME.EXE` to C and linking it against a runtime that stands in for the Seattle arcade hardware.
 
-**Architecture:** Python tools extract and analyse the game binary (M0); a recompiler based on N64Recomp turns the MIPS IV code into C (M1); a C/C++ runtime implements the hardware at register level with OpenGL rendering (M2–M5); the PS4 build and performance pass come last (M6). MAME is the reference the port is checked against.
+**Architecture:** Python tools extract and analyse the game binary (M0); a recompiler based on N64Recomp turns the MIPS IV code into C (M1); a C/C++ runtime implements the hardware at register level with OpenGL rendering (M2–M5); then the Linux build (M6), and the PS4 build and performance pass last (M7). MAME is the reference the port is checked against.
 
 **Tech Stack:** Python 3.12+ (stdlib only, `unittest`) for tools; C/C++17, SDL2 (built in-tree), OpenGL 3.3 core for the runtime; N64Recomp fork for the recompiler; MAME 0.276 (Debian package, in the Linux container) as the oracle.
 
 **Spec:** `docs/superpowers/specs/2026-11-19-carnevil-recomp-design.md`
 
-**Scope of this document:** M0 is planned task by task. M1–M6 are outlined with deliverables and exit checks; each gets its own detailed plan (`docs/superpowers/plans/…-m<N>.md`) when the previous milestone is done, because its decisions depend on that milestone's findings (for example the opcode census in M0 decides what M1 must add to N64Recomp).
+**Scope of this document:** M0 is planned task by task. M1–M7 are outlined with deliverables and exit checks; each gets its own detailed plan (`docs/superpowers/plans/…-m<N>.md`) when the previous milestone is done, because its decisions depend on that milestone's findings (for example the opcode census in M0 decides what M1 must add to N64Recomp).
 
 ## Global Constraints
 
@@ -20,7 +20,7 @@
 - Never run `head` or `tail`. Never print secrets.
 - One supported game revision: `GAME.EXE` SHA-256 `47aea64a3e5d15c15f28b3907294e706f078a4e9a47c422f551f420d9ba7da9e` (from `carnevil.chd`, data SHA1 `ba32b7ef9721d730ce58bd753d47fb947b6ae9b6`). Tools refuse other hashes.
 - Other pinned hashes: `DIAG.EXE` `38b2810864c85d6971cedc3a6b0e507c8c6d593e4d7c355c880f91dbcaaaa2b9`; `boot.u32` = `carnevil1_9.u32` `05346e09d90a8e5aadc5e0aae8bd53b80816e96ea1e649ba548e4c6b07dac4a6`.
-- Development host order: Mac natively, then the Linux PC, then PS4 (M6 only).
+- Build order (user's decision): macOS first (M1–M5 end in a playable Mac build), then Linux x86-64 native and WSL2 on the Linux PC (M6), then PS4 (M7 only).
 - Tests that need game data read `CARNEVIL_WORK` (default `/Volumes/archive/reincarnevilation/work`) and **skip** when it is missing. Unit tests use synthetic fixtures built in the test.
 
 ## Review Focus
@@ -217,7 +217,7 @@ Algorithm (the order matters):
 
 ---
 
-## M1–M6 outlines (each planned in detail when reached)
+## M1–M7 outlines (each planned in detail when reached)
 
 ### M1: Recompiler emits C for all of `GAME.EXE`
 - Fork N64Recomp into `recomp/` (vendored, MIT, history noted). Add: little-endian memory access, a flat-image loader fed by `config/game.functions.toml` instead of an ELF, the MIPS IV instructions listed in `docs/analysis/opcode-census.md`, FP condition codes 0–7, the FR mode from `boot_state.toml`, interrupt check points at function entries and loop back-edges, jump tables as `switch`.
@@ -243,9 +243,14 @@ Algorithm (the order matters):
 ### M5: DCS audio
 - ADSP-2115 interpreter and DCS2 glue ported from MAME's BSD-licensed sources into `runtime/dcs/`, running `sound102.u95` and the OS image the game uploads, on its own thread, to SDL audio.
 - Tests: the first N output samples for a fixed command sequence match a MAME capture.
-- Exit: music and effects play correctly through attract mode and a level.
+- Exit: music and effects play correctly through attract mode and a level. This is the first playable build (macOS).
 
-### M6: the Linux PC, then PS4
-- Linux x86-64 build on the Linux PC; PS4 build in the Linux container (`-O2 -march=btver2`, glibc <= 2.38), thread pinning off CPU1, exclusive fullscreen, a launcher entry.
+### M6: Linux x86-64
+- The runtime and generated C built on Linux x86-64: natively, and under WSL2 on the Linux PC (OpenGL through WSLg/Mesa). SDL2 from the distribution or built in-tree.
+- Tests: the M3 golden-frame comparison, the M4 input tests and the M5 audio test pass on Linux; a full level is playable.
+- Exit: CarnEvil is playable on Linux and under WSL2 with the same results as the Mac build.
+
+### M7: PS4
+- PS4 build in the Linux container (`-O2 -march=btver2`, glibc <= 2.38), thread pinning off CPU1, exclusive fullscreen, a launcher entry.
 - Performance pass with the MAME baseline from M0 as the floor and full speed as the pass line; if register-level Voodoo cannot reach it on Jaguar, start the Glide-level replacement for the hottest paths here.
 - Exit: CarnEvil plays at full speed on the PS4 from the menu.
