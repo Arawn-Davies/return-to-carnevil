@@ -132,10 +132,23 @@ Not run in MAME (`vectors.NO_MAME`): `break` (it raises an exception, so a case 
 `ra`), and `div` of 0x80000000 by 0xFFFFFFFF (MAME divides on the host, where x86 `idiv`
 faults: the first run died of SIGFPE).
 
-Results that are MAME's rather than the hardware's (`vectors.MAME_SPECIFIC`): `div` and `divu`
-by zero leave `hi` and `lo` unchanged (undefined on the R5000); `trunc.w.s` and `trunc.w.d` of
-a NaN or of a value outside int32 give 0x80000000, the x86 conversion result, where the R5000
-signals an Unimplemented Operation. Also MAME-only, but invisible in the vectors: `cache` is a
+Results that are MAME's and not established hardware facts (`vectors.MAME_SPECIFIC`; what the
+R5000 does in each is not verified here against its documentation):
+
+- `div` and `divu` by zero leave `hi` and `lo` unchanged (MIPS leaves the result undefined).
+- `trunc.w.s` and `trunc.w.d` of a NaN or of a value outside int32 give 0x80000000, the x86
+  conversion result.
+- `madd`, `msub`, `nmadd`, `nmsub` are unfused: MAME computes them in C as
+  `fs * ft + fr` (`- fr` for msub), so the product is rounded to the format and then the sum,
+  and nmadd/nmsub negate the rounded sum (`-(fs * ft + fr)`, `-(fs * ft - fr)`). All 60
+  recorded cases equal that two-rounding result (exact arithmetic, `test_vectors`); in 3 of
+  them (`nmadd.s.5`, `msub.s.9`, `nmsub.s.11`) a single rounding gives other bits, and those
+  are the ones listed. Whether the R5000 rounds once or twice is not verified.
+
+`recip.s` (`1.0f / x`) and `sqrt.s` (`sqrt` in double, then to single) are correctly rounded
+in all 12 recorded cases each, so none of them is listed.
+
+Also MAME-only, but invisible in the vectors: `cache` is a
 no-op (MAME models no caches); MAME raises no FP exception except division by zero with its
 enable set, and no `addi` overflow trap, so the cases keep FCSR's enables clear and `addi` from
 overflowing.

@@ -45,9 +45,14 @@ recip.s sqrt.s
 
 # Results MAME gives that are not a hardware fact. Later tasks still match them, so the port
 # and its oracle agree; this list says where a real board might differ.
-_DIV0 = "division by zero: MAME leaves hi and lo unchanged; on the R5000 they are undefined"
-_TRUNC = ("trunc of a NaN or of a value outside int32: MAME returns the x86 conversion result; "
-          "the R5000 signals an Unimplemented Operation (FPE) instead")
+# What the R5000 does in these cases is not verified here against its documentation.
+_DIV0 = ("division by zero: MAME leaves hi and lo unchanged; the R5000's result is not "
+         "verified (MIPS leaves it undefined)")
+_TRUNC = ("trunc of a NaN or of a value outside int32: MAME returns the x86 conversion result "
+          "0x80000000; what the R5000 does (result or FPE) is not verified")
+_MADD = ("madd family: MAME rounds the product to the format, then the sum (two roundings), "
+         "and for nmadd/nmsub negates the rounded sum; a single rounding gives other bits here; "
+         "whether the R5000 rounds once or twice is not verified")
 MAME_SPECIFIC = {
     "div.edge.00000000.00000000": _DIV0,
     "div.edge.00000001.00000000": _DIV0,
@@ -70,6 +75,10 @@ MAME_SPECIFIC = {
     "trunc.w.d.edge.3e9": _TRUNC,
     "trunc.w.d.edge.-3e9": _TRUNC,
     "trunc.w.d.edge.nan": _TRUNC,
+    # the recorded madd-family cases whose fused and unfused results differ (MAME: unfused)
+    "nmadd.s.5": _MADD,
+    "msub.s.9": _MADD,
+    "nmsub.s.11": _MADD,
 }
 
 

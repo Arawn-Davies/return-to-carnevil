@@ -6,6 +6,7 @@ import struct
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from fractions import Fraction
 
 from carnevil_tools import cli, mips, vectors
 
@@ -41,6 +42,26 @@ def _f64(lo, hi):
 
 def _signed(v):
     return v - (1 << 32) if v & 0x80000000 else v
+
+
+def _round(x, fmt):
+    """An exact Fraction rounded to nearest-even single ("s") or double ("d"), normal range."""
+    p, emin = (24, -126) if fmt == "s" else (53, -1022)
+    if x == 0:
+        return Fraction(0)
+    a = abs(x)
+    e = a.numerator.bit_length() - a.denominator.bit_length()
+    e += (Fraction(2) ** (e + 1) <= a) - (Fraction(2) ** e > a)
+    assert e >= emin, "subnormal"
+    q = a / Fraction(2) ** (e - p + 1)
+    n, rem = divmod(q.numerator, q.denominator)
+    if 2 * rem > q.denominator or 2 * rem == q.denominator and n & 1:
+        n += 1
+    return (1 if x > 0 else -1) * n * Fraction(2) ** (e - p + 1)
+
+
+def _fp(fpr, reg, fmt):
+    return Fraction(_f32(fpr[reg]) if fmt == "s" else _f64(fpr[reg], fpr[reg + 1]))
 
 
 class AssembleTest(unittest.TestCase):
@@ -139,7 +160,7 @@ class CasesTest(unittest.TestCase):
             self.assertTrue(nan, name)
 
     def test_fp_operands_are_finite_normal(self):
-        edge = set(vectors.MAME_SPECIFIC) | {c.name for c in self.cases if ".edge." in c.name}
+        edge = {c.name for c in self.cases if ".edge." in c.name}
         for case in self.cases:
             insn = _first(case)
             if case.name in edge or not insn.mnemonic[-2:] in (".s", ".d") \
@@ -253,6 +274,45 @@ class RecordedTest(unittest.TestCase):
             self.assertEqual((after.fpr[insn.rt], after.fpr[insn.rt + 1]),
                              (case.before.mem.get(addr, 0), case.before.mem.get(addr + 4, 0)),
                              case.name)
+
+    def test_madd_family_is_unfused(self):
+        # fd = +-(fs * ft +- fr): MAME rounds the product, then the sum, then negates. Every
+        # case where a single rounding gives other bits is listed as MAME-specific.
+        differ, seen = set(), 0
+        for case, after in self.recorded:
+            insn = _first(case)
+            op, _, fmt = insn.mnemonic.partition(".")
+            if op not in ("madd", "msub", "nmadd", "nmsub"):
+                continue
+            seen += 1
+            fpr = case.before.fpr
+            fr, fs, ft = (_fp(fpr, reg, fmt) for reg in (insn.rs, insn.rd, insn.rt))
+            if op in ("msub", "nmsub"):
+                fr = -fr
+            fused, unfused = _round(fs * ft + fr, fmt), _round(_round(fs * ft, fmt) + fr, fmt)
+            if op.startswith("n"):
+                fused, unfused = -fused, -unfused
+            self.assertEqual(_fp(after.fpr, insn.sa, fmt), unfused, case.name)
+            if fused != unfused:
+                differ.add(case.name)
+        self.assertEqual(seen, 5 * vectors.RANDOM_PER_MNEMONIC)
+        self.assertTrue(differ)
+        listed = {n for n in vectors.MAME_SPECIFIC if n.split(".")[0] in
+                  ("madd", "msub", "nmadd", "nmsub")}
+        self.assertEqual(differ, listed)
+
+    def test_recip_and_sqrt_are_correctly_rounded(self):
+        for case, after in self.recorded:
+            insn = _first(case)
+            if insn.mnemonic not in ("recip.s", "sqrt.s"):
+                continue
+            x, got = _fp(case.before.fpr, insn.rd, "s"), after.fpr[insn.sa]
+            if insn.mnemonic == "recip.s":
+                self.assertEqual(Fraction(_f32(got)), _round(1 / x, "s"), case.name)
+            else:  # got is the nearest single to sqrt(x): x lies between the midpoints squared
+                below, at, above = (Fraction(_f32(got + d)) for d in (-1, 0, 1))
+                self.assertTrue(((below + at) / 2) ** 2 <= x <= ((at + above) / 2) ** 2,
+                                case.name)
 
 
 if __name__ == "__main__":
