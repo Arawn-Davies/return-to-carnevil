@@ -320,6 +320,22 @@ their `j` runs on in the interpreter. Returning into another context with
 `jr ra`, or switching stacks under a C call chain, is a runtime question for
 M2 whichever side runs the code.
 
+What the switch is for (read, M1): it is the game's cooperative task
+scheduler. `main` calls 0x80151BC0 once (0x800C4740). The task list starts
+at the word 0x801A3110 and the current task is the word 0x801A3118; a task
+record holds the next task at +0, the saved stack pointer at +8, a sleep
+counter (halfword) at +0xC, an argument at +0x10 and the task's function at
++0x24. 0x80151AC0 is the yield: it ORs its argument into the sleep counter,
+saves the task's callee-saved registers on the task's own stack and its
+stack pointer at +8. The scheduler decrements each task's counter once per
+pass and resumes a task whose counter reaches 0. 0x80151AC0 is called from
+70 `jal` sites in 32 functions. The two task-creation routines 0x80148FA4
+and 0x80149200 plant 0x8014A930 where the restore path reloads `ra`, so a
+new task's first resume enters 0x8014A930, which calls the task's function
+(+0x24) with the argument (+0x10) and, when it returns, jumps to 0x80151B50,
+the exit path. The [M1 report](M1-report.md) ("Risks and decisions for M2")
+has what this means for the runtime and what is not known yet.
+
 ## Pointers refused by the prologue-or-known-start rule
 
 8 pointer values, from data words or lui pairs, land somewhere inside an

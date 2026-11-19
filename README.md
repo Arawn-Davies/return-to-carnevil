@@ -6,13 +6,15 @@ stands in for the arcade board. Builds come in this order: macOS, then Linux (in
 then PlayStation 4 Linux, the machine the project exists for, where emulation is too slow for
 full speed.
 
-Status: early. The analysis of milestone M0 (extraction and analysis tooling) is complete
-and summarised in the [M0 report](docs/analysis/M0-report.md); nothing is playable yet. See
-`docs/superpowers/specs/` for the design and `docs/superpowers/plans/` for the plan.
+Status: early. Milestone M0 (extraction and analysis) and M1 (the recompiler: all of
+`GAME.EXE` translated to C that compiles and links, checked against MAME) are done; see the
+[M0 report](docs/analysis/M0-report.md) and the [M1 report](docs/analysis/M1-report.md).
+Nothing is playable yet: the runtime is next. See `docs/superpowers/specs/` for the design and
+`docs/superpowers/plans/` for the plans.
 
 ## BYOCHD: bring your own CHD
 
-This repository contains tools, notes and (later) the recompiler and runtime. It contains no
+This repository contains tools, notes, the recompiler and (later) the runtime. It contains no
 game code, assets, ROMs or disk images, and none will be added. Everything game-specific is
 produced on your machine from your own `carnevil.chd`:
 
@@ -35,17 +37,30 @@ supported for now: the `GAME.EXE` whose SHA-256 is
 with a message showing both hashes: an intact file of another revision as an unknown
 revision, a damaged or mis-extracted one as a checksum error.
 
+## Translating the game to C
+
+With a C compiler (`cc`) and GNU `make`, and `CARNEVIL_WORK` set:
+
+```
+make recomp       # GAME.EXE to C, in $CARNEVIL_WORK/generated
+make linkcheck    # compile and link it all against a stub runtime
+```
+
+The generated C is made from your own `GAME.EXE` and stays in your work folder; it is never
+committed. See [getting started](docs/getting-started.md#5-translate-the-game-to-c).
+
 ## Running the tests
 
-Python 3, standard library only.
+Python 3, standard library only; the tests that compile C need `cc`.
 
 ```
 python3 -m unittest discover -s tests -v
 ```
 
 Tests that need game files skip when they are not there, so the suite passes on a clean checkout.
-A few always skip on a user's machine because they read files only the developer has; see
-[getting started](docs/getting-started.md#5-run-the-tests).
+The tests that compare with MAME also skip until you make their captures with the scripts in
+`tools/mame/`, and one always skips because it reads a file only the developer keeps; see
+[getting started](docs/getting-started.md#7-run-the-tests).
 
 ## Documentation
 
@@ -53,7 +68,11 @@ Start at [`docs/README.md`](docs/README.md): how it works, getting started, the 
 
 ## Layout
 
-- `carnevil_tools/`: disk image, EXE, MIPS IV decoding and analysis tools
+- `carnevil_tools/`: disk image, EXE, MIPS IV decoding and analysis tools, and the recompiler
+- `runtime/`: the contract header the generated C uses, the reference interpreter and the
+  stub runtimes
+- `config/`: the function list and boot state the recompiler reads
+- `tools/mame/`: the MAME scripts behind the checks
 - `tests/`: unit tests on synthetic fixtures, plus checks against your own game files
 - `docs/analysis/`: what has been learned about the formats and the binary (addresses, counts,
   layouts; no code listings)
@@ -64,7 +83,7 @@ Start at [`docs/README.md`](docs/README.md): how it works, getting started, the 
 - The disk format was learned from [xclusivor/CarnEvil-Research](https://github.com/xclusivor/CarnEvil-Research),
   itself based on daemon1's tools from the XenTaX forums. See `docs/analysis/disk-format.md`.
 - MAME's `seattle` driver is the hardware reference.
-- The recompiler will build on [N64Recomp](https://github.com/N64Recomp/N64Recomp).
+- The shape of the recompiler's output follows [N64Recomp](https://github.com/N64Recomp/N64Recomp).
 
 ## Licence
 

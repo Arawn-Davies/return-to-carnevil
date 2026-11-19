@@ -142,3 +142,13 @@ Decisions taken when M1 was planned. The M1 plan (`docs/superpowers/plans/2026-1
 - General registers are 32 bits wide in the port: reached code has no 64-bit integer instruction.
 - Interrupts (section 3): delivered by the runtime calling the handlers the game registered, at the check points the recompiler inserts. No recompiled exception vector and no COP0 emulation for reached code.
 - Unit tests (section 5): instruction semantics are checked against vectors recorded from MAME's R5000 core, as well as against the reference interpreter.
+
+## Corrections from M1 (2026-11-19)
+
+The design above is kept as written; these are the assumptions M1 showed wrong or incomplete. Each is explained, with its evidence, in `docs/analysis/M1-report.md`.
+
+- Memory map (sections 3 and 4): RAM is not only KSEG0/KSEG1. The loader's TLB maps kuseg 0x00040000-0x007FFFFF onto the same RAM, and 31 game functions store through such addresses; the M0 notes had no TLB mapping at all.
+- Control flow (section 3): "each MIPS function becomes a C function" does not hold for the game's cooperative task switch. 0x80151AC0 (the yield, 70 call sites) and 0x80151B50 (task exit) swap the stack under the caller and resume tasks with `jr ra` from the scheduler 0x80151BC0, which `main` calls once. M1 leaves both to the interpreter so the image links; running tasks needs host-side stack switching or an equivalent in the M2 runtime. The M0 notes saw the save/restore code only as two jumps between functions.
+- Boot state (M0 notes): the first loader call is slot 0x038, made before `main` starts, from code `_start` calls; and the loader's leftover registers at entry are not dead (a3 reaches that call), so `config/boot_state.toml` now records all of them.
+- Verification (section 5): purity of a function cannot be decided statically, because hardware is reached through pointers held in memory (25 of 152 captured functions); the replay check classifies them at run time.
+- All 16 indirect jumps M0 left unresolved are resolved by manual tables; no `jr` is left to the interpreter.

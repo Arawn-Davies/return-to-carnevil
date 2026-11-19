@@ -310,6 +310,20 @@ through kuseg pointers (0x002375C0-0x002378D0 from 0x8015E79C-0x80167CF0, and
 0x00317760-0x0031F430 from 0x800D1750-0x80100558), and the stores land in RAM at the same
 physical addresses. The runtime treats kuseg 0x00040000-0x007FFFFF as RAM (`mem_is_ram`).
 
+## The first loader call (confirmed, M1 task 6)
+
+GAME.EXE's first call into the loader is slot 0x038 (one of the unconfirmed file-system calls
+above), from 0x80145348 in the function 0x80145318, which `_start`'s second call (0x801412D0)
+reaches; `main` has not started yet. At the slot: a0 0x80174EC0, a1 0, a2 0x807FFEC0, a3
+0x000E0228, ra 0x80145350, sp 0x807FFE98 (MAME, `tools/mame/firstcall.lua`;
+`config/boot_state.toml` `[first_loader_call]`). a3 is a loader leftover passed on unchanged
+from the entry, so the leftover registers matter: `boot_state.toml` now lists every non-zero
+general register at the entry, not only the ones of run 1 above. Two IP2 interrupts were taken
+in MAME on the way, in `_start`'s clear loop; their handlers wrote nothing in
+0x800C4000-0x807FFFFF. The recompiled code, started from the RAM dump at the entry and those
+registers, reaches the same slot with the same registers and the same RAM from 0x800C4000 up
+to sp ([M1 report](M1-report.md)).
+
 ## Code written to RAM
 
 Stores from GAME.EXE's reached code to 0x80000000 to 0x800001FF (or the KSEG1 alias), with

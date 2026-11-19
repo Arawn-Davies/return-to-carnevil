@@ -1,10 +1,11 @@
 # Getting started
 
-Right now the project is at the analysis stage: you can extract the game's files from your own disk image and run the analysis tools. There is no playable build yet. See the [roadmap](roadmap.md).
+Right now you can extract the game's files from your own disk image, run the analysis tools, translate the game's code to C and check that it compiles and links. There is no playable build yet: the runtime that would run it is the next milestone. See the [roadmap](roadmap.md).
 
 ## What you need
 
 - Python 3.12 or newer. The tools use the standard library only: nothing to install.
+- For the recompiled code (steps 5 and 6): a C compiler as `cc` (Apple clang on macOS and GCC on Linux are both tested) and GNU `make`. The tests that compile C skip, naming `cc`, when there is none.
 - `chdman` (it ships with MAME) to unpack the CHD.
 - Your own `carnevil.chd`.
 - About 8 GB of free disk space: the raw image (4.3 GB), the 17 partitions (3.2 GB) and the extracted files (0.07 GB). After splitting, only `work/parts/part0` is needed, so the raw image and the other 16 partitions can be deleted.
@@ -36,7 +37,7 @@ The disk has 17 partitions. Partition 0 holds the 1,356 files the game runs from
 export CARNEVIL_WORK=/path/to/work
 ```
 
-The built-in default is the author's own path, so set this. The boot ROM is not on the disk; it is `boot.u32` in MAME's `carnevil` set. The tests that read it run only when you name it:
+The built-in default is the author's own path, so set this; the tools, the tests and the `Makefile` all read it. The boot ROM is not on the disk; it is `boot.u32` in MAME's `carnevil` set. The tests that read it run only when you name it:
 
 ```
 export CARNEVIL_BOOT_ROM=/path/to/boot.u32
@@ -53,18 +54,36 @@ python3 -m carnevil_tools functions work/part0_files/GAME.EXE -o my.functions.to
 
 The first counts the MIPS instructions in the game. The second finds its functions and jump tables. With an output name like `my.functions.toml` it reads no manual input; `--manual config/game.manual.toml` (or `-o config/game.functions.toml`, which picks that file up by name) reproduces the committed `config/game.functions.toml` exactly. See the [tools reference](tools.md).
 
-## 5. Run the tests
+## 5. Translate the game to C
+
+From the repository's top folder:
+
+```
+make recomp
+```
+
+This reads `$CARNEVIL_WORK/part0_files/GAME.EXE` and the committed `config/game.functions.toml`, and writes the C for all 2,093 functions to `$CARNEVIL_WORK/generated`: 33 files of functions, a header, a lookup table and `manifest.toml`, about 8 MB in all, in about a second. It refuses a `GAME.EXE` that is not the supported revision. The generated C is a translation of the game's code, so it stays in your work folder and is never committed. `python3 -m carnevil_tools recompile <GAME.EXE> -o <folder>` does the same into any folder ([tools reference](tools.md)).
+
+## 6. Compile and link it
+
+```
+make linkcheck
+```
+
+This compiles the generated C and the runtime's core in parallel and links them with a stub runtime into `$CARNEVIL_WORK/build/<system>-<machine>/game_stub`. It succeeds only if every function links with no undefined symbol. It takes a few seconds on a recent Mac and under half a minute on a 4-core Linux machine. `game_stub` does nothing useful yet: the link is the check. `BUILD=…` puts the objects elsewhere.
+
+## 7. Run the tests
 
 ```
 python3 -m unittest discover -s tests -v
 ```
 
-The unit tests build their own small fixtures and need no game files. The tests that check your game files skip when the files are not there, so the suite passes on a clean checkout. `python3 -m unittest` and `python3 -m unittest tests.test_disk` (one module) work as well.
+The unit tests build their own small fixtures and need no game files. The tests that check your game files skip when the files are not there, so the suite passes on a clean checkout. `python3 -m unittest` and `python3 -m unittest tests.test_disk` (one module) work as well, and `make test` runs the suite with warnings turned into errors. With `cc` present, the suite compiles C into a temporary folder; nothing is written to the repository.
 
-With your files in place, two tests still skip, because they read files only the developer has; their skips are expected:
+With your files in place, some tests still skip, and their skips are expected:
 
-- `test_contiguous_extraction_reported_as_mis_extracted` reads `part0_files_contiguous_wrong/GAME.EXE`, a copy extracted the wrong way (contiguously) on purpose.
-- `test_game_exe_matches_loader` reads `mame/dumps/ram-at-game-entry.bin`, the RAM dump `tools/mame/handoff.lua` saves in MAME.
+- `test_contiguous_extraction_reported_as_mis_extracted` reads `part0_files_contiguous_wrong/GAME.EXE`, a copy extracted the wrong way (contiguously) on purpose, which only the developer keeps.
+- The tests that compare with MAME read captures made in MAME, under `$CARNEVIL_WORK/mame/`: `test_game_exe_matches_loader` and the smoke test read `mame/dumps/ram-at-game-entry.bin` (`tools/mame/handoff.lua`), the first-loader-call test reads `mame/dumps/ram-at-first-loader-call.bin` (`tools/mame/firstcall.lua`), and the replay test reads the function captures in `mame/replay/` (`tools/mame/funcreplay.lua`). Each skip message names the missing file. To make the captures, run those scripts in MAME 0.276 with the `carnevil` set and your CHD; [tools/mame/README.md](../tools/mame/README.md) has the command lines and where each output goes. The captures hold game RAM, so they stay in your work folder.
 
 The boot-ROM tests skip unless `CARNEVIL_BOOT_ROM` is set (step 3).
 
@@ -80,4 +99,4 @@ Loading a different `GAME.EXE` stops with one of two messages: an intact file of
 
 ## Keeping game files out of git
 
-The `.gitignore` excludes disk images, EXEs, ROMs and the usual work folders. If you contribute, please keep it that way: no game files, no extracted assets, no disassembly listings, and no generated C. Addresses, sizes, counts and format descriptions are fine.
+The `.gitignore` excludes disk images, EXEs, ROMs and the usual work folders. If you contribute, please keep it that way: no game files, no extracted assets, no disassembly listings, no generated C and no MAME captures. Addresses, sizes, counts and format descriptions are fine.

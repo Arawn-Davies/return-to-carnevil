@@ -27,9 +27,9 @@ Both programs are flat MIPS images with an 8-byte header. `GAME.EXE` loads at `0
 ## How the port handles each part
 
 - **Processor:** not emulated. The game's code is translated to C ahead of time. A small interpreter covers anything that was not translated.
-- **Memory:** a plain 8 MB block, with the processor's address aliases mapped onto it.
+- **Memory:** a plain 8 MB block, with the processor's address aliases mapped onto it: the cached and uncached windows, and the low addresses the loader maps onto RAM through the processor's TLB ([analysis/boot-handoff.md](analysis/boot-handoff.md), "kuseg is mapped onto RAM"). Every other address is hardware and goes to the runtime's model of it.
 - **Voodoo 1:** in the first phase, register writes are turned into OpenGL draws, with a shader standing in for the Voodoo's colour and alpha combining. In the second phase the game's Glide routines are replaced directly.
-- **The loader's services, and the hardware behind them:** the game reaches the disk, the GT64010 (timers, interrupts, PCI configuration, DMA), most of the IOASIC and the settings writes through the boot ROM's loader, not by itself. How the port supplies those services is an open design decision: native replacements for the services, or the loader itself run on top of emulated IDE, GT64010 and IOASIC. The [M0 report](analysis/M0-report.md) sets out the options.
+- **The loader's services, and the hardware behind them:** the game reaches the disk, the GT64010 (timers, interrupts, PCI configuration, DMA), most of the IOASIC and the settings writes through the boot ROM's loader, not by itself. The port replaces the 29 services the game calls with native code, so the disk controller and most of the system controller and I/O chip need no register-level model; running the loader itself on top of emulated IDE, GT64010 and IOASIC was the alternative. The [M0 report](analysis/M0-report.md) sets out the options and why.
 - **IOASIC:** inputs come from a mouse or game controller; the serial port goes to the terminal, which is very useful for debugging.
 - **Sound:** the ADSP-2115 is emulated on its own thread, running the same program the real board runs.
 - **Settings:** settings live in their own file. The game reads the settings memory directly and writes it through the loader, so the port has to provide both.

@@ -4,7 +4,7 @@ Last updated: 19 November 2026.
 
 ## Where things stand
 
-The first milestone, M0 (tools that extract the game's files and analyse its executable), has its analysis complete and summarised in the [M0 report](analysis/M0-report.md). The next step is planning M1. Nothing is playable yet.
+The first milestone, M0 (tools that extract the game's files and analyse its executable), is complete and summarised in the [M0 report](analysis/M0-report.md). The second, M1 (the recompiler), is complete on its branch, pending its final review, and summarised in the [M1 report](analysis/M1-report.md). The next step is planning M2, the first runtime. Nothing is playable yet.
 
 ## Milestones
 
@@ -19,9 +19,16 @@ The first milestone, M0 (tools that extract the game's files and analyse its exe
 - Hardware usage census: done, checked against MAME memory taps.
 - M0 report: done. Still open: the MAME frame rate on the PS4, to be recorded the next time the PS4 is up.
 
-**M1: the recompiler.** Extend N64Recomp for this target (little-endian, MIPS IV instructions, a flat image instead of an ELF file) until all of `GAME.EXE` comes out as C that compiles and links.
+**M1: the recompiler** (done on its branch, pending the final review)
 
-**M2: boots without graphics.** A runtime with memory, interrupts, the system controller, the disk and the serial port: enough for the game to reach its attract loop, judged by its debug messages. The game reaches the disk and most devices through the boot ROM's loader, so how the port supplies the loader's services is a decision to take first (see the M0 report).
+- Recompiler: done. A Python emitter, built on M0's decoder and function analysis, turns all 2,093 functions of `GAME.EXE` into C. Its output has the shape N64Recomp's has; N64Recomp itself does not handle this game's instructions or byte order.
+- Reference interpreter and the contract header the generated C, the interpreter and the runtime share: done.
+- Instruction checks against MAME: done. Both the generated C and the interpreter reproduce all 1,320 instruction programs recorded from MAME's processor emulation.
+- Whole image: done. `make recomp` writes the C and `make linkcheck` links it against a stub runtime with no undefined symbol, on macOS (Apple clang) and Linux (GCC).
+- Real game code against MAME: done. From the entry, the recompiled code reaches the game's first loader call with MAME's registers and RAM, and 127 game functions captured in MAME's attract mode replay with MAME's results.
+- M1 report: done.
+
+**M2: boots without graphics.** A runtime with memory, interrupts and the loader's services: enough for the game to reach its attract loop, judged by its debug messages. From M1, its parts are known: native stand-ins for the 29 loader services behind `rt_loader`, the hardware the game touches itself (Voodoo, guns, sound port, settings memory) behind `bus_read` and `bus_write`, interrupt delivery to the handlers the game registers, and a way to run the game's own cooperative task switch, which swaps stacks underneath the translated code. The task switch is the first design decision (see the M1 report).
 
 **M3: graphics.** Voodoo 1 register writes become OpenGL draws. Attract mode should match MAME frame for frame.
 
@@ -37,7 +44,7 @@ The first milestone, M0 (tools that extract the game's files and analyse its exe
 
 ## What has been learned so far
 
-The [M0 report](analysis/M0-report.md) has the full summary, with the evidence for each point.
+The [M0 report](analysis/M0-report.md) and the [M1 report](analysis/M1-report.md) have the full summaries, with the evidence for each point.
 
 About the disk:
 
@@ -56,11 +63,13 @@ About the boot:
 
 - A normal boot runs the boot ROM's start-up code, its power-on tests, then its loader, which starts `GAME.EXE`. The diagnostics program `DIAG.EXE` runs only when the Test switch is on.
 - The loader stays in memory while the game runs. The game uses it for files, the disk, settings writes, PCI set-up, interrupts and exceptions.
+- The loader also maps low addresses onto RAM through the processor's TLB, and the game uses them.
 
 About the code:
 
 - The code runs from `0x800C4000` to `0x8016DC4C`, about 695 KB, with data after it.
-- There are 2,093 functions and 75 jump tables. 29 of the 2,093 are entries of the block described below, which leaves 2,064 functions of the game's own (3 of them added by hand because MAME showed them running or registered).
+- There are 2,093 functions and 91 jump tables (16 of them read from the code by hand in M1). 29 of the 2,093 are entries of the block described below, which leaves 2,064 functions of the game's own (3 of them added by hand because MAME showed them running or registered).
+- The game runs its own cooperative tasks: a scheduler called once from `main` resumes each task in turn, and a task gives up the processor by calling a hand-written routine that swaps stacks. That routine is called from 70 places.
 - Every instruction reached as code decodes cleanly. The MIPS IV features in use are conditional moves and fused multiply-add, plus two extra floating point condition codes in one function; the indexed floating point loads and stores do not occur in reached code.
 - A small block near the start of the image is empty in the file and is filled at start-up with a copy of the loader's jump table: 72 slots, each a jump into the loader. The game calls 29 of them, so those 29 services have to be supplied by the port.
 - The game's own code contains no exception entry code. The loader's exception vectors and dispatcher run, and call the handlers the game registers with the loader.

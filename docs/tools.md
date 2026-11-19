@@ -73,6 +73,15 @@ python3 -m carnevil_tools pure-functions [<GAME.EXE>] [--functions config/game.f
 
 Prints, one address per line, the functions that are statically pure by the census: nothing in their call closure (direct calls, branches and jumps out of the function, jump-table entries, running off its end) calls a loader stub or an interpreted function, holds a `break`, a `jalr` or an unresolved `jr`, or makes a hardware access `hwcensus` can attribute. The counts go to stderr. The EXE defaults to `$CARNEVIL_WORK/part0_files/GAME.EXE`. The list is a superset of what is pure at run time: hardware reached through pointers held in memory or passed as arguments is invisible to the census, so some listed functions do touch hardware (25 of the 152 captured in MAME: the Voodoo, its texture memory, the CMOS). `tools/mame/funcreplay.lua` captures listed functions in MAME, and `test_against_mame` sorts each capture into a clean replay (127 of 152: those functions match MAME) or impure at run time (25: these show only that the recompiled C and the interpreter agree up to the first hardware access, not a match with MAME) (`tools/mame/README.md`).
 
+## vectors
+
+```
+python3 -m carnevil_tools vectors --write-cases <cases.json> [--seed N]
+python3 -m carnevil_tools vectors --merge <cases.json> <results.jsonl> -o tests/vectors/insn.json
+```
+
+Builds the instruction test cases (short synthetic programs, 12 random ones per mnemonic of the census plus edge cases; seed 1 is the committed set) for `tools/mame/insnvec.lua`, and merges the script's results into the vector file the tests read, keeping for each case only what changed. A merge stops when a case failed or is missing. `--seed` applies to `--write-cases` only, `-o` to `--merge` only. The cases are synthetic, so the vector file is committed; `tools/mame/README.md` has the MAME command line, and [analysis/recompiler.md](analysis/recompiler.md) the cases whose results are MAME's rather than established hardware facts.
+
 ## make
 
 ```
@@ -85,7 +94,9 @@ make test         # the unit tests
 
 `smoke RAM_IN RAM_OUT [NAME=VALUE ...]` runs GAME.EXE's entry on MAME's RAM dump at the entry, with the registers given (ABI names and `fcsr`), to the first loader call, and prints the slot and the state there and writes the RAM. `replay [--interp] CAPTURE_DIR` runs one captured function and compares its result with MAME's; it stops at the first bus access, prints it and the state and exits 3; `--interp` runs every call in the interpreter instead. Both are described at the top of their source files.
 
-`make linkcheck` compiles the generated files and the runtime (`runtime/core`, `runtime/interp` and the stub runtime `runtime/stub/stub.c`) in parallel, one job per core, and links them into `game_stub`. `BUILD` defaults to `$CARNEVIL_WORK/build/<uname -s>-<uname -m>`; `GENERATED`, `BUILD`, `CARNEVIL_WORK`, `JOBS` and `CC` can be set on the command line. It stops with an error when the generated folder has no `manifest.toml`, and compiles or links nothing that is up to date. The whole image builds in about 4 s on the Mac (Apple clang, 10 cores) and about 25 s with GCC 14 in a 4-core container.
+`make linkcheck` compiles the generated files and the runtime (`runtime/core`, `runtime/interp` and the stub runtime `runtime/stub/stub.c`) in parallel, one job per core, and links them into `game_stub`. `BUILD` defaults to `$CARNEVIL_WORK/build/<uname -s>-<uname -m>`; `GENERATED`, `BUILD`, `CARNEVIL_WORK`, `JOBS` and `CC` can be set on the command line. It stops with an error when the generated folder has no `manifest.toml`, and compiles or links nothing that is up to date. The whole image builds in about 4 s on the Mac (Apple clang, 10 cores) and about 27 s with GCC 14 in a 4-core container. `CARNEVIL_WORK` defaults to the author's share, so set it (in the environment or on the command line) to your own work folder. You need a C compiler (`cc`, or `CC=…`) and GNU make 3.81 or later; nothing else.
+
+Limits of the Makefile: paths with spaces do not work; generated objects are named after the generated file's name alone, so two generated folders built into one `BUILD` folder share objects (give each its own `BUILD`); and `make recomp` rewrites every generated file, so the next `make linkcheck` compiles everything again.
 
 `game_stub` with no argument does nothing: the link is the check. `game_stub <entry> [<EXE>]` loads the EXE into RAM, calls the function at the entry address with every register 0 but sp (just below the top of RAM) and prints the general registers. Its runtime is the smallest one: the bus reads 0 and logs each address the first time it sees it; the loader, `break` and interrupt entry points log their arguments and return; and each address the interpreter is entered at is logged once.
 
@@ -118,7 +129,8 @@ The static census cannot see every access; [analysis/hardware-usage.md](analysis
 - `exe.py`: the EXE header, its checksum, loading the image, and the revision check.
 - `mips.py`: the MIPS IV instruction decoder, the instruction semantics the analyses share (`dest_reg`, `reads`, `always_taken`, `ends_path`, `is_prologue`) and the opcode census (`tally`, `census`).
 - `functions.py` and `naming.py`: function discovery, the TOML it writes and reads, the manual file (`read_manual`), `reached_words` (the words of each function that discovery reached), and naming functions from the game's own debug messages.
-- `emit.py` and `recomp.py`: one instruction to C statements, one function to a C function (`function_c`), and the whole image to files (`recompile`).
+- `emit.py` and `recomp.py`: one instruction to C statements, one function to a C function (`function_c`), and the whole image to files (`recompile`). [analysis/recompiler.md](analysis/recompiler.md) describes the generated C and its contract.
+- `vectors.py`: the instruction test cases run in MAME (`vectors` command, `tools/mame/insnvec.lua`) and the committed results in `tests/vectors/insn.json`.
 - `board.py`: the board's physical memory map (`REGIONS`, `classify`, `region_of`) and the register names.
 - `hwcensus.py`: the register-value propagation behind `hwcensus` (`propagate`), the hardware accesses it attributes and the ioctl list. `hwcensus.REGIONS` and `hwcensus.classify` are the ones in `board.py`.
 - `loader.py`: the boot ROM's resident loader: its image, service slots, device-driver table, call graph and what each slot reaches, and `game_slots`, the slots `GAME.EXE` calls according to `config/boot_state.toml`.

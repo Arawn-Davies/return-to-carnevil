@@ -5,7 +5,7 @@ Start here.
 ## For people
 
 - [How it works](how-it-works.md): what static recompilation is and how this port is put together.
-- [Getting started](getting-started.md): going from your own CHD to a working folder, and running the tools and tests.
+- [Getting started](getting-started.md): going from your own CHD to a working folder, the game translated to C and linked, and running the tools and tests.
 - [Tools reference](tools.md): every command in `carnevil_tools`, what it reads and what it writes.
 - [The arcade hardware](hardware.md): what is on the Seattle board and how the port deals with each part.
 - [Roadmap and status](roadmap.md): the milestones, what is done, and what has been learned so far.
@@ -15,6 +15,8 @@ Start here.
 Findings about the game's files and binary, written as the work goes. They hold layouts, addresses and counts, never code listings.
 
 - [M0 report](analysis/M0-report.md): the summary of milestone M0, what it changed in the design, and the decisions it leaves for M1 and M2. Read this first.
+- [M1 report](analysis/M1-report.md): the summary of milestone M1, the recompiler: its numbers, what was checked against MAME and what was not, and the risks and decisions for M2, the game's task switch first.
+- [Recompiler](analysis/recompiler.md): what the generated C looks like, the contract it shares with the interpreter and the runtime, the manual entries, and the results that are MAME's rather than the hardware's.
 - [Disk image format](analysis/disk-format.md): the partition table and the file system inside each partition.
 - [EXE format](analysis/exe-format.md): the 8-byte header and the flat image behind it.
 - [Opcode census](analysis/opcode-census.md): which MIPS instructions appear in `GAME.EXE`.
@@ -28,3 +30,4 @@ These were written to drive the implementation with AI coding agents. They are p
 
 - [Design](superpowers/specs/2026-11-19-carnevil-recomp-design.md): goals, constraints, the approaches considered and the chosen design.
 - [Plan](superpowers/plans/2026-11-19-carnevil-recomp.md): the task-by-task plan for milestone M0 and outlines for M1 to M7.
+- [M1 plan](superpowers/plans/2026-11-19-carnevil-recomp-m1.md): the task-by-task plan for milestone M1, the recompiler.
