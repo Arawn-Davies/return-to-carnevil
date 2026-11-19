@@ -34,13 +34,17 @@ python3 -m unittest discover -s tests -v
 
 Tests that need game files skip when they are not there, so the suite passes on a clean checkout.
 
+## Documentation
+
+Start at [`docs/README.md`](docs/README.md): how it works, getting started, the tools, the arcade hardware, and the roadmap.
+
 ## Layout
 
 - `carnevil_tools/`: disk image, EXE, MIPS IV decoding and analysis tools
 - `tests/`: unit tests on synthetic fixtures, plus checks against your own game files
 - `docs/analysis/`: what has been learned about the formats and the binary (addresses, counts,
   layouts; no code listings)
-- `docs/superpowers/`: design and plan
+- `docs/`: guides for people, plus `docs/superpowers/`, the design and plan written to drive AI coding agents
 
 ## Credits
 
