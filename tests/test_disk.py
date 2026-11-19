@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 from carnevil_tools import disk, exe
-from gamedata import requires_file, work_path
+from tests.gamedata import requires_file, work_path
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
