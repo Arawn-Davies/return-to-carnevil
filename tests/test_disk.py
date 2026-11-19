@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 from carnevil_tools import disk
-from gamedata import requires_gamedata, work_dir
+from gamedata import requires_file, work_path
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -180,6 +180,7 @@ class CliTests(unittest.TestCase):
         return subprocess.run(
             [sys.executable, "-m", "carnevil_tools", *args],
             cwd=REPO_ROOT, capture_output=True, text=True,
+            env={k: v for k, v in os.environ.items() if k != "CARNEVIL_WORK"},
         )
 
     def test_cli_without_data_explains(self):
@@ -209,15 +210,15 @@ def sha256(path):
 
 
 class GameDataTests(unittest.TestCase):
-    @requires_gamedata
+    @requires_file("carnevil.raw")
     def test_partition_table(self):
-        table = disk.read_partition_table(os.path.join(work_dir(), "carnevil.raw"))
+        table = disk.read_partition_table(work_path("carnevil.raw"))
         self.assertEqual(len(table), 17)
         self.assertEqual(table[0].size, 98_816_000)
 
-    @requires_gamedata
+    @requires_file("parts", "part0")
     def test_part0_matches_reference(self):
-        part0 = os.path.join(work_dir(), "parts", "part0")
+        part0 = work_path("parts", "part0")
         self.assertEqual(len(disk.list_files(part0)), 1356)
         with tempfile.TemporaryDirectory() as out:
             disk.extract_files(part0, out)
@@ -225,6 +226,21 @@ class GameDataTests(unittest.TestCase):
             self.assertTrue(sha256(os.path.join(out, "GAME.EXE")).endswith("da9e"))
             self.assertTrue(sha256(os.path.join(out, "DIAG.EXE")).startswith("38b28108"))
             self.assertTrue(sha256(os.path.join(out, "DIAG.EXE")).endswith("a2b9"))
+
+
+class GameDataSkipTests(unittest.TestCase):
+    def test_gamedata_tests_skip_when_files_missing(self):
+        with tempfile.TemporaryDirectory() as empty:
+            env = dict(os.environ, CARNEVIL_WORK=empty)
+            r = subprocess.run(
+                [sys.executable, "-m", "unittest", "discover", "-s", "tests",
+                 "-p", "test_disk.py", "-k", "GameDataTests", "-v"],
+                cwd=REPO_ROOT, env=env, capture_output=True, text=True,
+            )
+        out = r.stdout + r.stderr
+        self.assertEqual(r.returncode, 0, out)
+        self.assertEqual(out.count("skipped 'game data file not found"), 2, out)
+        self.assertNotIn("ERROR", out)
 
 
 if __name__ == "__main__":
