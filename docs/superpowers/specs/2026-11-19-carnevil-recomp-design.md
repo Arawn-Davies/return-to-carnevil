@@ -152,3 +152,13 @@ The design above is kept as written; these are the assumptions M1 showed wrong o
 - Boot state (M0 notes): the first loader call is slot 0x038, made before `main` starts, from code `_start` calls; and the loader's leftover registers at entry are not dead (a3 reaches that call), so `config/boot_state.toml` now records all of them.
 - Verification (section 5): purity of a function cannot be decided statically, because hardware is reached through pointers held in memory (25 of 152 captured functions); the replay check classifies them at run time.
 - All 16 indirect jumps M0 left unresolved are resolved by manual tables; no `jr` is left to the interpreter.
+
+## Corrections from M2 planning
+
+Taken in `docs/superpowers/plans/2026-11-19-carnevil-recomp-m2.md` on 2026-11-19, from the MAME measurements in `docs/analysis/task-switch.md` and `docs/analysis/loader-calls.md` and the reading in `docs/analysis/loader-services.md`.
+
+- **The game's cooperative task switch.** The yield, the exit and the scheduler stay recompiled. The three guest transfers between them (0x80151B48, 0x80151B78, 0x80151E88) become switches between host contexts. A host context is a POSIX thread, and only one runs at a time. MAME measured at most 6 tasks and about 100 switches a second, so the hand-over cost does not matter. Fibers can replace the threads behind the same interface if M3's OpenGL use or M7's performance asks for it.
+- **Time.** The runtime keeps a deterministic virtual clock advanced by the generated code's check points (100 ns each). VBLANK, the timers and DMA completion are events on it. Real-time pacing starts in M3.
+- **Hardware list for M2.** Section "runtime" lists GT64010, IDE, IOASIC with UART, and the security PIC as devices. With the loader replaced by native stand-ins (M0 decision 1) the game reaches none of their registers; they are not emulated. The GT64010 is a register file plus DMA channel 0 behind the `pci:` ioctls. Disk transfers complete inside the call; writes go to an overlay file and the user's image is opened read-only.
+- **Stops.** A jump to the reset vector, `_exit`, `exec` and the assert break end the program. An FP divide by zero reaches the game's catch-all handler, which jumps to the reset vector, as on the board.
+- **Sound in M2.** A responder returns the replies the DCS gave in MAME's attract mode, so the game takes the board's path with nothing played. The DCS itself is M5.
