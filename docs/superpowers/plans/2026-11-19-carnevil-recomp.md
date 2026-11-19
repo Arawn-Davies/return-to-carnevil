@@ -15,7 +15,7 @@
 ## Global Constraints
 
 - No game data, extracted files, ROMs or generated C in the git repo, ever. They live under the Gaming share: `reincarnevilation/work/` on the archive share (Mac: `/Volumes/archive/reincarnevilation/work`; the Linux container: `/mnt/reincarnevilation/work`). Analysis notes may quote addresses, opcodes counts and short strings, not code listings.
-- The repo is local only. Never `git push`. No Claude attribution in commits.
+- The repo is published privately (GitHub `origin`, mirror `mirror`) on a BYOCHD basis: it ships no copyrighted game material, and users bring their own CHD. Implementers never `git push`; pushes happen only on the user's say-so. No Claude attribution in commits.
 - Nothing is installed on the Mac. Python tools use the stdlib only and run with the existing `python3`. Anything else runs in the Linux container (`ssh root@<host> 'pct exec <id> -- su roms -c "…"'`), where apt installs are fine.
 - Never run `head` or `tail`. Never print secrets.
 - One supported game revision: `GAME.EXE` SHA-256 `47aea64a3e5d15c15f28b3907294e706f078a4e9a47c422f551f420d9ba7da9e` (from `carnevil.chd`, data SHA1 `ba32b7ef9721d730ce58bd753d47fb947b6ae9b6`). Tools refuse other hashes.
