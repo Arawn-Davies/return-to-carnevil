@@ -416,9 +416,9 @@ def reads(insn):
         return None
     if op == 0:
         return {insn.rt} if name in _SHIFT_IMM else {insn.rs, insn.rt}
-    if name == "lui":
+    if name in ("lui", "j", "jal"):  # j/jal: bits 25..16 are part of the target
         return set()
-    if name in _STORES:
+    if name in ("beq", "bne", "beql", "bnel") or name in _STORES:
         return {insn.rs, insn.rt}
     if name in _FROM_RT:
         return {insn.rt}

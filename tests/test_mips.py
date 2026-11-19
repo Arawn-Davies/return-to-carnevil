@@ -508,6 +508,41 @@ class Reserved(DecodeBase):
             self.assertIsNone(mips.decode(word, BASE).target)
 
 
+class Semantics(unittest.TestCase):
+    def insn(self, word):
+        return mips.decode(word, BASE)
+
+    def test_two_register_branches_read_rs_and_rt(self):
+        for op, name in ((0x04, "beq"), (0x05, "bne"), (0x14, "beql"), (0x15, "bnel")):
+            with self.subTest(name=name):
+                insn = self.insn(enc_i(op, 4, 5, 3))
+                self.assertEqual(insn.mnemonic, name)
+                self.assertEqual(mips.reads(insn), {4, 5})
+        self.assertEqual(mips.reads(self.insn(enc_i(0x06, 4, 0, 3))), {4})  # blez
+
+    def test_j_and_jal_read_no_register(self):
+        # The target field overlaps rs/rt; it is not a register.
+        for op in (0x02, 0x03):
+            insn = self.insn(enc_j(op, 0x03FFFFFF))
+            self.assertEqual(insn.rs, 31)
+            self.assertEqual(mips.reads(insn), set(), insn.mnemonic)
+
+    def test_dest_reg(self):
+        self.assertEqual(mips.dest_reg(self.insn(enc_i(0x0F, 0, 8, 1))), 8)  # lui t0
+        self.assertEqual(mips.dest_reg(self.insn(enc_r(0, 4, 5, 2, 0, 0x21))), 2)  # addu v0
+        self.assertEqual(mips.dest_reg(self.insn(enc_j(0x03, 4))), 31)  # jal links ra
+        self.assertIsNone(mips.dest_reg(self.insn(enc_i(0x2B, 29, 31, 4))))  # sw
+
+    def test_path_ends(self):
+        self.assertTrue(mips.ends_path(self.insn(enc_i(0x04, 0, 0, 3))))  # beq zero,zero
+        self.assertFalse(mips.ends_path(self.insn(enc_i(0x04, 4, 0, 3))))
+        self.assertTrue(mips.ends_path(self.insn(enc_i(0x01, 0, 1, 3))))  # bgez zero
+        self.assertTrue(mips.ends_path(self.insn(enc_r(0, 31, 0, 0, 0, 0x08))))  # jr ra
+        self.assertFalse(mips.ends_path(self.insn(enc_j(0x03, 4))))  # jal returns
+        self.assertTrue(mips.is_prologue(self.insn(enc_i(0x09, 29, 29, -24))))
+        self.assertFalse(mips.is_prologue(self.insn(enc_i(0x09, 29, 29, 24))))
+
+
 class CensusTests(unittest.TestCase):
     def make_image(self, words, load=0x80010000):
         data = b"".join(struct.pack("<I", w) for w in words)
