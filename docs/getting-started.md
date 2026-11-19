@@ -57,7 +57,7 @@ The unit tests build their own small fixtures and need no game files. The tests 
 One revision of the game is supported for now, identified by the SHA-256 of `GAME.EXE`:
 
 ```
-47aea64a3e5d15c15f28b3907294e706f078a4e9a47c422f551f420d9ba7da9e
+f9455ce801d2e5c26a7b6e00eff88efa573deb7ab15fa29f9c90100623bfd3a6
 ```
 
 Loading a different `GAME.EXE` stops with a message that shows the expected hash and yours. Other revisions can be added later; each needs its own analysis output.

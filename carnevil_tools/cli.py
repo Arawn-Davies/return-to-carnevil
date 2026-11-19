@@ -136,6 +136,22 @@ def _disasm(path, base, start, count):
     return 0
 
 
+def _verify(partition):
+    """Check a partition's files against the game's own FILESYS.CHK table."""
+    if not os.path.isfile(partition):
+        return _missing(partition)
+    try:
+        result = disk.verify_files(partition)
+    except disk.DiskFormatError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"{len(result.matched)} of {result.listed} listed files match")
+    print(f"{len(result.missing)} listed files are not on the partition")
+    for name in result.mismatched:
+        print(f"mismatch: {name}")
+    return 1 if result.mismatched else 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="carnevil_tools")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -145,6 +161,8 @@ def main(argv=None):
     extract = sub.add_parser("extract", help="extract the files of a partition")
     extract.add_argument("partition")
     extract.add_argument("-o", "--out", required=True, metavar="DIR")
+    verify = sub.add_parser("verify", help="check a partition's files against FILESYS.CHK")
+    verify.add_argument("partition")
     census = sub.add_parser("census", help="count the instructions of an EXE image")
     census.add_argument("exe")
     funcs = sub.add_parser("functions", help="discover the functions of an EXE image")
@@ -160,6 +178,8 @@ def main(argv=None):
 
     if args.command == "disasm":
         return _disasm(args.file, args.base, args.start, args.count)
+    if args.command == "verify":
+        return _verify(args.partition)
     if args.command == "census":
         return _census(args.exe)
     if args.command == "functions":

@@ -7,6 +7,13 @@ result: text bounds, functions (address, size, name, sources), jump tables
 (the `jr`, the table address, the targets) and the unreached ranges. Counts and
 addresses only.
 
+Re-run in Task 5b on the chain-extracted GAME.EXE (SHA-256 f9455ce8...d3a6,
+`disk-format.md`): `config/game.functions.toml` is byte-for-byte unchanged
+from the run on the earlier, contiguously extracted file (no function added or
+removed), and the printed numbers below are unchanged. The corrected bytes
+(0x801A3FF8 to 0x801A4224) are data, past the 16-byte code island at
+0x801A355C.
+
 Entry: 0x800C4000 (the load address).
 
 ## Result in one paragraph

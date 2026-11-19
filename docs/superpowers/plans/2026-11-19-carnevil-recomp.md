@@ -18,7 +18,7 @@
 - The repo is published privately (GitHub `origin`, mirror `mirror`) on a BYOCHD basis: it ships no copyrighted game material, and users bring their own CHD. Implementers never `git push`; pushes happen only on the user's say-so. No Claude attribution in commits.
 - Nothing is installed on the Mac. Python tools use the stdlib only and run with the existing `python3`. Anything else runs in the Linux container (`ssh root@<host> 'pct exec <id> -- su roms -c "…"'`), where apt installs are fine.
 - Never run `head` or `tail`. Never print secrets.
-- One supported game revision: `GAME.EXE` SHA-256 `47aea64a3e5d15c15f28b3907294e706f078a4e9a47c422f551f420d9ba7da9e` (from `carnevil.chd`, data SHA1 `ba32b7ef9721d730ce58bd753d47fb947b6ae9b6`). Tools refuse other hashes.
+- One supported game revision: `GAME.EXE` SHA-256 `f9455ce801d2e5c26a7b6e00eff88efa573deb7ab15fa29f9c90100623bfd3a6` (from `carnevil.chd`, data SHA1 `ba32b7ef9721d730ce58bd753d47fb947b6ae9b6`). Tools refuse other hashes.
 - Other pinned hashes: `DIAG.EXE` `38b2810864c85d6971cedc3a6b0e507c8c6d593e4d7c355c880f91dbcaaaa2b9`; `boot.u32` = `carnevil1_9.u32` `05346e09d90a8e5aadc5e0aae8bd53b80816e96ea1e649ba548e4c6b07dac4a6`.
 - Build order (user's decision): macOS first (M1–M5 end in a playable Mac build), then Linux x86-64 native and WSL2 on the Linux PC (M6), then PS4 (M7 only).
 - Tests that need game data read `CARNEVIL_WORK` (default `/Volumes/archive/reincarnevilation/work`) and **skip** when it is missing. Unit tests use synthetic fixtures built in the test.
@@ -74,7 +74,7 @@ Format reference: `scripts/split_raw_img.py` and `scripts/split_partition.py` in
   - `test_extract_rejects_path_escape`: build a synthetic partition (helper in the test, using the documented layout) whose file names are `../evil`, `a/b` and `ok.bin`; `extract_files` must raise `DiskFormatError` or write only inside `out_dir` with the separators replaced by `_`; assert no file exists outside `out_dir`.
   - `test_truncated_partition_raises`: a synthetic partition cut in half raises `DiskFormatError` and leaves `out_dir` empty.
   - `test_roundtrip_synthetic`: three files of known bytes come back byte-identical.
-  - `test_part0_matches_reference` (`@requires_gamedata`): `list_files(work/parts/part0)` has 1,356 entries; extracting to a temp dir gives `GAME.EXE` with SHA-256 `47aea64a…da9e` and `DIAG.EXE` `38b28108…a2b9`.
+  - `test_part0_matches_reference` (`@requires_gamedata`): `list_files(work/parts/part0)` has 1,356 entries; extracting to a temp dir gives `GAME.EXE` with SHA-256 `f9455ce8…d3a6` and `DIAG.EXE` `38b28108…a2b9`.
   - `test_partition_table` (`@requires_gamedata`): `read_partition_table(work/carnevil.raw)` returns 17 partitions; partition 0 size is 98,816,000 bytes.
   - `test_cli_without_data_explains`: running the CLI on a missing path exits non-zero and prints the expected data location.
 - [ ] **Step 2: Run** `python3 -m unittest discover -s tests -v`. Expected: import errors.

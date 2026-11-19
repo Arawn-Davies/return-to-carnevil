@@ -122,6 +122,13 @@ loader. Checked:
 
 ## Finding: the last block of the extracted GAME.EXE is wrong
 
+**Fixed by Task 5b.** `carnevil_tools/disk.py` now follows each file's block chain
+(`disk-format.md`). The corrected GAME.EXE has SHA-256
+`f9455ce801d2e5c26a7b6e00eff88efa573deb7ab15fa29f9c90100623bfd3a6`; its header checksum
+matches (0x2CAE3F54) and its bytes from offset 8 equal the RAM image at 0x800C4000 in full.
+Its last block is block 18828, not 16351. DIAG.EXE is unchanged. Of the other files only
+`HSTD02.WMS` and `HSTD05.WMS` changed. The text below is the finding as it was made.
+
 The RAM image at GAME.EXE's entry equals `part0_files/GAME.EXE` except in its last 556 bytes,
 0x801A3FF8 to 0x801A4224 (file offsets 917,504 to 918,060), where 315 bytes (in 113 words)
 differ, the first at 0x801A3FF8 and the last at 0x801A4217. 917,504

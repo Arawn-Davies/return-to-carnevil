@@ -23,7 +23,7 @@ python3 -m carnevil_tools extract work/parts/part0 -o work/part0_files
 
 Point the tools and tests at that folder with `CARNEVIL_WORK=/path/to/work`. One revision is
 supported for now: the `GAME.EXE` whose SHA-256 is
-`47aea64a3e5d15c15f28b3907294e706f078a4e9a47c422f551f420d9ba7da9e`. Other revisions are refused
+`f9455ce801d2e5c26a7b6e00eff88efa573deb7ab15fa29f9c90100623bfd3a6`. Other revisions are refused
 with a message showing both hashes.
 
 ## Running the tests

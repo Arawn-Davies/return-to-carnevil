@@ -6,13 +6,18 @@ import sys
 import tempfile
 import unittest
 
-from carnevil_tools import disk
+from carnevil_tools import disk, exe
 from gamedata import requires_file, work_path
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# Hashes of part0's files extracted by following the block chain (see docs/analysis/disk-format.md).
+GAME_EXE_SHA256 = "f9455ce801d2e5c26a7b6e00eff88efa573deb7ab15fa29f9c90100623bfd3a6"
+DIAG_EXE_SHA256 = "38b2810864c85d6971cedc3a6b0e507c8c6d593e4d7c355c880f91dbcaaaa2b9"
+
 BASE = 70656  # partition data base, see docs/analysis/disk-format.md
 BLOCK = 4096
+FAT = 67 * 512  # block-chain table: u16 entry for block b at FAT + 2 * (b - 3)
 
 
 def _encode_name(name):
@@ -23,27 +28,59 @@ def _encode_name(name):
     return bytes(out)
 
 
-def build_partition(files):
-    """Build a synthetic partition from [(name, bytes)] using the documented layout.
+def build_partition(files, fat_overrides=None):
+    """Build a synthetic partition using the documented layout.
 
-    Directory is block 3; file data follows from block 4, one block-aligned
-    region per file.
+    `files` is [(name, bytes)] or [(name, bytes, [block, ...])]. Directory is
+    block 3; without a block list a file gets the next free contiguous blocks
+    from block 4. The chain table links each file's blocks in order and ends
+    the chain with 0. `fat_overrides` ({block: link}) is applied last.
     """
     entries = b""
-    data_blocks = []
+    placed = []
+    used = {3}
     next_block = 4
-    for name, payload in files:
+    for item in files:
+        name, payload = item[0], item[1]
         padded = payload + b"\x00" * (-len(payload) % 4)
-        entries += _encode_name(name) + struct.pack("<iii", len(padded) // 4, 0, next_block)
-        data_blocks.append((next_block, padded))
-        next_block += -(-len(padded) // BLOCK) or 1
+        count = -(-len(padded) // BLOCK) or 1
+        if len(item) > 2:
+            blocks = list(item[2])
+        else:
+            while any(b in used for b in range(next_block, next_block + count)):
+                next_block += 1
+            blocks = list(range(next_block, next_block + count))
+        used.update(blocks)
+        entries += _encode_name(name) + struct.pack("<iii", len(padded) // 4, 0, blocks[0])
+        placed.append((blocks, padded))
     entries += _encode_name("") + struct.pack("<iii", 0, 0, 0)  # terminator
-    image = bytearray(BASE + next_block * BLOCK)
+    image = bytearray(BASE + (max(used) + 1) * BLOCK)
     image[BASE + 3 * BLOCK:BASE + 3 * BLOCK + len(entries)] = entries
-    for block, padded in data_blocks:
-        start = BASE + block * BLOCK
-        image[start:start + len(padded)] = padded
+    links = {}
+    for blocks, padded in placed:
+        for i, block in enumerate(blocks):
+            start = BASE + block * BLOCK
+            piece = padded[i * BLOCK:(i + 1) * BLOCK]
+            image[start:start + len(piece)] = piece
+            links[block] = blocks[i + 1] if i + 1 < len(blocks) else 0
+    links.update(fat_overrides or {})
+    for block, link in links.items():
+        struct.pack_into("<H", image, FAT + 2 * (block - 3), link)
     return bytes(image)
+
+
+def build_checksum_table(records):
+    """Build a FILESYS.CHK from [(name, size, checksum)]: 0x126-byte records, then
+    the POSIX cksum of all records. Use an even number of records: file sizes are
+    whole words, and an odd count would leave the table 2 bytes short of one."""
+    out = bytearray()
+    for name, size, checksum in records:
+        rec = bytearray(0x126)
+        struct.pack_into("<I", rec, 0x1A, size)
+        rec[0x1E:0x1E + len(name)] = name.encode("ascii")
+        struct.pack_into("<I", rec, 0x122, checksum)
+        out += rec
+    return bytes(out) + struct.pack("<I", exe.posix_cksum(bytes(out)))
 
 
 def build_raw(sizes_in_sectors):
@@ -125,6 +162,71 @@ class SyntheticPartitionTests(unittest.TestCase):
             disk.extract_files(part, out)
         self.assertEqual(os.listdir(out) if os.path.isdir(out) else [], [])
 
+    def assert_refused(self, files, fat_overrides):
+        part = self.path("bad")
+        with open(part, "wb") as f:
+            f.write(build_partition(files, fat_overrides))
+        out = self.path("out")
+        with self.assertRaises(disk.DiskFormatError):
+            disk.extract_files(part, out)
+        self.assertEqual(os.listdir(out) if os.path.isdir(out) else [], [])
+
+    def test_noncontiguous_file_follows_chain(self):
+        a = [os.urandom(BLOCK) for _ in range(3)]
+        b = [os.urandom(BLOCK) for _ in range(2)] + [os.urandom(100)]
+        part = self.write_partition([
+            ("A.BIN", b"".join(a), [9, 5, 7]),
+            ("B.BIN", b"".join(b), [4, 8, 6]),
+        ])
+        out = self.path("out")
+        disk.extract_files(part, out)
+        with open(os.path.join(out, "A.BIN"), "rb") as f:
+            self.assertEqual(f.read(), b"".join(a))
+        with open(os.path.join(out, "B.BIN"), "rb") as f:
+            self.assertEqual(f.read(), b"".join(b))
+        entries = disk.list_files(part)
+        self.assertEqual([e.offset for e in entries], [BASE + 9 * BLOCK, BASE + 4 * BLOCK])
+
+    def test_chain_loop_raises(self):
+        self.assert_refused([("A.BIN", os.urandom(3 * BLOCK), [4, 5, 6])], {5: 4})
+
+    def test_chain_link_out_of_range_raises(self):
+        self.assert_refused([("A.BIN", os.urandom(3 * BLOCK), [4, 5, 6])], {5: 5000})
+
+    def test_chain_shorter_than_size_raises(self):
+        self.assert_refused([("A.BIN", os.urandom(3 * BLOCK), [4, 5, 6])], {5: 0})
+
+    def test_verify_against_checksum_table(self):
+        a, b = os.urandom(5000), os.urandom(300)
+        table = build_checksum_table([
+            ("A.BIN", len(a), exe.posix_cksum(a)),
+            ("B.BIN", len(b), exe.posix_cksum(b) ^ 1),
+            ("C.BIN", 4, 0),
+            ("D.BIN", 4, 0),
+        ])
+        part = self.write_partition([("A.BIN", a), ("B.BIN", b), ("FILESYS.CHK", table)])
+        result = disk.verify_files(part)
+        self.assertEqual(result.listed, 4)
+        self.assertEqual(result.matched, ["A.BIN"])
+        self.assertEqual(result.mismatched, ["B.BIN"])
+        self.assertEqual(result.missing, ["C.BIN", "D.BIN"])
+
+    def test_verify_size_mismatch_counts(self):
+        a = os.urandom(400)
+        table = build_checksum_table([("A.BIN", len(a) + 4, exe.posix_cksum(a)), ("C.BIN", 4, 0)])
+        part = self.write_partition([("A.BIN", a), ("FILESYS.CHK", table)])
+        self.assertEqual(disk.verify_files(part).mismatched, ["A.BIN"])
+
+    def test_verify_rejects_damaged_table(self):
+        table = bytearray(build_checksum_table([("A.BIN", 4, 0), ("C.BIN", 4, 0)]))
+        table[0x40] ^= 1
+        part = self.write_partition([("A.BIN", b"AAAA"), ("FILESYS.CHK", bytes(table))])
+        with self.assertRaises(disk.DiskFormatError):
+            disk.verify_files(part)
+        part = self.write_partition([("A.BIN", b"AAAA")], name="nochk")
+        with self.assertRaises(disk.DiskFormatError):
+            disk.verify_files(part)
+
     def test_directory_loop_raises(self):
         # A blank-named entry pointing at its own block must not loop forever.
         entries = _encode_name("") + struct.pack("<iii", 3, 0, 0)
@@ -200,6 +302,26 @@ class CliTests(unittest.TestCase):
             with open(os.path.join(out, "X.BIN"), "rb") as f:
                 self.assertEqual(f.read(), b"1234")
 
+    def test_cli_verify_reports_mismatches(self):
+        good, bad = b"GOOD", b"BAD!"
+        table = build_checksum_table([
+            ("GOOD.BIN", 4, exe.posix_cksum(good)),
+            ("BAD.BIN", 4, exe.posix_cksum(bad) ^ 1),
+            ("GONE.BIN", 4, 0),
+            ("LOST.BIN", 4, 0),
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            part = os.path.join(tmp, "part0")
+            with open(part, "wb") as f:
+                f.write(build_partition([("GOOD.BIN", good), ("BAD.BIN", bad),
+                                         ("FILESYS.CHK", table)]))
+            r = self.run_cli("verify", part)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("1 of 4 listed files match", r.stdout)
+        self.assertIn("2 listed files are not on the partition", r.stdout)
+        self.assertIn("mismatch: BAD.BIN", r.stdout)
+        self.assertNotIn("GOOD.BIN", r.stdout)
+
 
 def sha256(path):
     h = hashlib.sha256()
@@ -222,10 +344,31 @@ class GameDataTests(unittest.TestCase):
         self.assertEqual(len(disk.list_files(part0)), 1356)
         with tempfile.TemporaryDirectory() as out:
             disk.extract_files(part0, out)
-            self.assertTrue(sha256(os.path.join(out, "GAME.EXE")).startswith("47aea64a"))
-            self.assertTrue(sha256(os.path.join(out, "GAME.EXE")).endswith("da9e"))
-            self.assertTrue(sha256(os.path.join(out, "DIAG.EXE")).startswith("38b28108"))
-            self.assertTrue(sha256(os.path.join(out, "DIAG.EXE")).endswith("a2b9"))
+            self.assertEqual(sha256(os.path.join(out, "GAME.EXE")), GAME_EXE_SHA256)
+            self.assertEqual(sha256(os.path.join(out, "DIAG.EXE")), DIAG_EXE_SHA256)
+
+    @requires_file("parts", "part0")
+    @requires_file("mame", "dumps", "ram-at-game-entry.bin")
+    def test_game_exe_matches_loader(self):
+        # The image the boot ROM's loader placed at 0x800C4000 (physical 0xC4000)
+        # is GAME.EXE from file offset 8 on.
+        with tempfile.TemporaryDirectory() as out:
+            disk.extract_files(work_path("parts", "part0"), out)
+            with open(os.path.join(out, "GAME.EXE"), "rb") as f:
+                image = f.read()[8:]
+        with open(work_path("mame", "dumps", "ram-at-game-entry.bin"), "rb") as f:
+            f.seek(0xC4000)
+            loaded = f.read(len(image))
+        self.assertEqual(len(image), 918052)
+        self.assertTrue(image == loaded, "extracted GAME.EXE differs from the loaded image")
+
+    @requires_file("parts", "part0")
+    def test_part0_matches_checksum_table(self):
+        result = disk.verify_files(work_path("parts", "part0"))
+        self.assertEqual(result.listed, 1504)
+        self.assertEqual(len(result.matched), 1339)
+        self.assertEqual(result.mismatched, [])
+        self.assertEqual(len(result.missing), 165)
 
 
 class GameDataSkipTests(unittest.TestCase):
@@ -239,7 +382,7 @@ class GameDataSkipTests(unittest.TestCase):
             )
         out = r.stdout + r.stderr
         self.assertEqual(r.returncode, 0, out)
-        self.assertEqual(out.count("skipped 'game data file not found"), 2, out)
+        self.assertEqual(out.count("skipped 'game data file not found"), 4, out)
         self.assertNotIn("ERROR", out)
 
 
