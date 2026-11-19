@@ -78,7 +78,7 @@ def run_driver(raw, overlay, commands=()):
     answer list is [the message]."""
     res = subprocess.run([build_driver(), raw, overlay or "-"],
                          input="".join(c + "\n" for c in commands), capture_output=True,
-                         text=True)
+                         text=True, timeout=120)
     lines = res.stdout.splitlines()
     if res.returncode not in (0, 1) or res.stderr or not lines:
         raise AssertionError(f"driver status {res.returncode}: {res.stderr}")
@@ -118,10 +118,11 @@ def encode_name(name):
     return b"".join(raw[i:i + 4][::-1] for i in range(0, 12, 4))
 
 
-def fs_partition(entries, files, nblocks=40):
+def fs_partition(entries, files, nblocks=40, fat_overrides=None):
     """A partition of `nblocks` blocks: `entries` is the root directory (block 3), a list of
     (name or None for a free entry, length in bytes, first block); `files` maps a block list
-    to its bytes. Blocks no file and not the directory uses are free."""
+    to its bytes. Blocks no file and not the directory uses are free. `fat_overrides`
+    ({block: entry}) is applied last."""
     part = bytearray((BASE_SECTOR + 8 * nblocks) * SECTOR)
     struct.pack_into("<I", part, 2 * SECTOR, HOME_MAGIC)
     used = {3: 0}
@@ -131,6 +132,7 @@ def fs_partition(entries, files, nblocks=40):
             piece = payload[i * BLOCK:(i + 1) * BLOCK]
             part[start:start + len(piece)] = piece
             used[b] = blocks[i + 1] if i + 1 < len(blocks) else 0
+    used.update(fat_overrides or {})
     for b in range(3, nblocks):
         struct.pack_into("<H", part, FAT + 2 * (b - 3), used.get(b, 1))
     d = (BASE_SECTOR + 8 * 3) * SECTOR
@@ -397,6 +399,82 @@ class SyntheticFileSystemTests(DriverTestCase):
         d = (BASE_SECTOR + 8 * 3) * SECTOR
         self.assertEqual(struct.unpack_from("<I", part, d + 4092)[0], 4)
         self.assertEqual([fat_entry(part, b) for b in (4, 5, 6)], [0, 0, 1])
+
+
+class DamagedInputTests(DriverTestCase):
+    """A damaged entry, chain or directory link gives the documented error or end-of-file
+    value, promptly, and no sanitizer report (run_driver fails on any stderr)."""
+
+    STAT = "stat 0 %d 0 31726 9550"
+
+    def run_on(self, part, commands):
+        """The commands on a fresh image and overlay (self.overlay)."""
+        self.runs = getattr(self, "runs", 0) + 1
+        self.overlay = self.path(f"bad{self.runs}.ovl")
+        return self.opened(self.write(f"bad{self.runs}.raw", fs_image(part)), self.overlay,
+                           commands)
+
+    def test_bad_first_block(self):
+        for first in (0, 2, 30000):
+            with self.subTest(first=first):
+                part = fs_partition([("BAD.BIN", 8192, first)], [])
+                lines = self.run_on(part, [
+                    "open BAD.BIN 0", "rd 0 4", "seek 0 4096 0", "rd 0 4", "close 0",
+                    "open BAD.BIN 2", "seek 0 4096 0", "wr 0 4 1", "seek 0 0 0", "wr 0 4 1",
+                    "rd 0 8", "close 0", "hash BAD.BIN", "stat BAD.BIN"])
+                self.assertEqual(lines, [
+                    "open 0", f"rd {EOF} " + sha(b""), "seek 4096", f"rd {EOF} " + sha(b""),
+                    "close 0", "open 0", "seek 4096", "wr -1", "seek 0", "wr -1",
+                    f"rd {EOF} " + sha(b""), "close 0", "hash 0 0 " + sha(b""),
+                    self.STAT % 8192])
+
+    def test_chain_that_loops(self):
+        data = random.Random(4).randbytes(2 * BLOCK)
+        for loop in ({5: 4}, {5: 5}):
+            with self.subTest(loop=loop):
+                # 5 blocks long by its entry; the chain 4, 5 then back into itself
+                part = fs_partition([("LOOP.BIN", 5 * BLOCK, 4)], [([4, 5], data)],
+                                    fat_overrides=loop)
+                lines = self.run_on(part, [
+                    "hash LOOP.BIN", "open LOOP.BIN 2", "seek 0 16384 0", "rd 0 4",
+                    "seek 0 8192 0", "wr 0 4 1", "seek 0 4096 0", "rd 0 8", "close 0",
+                    "unlink LOOP.BIN", "stat LOOP.BIN"])
+                self.assertEqual(lines, [
+                    "hash 0 8192 " + sha(data), "open 0", "seek 16384", f"rd {EOF} " + sha(b""),
+                    "seek 8192", "wr -1", "seek 4096", "rd 8 " + sha(data[4096:4104]),
+                    "close 0", "unlink 0", "stat -1 0 0 0 0"])
+                with open(self.overlay, "rb") as f:
+                    self.assertGreater(len(f.read()), OVERLAY_HEADER)
+
+    def test_chain_leaves_the_partition(self):
+        data = random.Random(5).randbytes(2 * BLOCK)
+        for link in (30000, 40, 2, 1):
+            with self.subTest(link=link):
+                part = fs_partition([("OUT.BIN", 3 * BLOCK, 4)], [([4, 5], data)],
+                                    fat_overrides={5: link})
+                lines = self.run_on(part, [
+                    "hash OUT.BIN", "open OUT.BIN 0", "seek 0 8192 0", "rd 0 4", "close 0"])
+                self.assertEqual(lines, ["hash 0 8192 " + sha(data), "open 0", "seek 8192",
+                                         f"rd {EOF} " + sha(b""), "close 0"])
+
+    def test_bad_directory_link(self):
+        for link in (3, 2, 30000, 40):
+            with self.subTest(link=link):
+                part = bytearray(fs_partition([("A.BIN", 4, 4)], [([4], b"AAAA")]))
+                struct.pack_into("<I", part, (BASE_SECTOR + 8 * 3) * SECTOR + 4092, link)
+                lines = self.run_on(bytes(part), [
+                    "stat A.BIN", "stat NONE.BIN", "open A.BIN 0", "open NEW.BIN 1",
+                    "unlink A.BIN", "rename A.BIN B.BIN"])
+                self.assertEqual(lines, ["stat -1 0 0 0 0", "stat -1 0 0 0 0", "open -1",
+                                         "open -1", "unlink -1", "rename -1"])
+
+    def test_directory_blocks_that_link_in_a_circle(self):
+        part = bytearray(fs_partition([("A.BIN", 4, 4)], [([4], b"AAAA")],
+                                      fat_overrides={5: 0}))
+        struct.pack_into("<I", part, (BASE_SECTOR + 8 * 3) * SECTOR + 4092, 5)
+        struct.pack_into("<I", part, (BASE_SECTOR + 8 * 5) * SECTOR + 4092, 3)
+        self.assertEqual(self.run_on(bytes(part), ["stat A.BIN", "stat NONE.BIN"]),
+                         ["stat -1 0 0 0 0", "stat -1 0 0 0 0"])
 
 
 @requires_file("carnevil.raw")

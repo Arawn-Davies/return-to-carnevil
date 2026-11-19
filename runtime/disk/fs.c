@@ -24,6 +24,10 @@
  * - the date/time word written is the constant FS_DATE << 16 | FS_TIME;
  * - a seek outside the file returns FS_ESEEK and leaves the position; the loader returns a
  *   stale local (inferred in loader-services.md).
+ * Damaged input never indexes outside the chain table and never loops: open checks the
+ * file's chain (data blocks, no block twice) up to its length, reads stop where the checked
+ * part ends (the bytes so far, or FS_EOF), writes there return -1, and a directory link
+ * outside the partition or back to a block already read makes the call fail with -1.
  * A handle keeps the length it saw, so two handles on one file do not see each other's
  * growth. Handles opened before img_open are closed by it (fs_unmount).
  */
@@ -70,10 +74,12 @@ struct handle {
     uint32_t length;    /* words */
     uint32_t pos;       /* words */
     uint32_t cur, cur_index; /* a block of the file and its index in the chain (cur 0: none) */
+    uint32_t valid;     /* leading blocks of the chain checked at open: data blocks, no repeat */
 };
 
 static struct handle handles[FS_HANDLES];
 static uint8_t dirbuf[BLOCK], databuf[BLOCK];
+static uint8_t seen[(MAX_BLOCKS + 7) / 8]; /* one bit per block, for the walks that check */
 
 static uint32_t get32(const uint8_t *p)
 {
@@ -121,8 +127,12 @@ static int data_block(uint32_t b)
     return b >= FIRST_BLOCK && b < fs.nblocks;
 }
 
+/* The chain entry of b; END for a number that is not a data block, so a damaged link can
+ * never index outside the table. */
 static uint32_t fat_get(uint32_t b)
 {
+    if (!data_block(b))
+        return END;
     uint32_t at = 2 * (b - FIRST_BLOCK);
     return (uint32_t)fs.fat[at] | (uint32_t)fs.fat[at + 1] << 8;
 }
@@ -169,6 +179,21 @@ static void free_chain(uint32_t b)
         fat_set(b, FREE);
         b = next;
     }
+}
+
+/* How many of the first `want` blocks of the chain from `first` are data blocks met for the
+ * first time: the chain is good up to there, and a damaged link (outside the partition, or
+ * back into the file) ends it. */
+static uint32_t chain_valid(uint32_t first, uint32_t want)
+{
+    memset(seen, 0, sizeof seen);
+    uint32_t b = first, n = 0;
+    while (n < want && data_block(b) && !(seen[b / 8] >> (b % 8) & 1)) {
+        seen[b / 8] |= (uint8_t)(1u << (b % 8));
+        n++;
+        b = fat_get(b);
+    }
+    return n;
 }
 
 static int read_block(uint32_t b, uint8_t *buf)
@@ -224,15 +249,18 @@ struct where {
 };
 
 /* Scans the directory: the entry holding key (when key is not NULL), the first free entry,
- * and the last directory block. -1 when the directory is broken. Leaves dirbuf undefined. */
+ * and the last directory block. -1 when the directory is broken: a link outside the
+ * partition, or back to a directory block already read. Leaves dirbuf undefined. */
 static int dir_scan(const char *key, struct where *found, struct where *free_slot,
                     uint32_t *last)
 {
     found->block = free_slot->block = 0;
+    memset(seen, 0, sizeof seen);
     uint32_t b = FIRST_BLOCK;
     for (uint32_t steps = 0; steps < fs.nblocks; steps++) {
-        if (read_block(b, dirbuf) != 0)
+        if (!data_block(b) || seen[b / 8] >> (b % 8) & 1 || read_block(b, dirbuf) != 0)
             return -1;
+        seen[b / 8] |= (uint8_t)(1u << (b % 8));
         for (uint32_t s = 0; s < DIR_SLOTS; s++) {
             const uint8_t *e = dirbuf + s * DIR_ENTRY;
             char k[NAME_LEN];
@@ -357,7 +385,8 @@ int fs_open(const char *name, int mode)
     if (read_block(w.block, dirbuf) != 0)
         return -1;
     const uint8_t *e = dirbuf + w.slot * DIR_ENTRY;
-    struct handle f = {1, flags[mode], w.block, w.slot, get32(e + 20), get32(e + 12), 0, 0, 0};
+    struct handle f = {1, flags[mode], w.block, w.slot, get32(e + 20), get32(e + 12), 0, 0, 0,
+                       0};
     if (f.length > MAX_WORDS)
         return -1;
     if (mode == 1 && (f.length || f.first)) {
@@ -367,13 +396,19 @@ int fs_open(const char *name, int mode)
         if (entry_update(&f) != 0 || fat_sync() != 0)
             return -1;
     }
+    /* A damaged entry or chain still opens, as the loader's does; reads and writes stop
+     * where the checked part of the chain ends. */
+    f.valid = chain_valid(f.first, (f.length + BLOCK_WORDS - 1) / BLOCK_WORDS);
     handles[h] = f;
     return h;
 }
 
-/* The block at index in f's chain, walking from the cached block when it is not past it. */
+/* The block at index in f's chain, walking from the cached block when it is not past it;
+ * 0 beyond the part of the chain checked at open (or extended by fs_write since). */
 static uint32_t walk(struct handle *f, uint32_t index)
 {
+    if (index >= f->valid)
+        return 0;
     uint32_t b = f->first, i = 0;
     if (f->cur && f->cur_index <= index) {
         b = f->cur;
@@ -439,7 +474,7 @@ int fs_write(int h, const void *buf, uint32_t n)
     if (words > MAX_WORDS - f->pos || n > (uint32_t)0x7FFFFFFF)
         return -1;
     const uint8_t *p = buf;
-    int ok = 1;
+    int ok = 1, changed = 0;
     while (done < words) {
         uint32_t index = f->pos / BLOCK_WORDS, off = f->pos % BLOCK_WORDS;
         uint32_t chunk = BLOCK_WORDS - off, have = (f->length + BLOCK_WORDS - 1) / BLOCK_WORDS;
@@ -450,20 +485,19 @@ int fs_write(int h, const void *buf, uint32_t n)
         if (index < have) {
             b = walk(f, index);
         } else {
-            /* pos <= length, so this is the block just after the file's last one: the one
-             * the chain already links there, if any, else a new one */
+            /* pos <= length, so this is the block just after the file's last one: always a
+             * new block, since a link the chain already has past the length is not trusted
+             * (it could lead back into the file); such a tail is left as it was */
             uint32_t prev = index ? walk(f, index - 1) : 0;
-            uint32_t next = index ? (prev ? fat_get(prev) : 0) : f->first;
             fresh = 1;
-            if (index && !prev)
-                b = 0;
-            else if (data_block(next))
-                b = next;
-            else if ((b = allocate()) != 0) {
+            b = index && !prev ? 0 : allocate();
+            if (b) {
                 if (prev)
                     fat_set(prev, b);
                 else
                     f->first = b;
+                f->valid = index + 1;
+                changed = 1;
             }
         }
         if (!b) {
@@ -493,8 +527,10 @@ int fs_write(int h, const void *buf, uint32_t n)
         f->pos += chunk;
         if (f->pos > f->length)
             f->length = f->pos;
+        changed = 1;
     }
-    if (entry_update(f) != 0 || fat_sync() != 0)
+    /* nothing written and nothing allocated: the entry is left as it was */
+    if (changed && (entry_update(f) != 0 || fat_sync() != 0))
         ok = 0;
     return ok ? (int)n : -1;
 }
