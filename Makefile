@@ -36,6 +36,10 @@ INCLUDE := $(ROOT)/runtime/include
 CORE_SRCS := $(ROOT)/runtime/core/call.c $(ROOT)/runtime/core/fpu.c \
              $(ROOT)/runtime/interp/interp.c
 CORE_OBJS := $(patsubst $(ROOT)/runtime/%.c,$(BUILD)/runtime/%.o,$(CORE_SRCS))
+# the disk image, its overlay and the file system (runtime/disk/disk.h), for the runtime
+DISK_SRCS := $(ROOT)/runtime/disk/image.c $(ROOT)/runtime/disk/fs.c \
+             $(ROOT)/runtime/disk/sha256.c
+DISK_OBJS := $(patsubst $(ROOT)/runtime/%.c,$(BUILD)/runtime/%.o,$(DISK_SRCS))
 GENERATED_SRCS := $(sort $(wildcard $(GENERATED)/funcs_*.c)) $(GENERATED)/func_table.c
 GENERATED_OBJS := $(patsubst $(GENERATED)/%.c,$(BUILD)/generated/%.o,$(GENERATED_SRCS))
 
@@ -67,6 +71,7 @@ $(BUILD)/replay: $(GENERATED_OBJS) $(filter-out %/call.o,$(CORE_OBJS)) $(BUILD)/
 	$(CC) $^ -lm -o $@
 
 $(BUILD)/runtime/stub/smoke.o $(BUILD)/runtime/stub/replay.o: $(ROOT)/runtime/stub/common.h
+$(DISK_OBJS): $(ROOT)/runtime/disk/disk.h
 
 $(BUILD)/generated/%.o: $(GENERATED)/%.c $(GENERATED)/funcs.h $(INCLUDE)/recomp.h
 	@mkdir -p "$(@D)"
