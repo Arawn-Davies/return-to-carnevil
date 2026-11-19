@@ -53,9 +53,10 @@ Every fact below carries its basis:
   vector 0xBFC00000 on 4 failure paths (static, read).
 - State at entry (MAME, run 1): pc 0x800C4000, Status 0x30010401 (CU1, CU0, DE, IM2, IE, BEV
   clear, FR clear), FCSR 0x01000400, gp 0, all of the loader's handler tables empty; Config
-  K0 = 3 is read from the reset stub, since MAME does not expose Config. `_start` sets sp and FCSR (0x01000000) itself. It does **not** set Status: the game's
-  reached code has no `mtc0` at all, so it runs with the Status the loader left (static,
-  read). The game reads nothing in RAM below its image except `_start`'s copy of the slot
+  K0 = 3 is read from the reset stub, since MAME does not expose Config. `_start` sets sp and
+  FCSR (0x01000000) itself. It does **not** set Status: the game's reached code has no `mtc0`
+  at all, so it runs with the Status the loader left (static, read). The text does hold four
+  unreferenced Status helpers in unreached code (see the open questions). The game reads nothing in RAM below its image except `_start`'s copy of the slot
   table (static, MAME).
 - Interrupt handlers the game registers through the loader (static; all logged in MAME): CPU
   line 0 = VBLANK (IP6) 0x800C6030, line 3 = IOASIC (IP3) 0x8013F678, GT64010 cause bits 1 to
@@ -134,14 +135,17 @@ Each item is an assumption of the design document that M0 showed wrong or incomp
   ([hardware-usage](hardware-usage.md), question 1).
 - **Exception vectors.** The design runs "the recompiled exception handler (vector at
   0x80000180)". The vectors are the loader's slots in low RAM, jumping to the loader's handler
-  at 0x80004368 and dispatcher at 0x80004B18; `GAME.EXE` has no exception entry code, no
-  `eret` and no COP0 moves, only handlers registered through the loader
-  ([boot-handoff](boot-handoff.md), "Exceptions and interrupts").
+  at 0x80004368 and dispatcher at 0x80004B18. `GAME.EXE` has no `eret` anywhere, and its
+  reached code has no exception entry code and no COP0 moves, only handlers registered
+  through the loader ([boot-handoff](boot-handoff.md), "Exceptions and interrupts"). The only
+  COP0 moves in the text are four unreferenced Status helpers in unreached code
+  ([functions](functions.md), "Unreached ranges").
 - **Code outside `GAME.EXE`.** The design expects "boot ROM routines the game calls". The game
   calls the RAM copy of the loader, never the ROM, except the reset vector to reboot
   ([boot-handoff](boot-handoff.md)).
 - **What the boot state is for.** The design expects the runtime to need the boot ROM's state.
-  The game needs little of it: Status (it never writes it), the slot table copy, and
+  The game needs little of it: Status (its reached code never writes it), the slot table copy,
+  and
   whatever the chosen loader replacement needs (decision 4).
 
 ## Decisions for M1 and M2
@@ -155,6 +159,17 @@ These are options with a recommendation each, not decisions already taken.
   Voodoo, `cmos:` as a 32 KB byte store, the ioctl sets, the handler registrations into the
   runtime's own interrupt and exception dispatch, `break 0x409`/`0x407` and the `break 7`/`6`
   hooks.
+  - **(a2) Stand-ins plus individual slots interpreted**: as (a), but a slot whose meaning is
+    not yet read (0x038, 0x190, 0x1B8, 0x1C0, 0x1D8) runs the loader's own routine under the
+    interpreter. The interpreter then needs the loader image (from the user's `boot.u32`) and
+    the loader state that routine reads, and the hardware it reaches. By direct calls (static,
+    `hwcensus` loader analysis): 0x038, 0x190, 0x1B8 and 0x1C0 each reach 46 to 57 loader
+    functions, the IDE task file and bus-master DMA, the IOASIC and the LEDs, with 3 of those
+    functions making indirect calls (the driver table); 0x1D8 reaches 5 functions and no
+    hardware. So for the four file-system slots the interpreter would need IDE emulation and
+    the loader's file-system and descriptor state kept consistent with whatever the native
+    file stand-ins do, which they would not maintain on their own. For 0x1D8 the cost is only
+    the loader state it reads, which was not traced.
 - **(b) Recompile the loader too** and emulate the hardware beneath it at register level:
   IDE, GT64010 (timers, cause/mask, DMA, PCI), IOASIC (sound latches, inputs, UART, interrupt
   control), CMOS with its write enable, the CS3 control registers.
@@ -178,7 +193,9 @@ Weighed against the measurements:
   natively, reproducing the loader's ABI: the line map (IP6 → line 0, IP3 → line 3, …), a0 =
   the Cause IP bit for CPU-line handlers, (Cause, frame) for GT64010 and exception handlers,
   and the frame layout the FPU-emulation handler 0x80150860 reads (Cause +0x180, EPC +0x110,
-  FPRs +0x218, FCSR +0x31C). No COP0 emulation is needed, since the game uses none. Under (b)
+  FPRs +0x218, FCSR +0x31C). No COP0 emulation is needed for the game's reached code, which
+  has no COP0 moves; the four unreferenced Status helpers would need Status emulated if they
+  turn out to be reached (open questions). Under (b)
   the recompiled vector code runs, so the runtime must emulate COP0 (Status, Cause, EPC,
   `eret`), the GT64010 cause register and the IOASIC interrupt registers, and the loader's
   debug monitor for `break`. Under (c) every VBLANK and IOASIC interrupt runs interpreted
@@ -192,11 +209,18 @@ Weighed against the measurements:
   DMA0-complete handler that ran) must be understood and reproduced (MAME; what DMA0 moves is
   not known).
 
-**Recommendation: (a).** It keeps the runtime to the hardware the game itself uses, removes
-the hottest MMIO traffic measured, and needs no COP0 or debug-monitor emulation. Its risk is
-semantic: the unconfirmed slots and ioctl sets must be read first, and each stand-in checked
-against MAME by logging the service's arguments and results at the slot in a MAME run. (c) is
-not worth keeping as a fallback, since it brings back all of (b)'s hardware.
+**Recommendation: (a), with (a2) as the fallback for individual slots.** (a) keeps the
+runtime to the hardware the game itself uses, removes the hottest MMIO traffic measured, and
+needs no COP0 or debug-monitor emulation for reached code. Its risk is semantic: the
+unconfirmed slots and ioctl sets must be read first, and each stand-in checked against MAME
+by logging the service's arguments and results at the slot in a MAME run. Reading a slot and
+writing its stand-in is the plan; interpreting it (a2) is the fallback where reading stalls,
+and is cheap only for a slot like 0x1D8 that reaches no hardware. For the four file-system
+slots it would bring back IDE emulation and the loader's file-system state, so they should
+be read rather than interpreted. This agrees with `boot-handoff.md` (recommendations 2 and 4:
+interpreting loader code is the fallback, and needs the loader image and its live state) and
+`hardware-usage.md` (recommendation 5). Interpreting the whole loader (c) is not worth
+keeping, since it brings back all of (b)'s hardware.
 
 ### 2. Where to intercept Voodoo traffic
 
@@ -229,8 +253,10 @@ From the census of reached code ([functions](functions.md)):
   `nmsub.s` 6, `nmadd.s` 1, `recip.s` 1. FP condition codes 1 and 2 (4 uses, one function at
   0x80155B18); everything else uses cc0. No indexed FP loads or stores, no `pref`, no
   `movX.fmt` (static).
-- Single and double FP with FR = 0 (Status at entry, MAME; never changed by the game,
-  static): doubles live in even/odd register pairs. Whether N64Recomp's FPU model handles
+- Single and double FP with FR = 0 (Status at entry, MAME; never changed by the game's
+  reached code, static): doubles live in even/odd register pairs. The four unreferenced
+  Status helpers set or flip FR (open questions); if they are ever reached, the FPU model
+  must follow FR at run time. Whether N64Recomp's FPU model handles
   FR = 0 has to be checked (inferred risk).
 - Likely branches: 858 in reached code (`beql` 325, `bnel` 323, `bc1tl` 102, `bc1fl` 71, the
   rest 37). No control transfer sits in a delay slot (static).
@@ -256,9 +282,9 @@ From the census of reached code ([functions](functions.md)):
 
 From `config/boot_state.toml`:
 
-- Registers: pc 0x800C4000 and Status 0x30010401 matter for the whole run (FR = 0; the game
-  never writes Status). sp and FCSR matter only until `_start` sets them; gp is unused; ra
-  0x8000EBE8 matters only if `main` returns (the loader would then report it and stop).
+- Registers: pc 0x800C4000 and Status 0x30010401 matter for the whole run (FR = 0; the
+  game's reached code never writes Status). sp and FCSR matter only until `_start` sets them;
+  gp is unused; ra 0x8000EBE8 matters only if `main` returns (the loader would then report it and stop).
 - The stub block: the runtime either places the loader's 576-byte slot table (from the user's
   `boot.u32`, ROM 0xBFC00F20) at physical 0 so that `_start`'s copy is faithful, or binds the
   slots at recompile time and lets `_start` copy whatever is there. With (a) of decision 1 the
@@ -267,7 +293,8 @@ From `config/boot_state.toml`:
 - The CMOS bytes at 0xB6100000, seeded from a NVRAM file or blank, and the three `pic:` words
   (stored by the loader at 0x800B8650, 0x800B8398, 0x800B867C; their values are in the run 1
   RAM dump and were not recorded).
-- Nothing else in low RAM for option (a). For (b) or (c): the loader's image and every
+- Nothing else in low RAM for option (a). For (a2): the loader image and the state of each
+  interpreted slot's routines. For (b) or (c): the loader's image and every
   `loader_data` range in `boot_state.toml`, and the exception vectors.
 
 ## Open questions and risks carried into M1
@@ -286,12 +313,26 @@ From `config/boot_state.toml`:
   texture writes): the POST program before the hand-off is inferred, not measured.
 - Which Status interrupt-mask bits the loader's services set when the game registers its
   handlers (IP3 and IP6 must be unmasked by loader code; inferred).
+- **Four unreferenced Status helpers** at 0x80167FB8 to 0x80167FF4, in one unreached
+  leaf-shaped range just before the function at 0x80167FF8 ([functions](functions.md)). Two
+  read Status and form it with bit 0x04000000 (FR) set or flipped; two write v1 to Status
+  (read, `disasm`). Not known whether they are reached: no direct call or jump reaches them,
+  no word in the image points into the range and no lui-built pointer lands in it (static:
+  the range is not among the refused pointers of `functions.md`, and a scan of every image
+  word found none), but a pointer built some other way would not be seen. No MAME run can
+  say: run 3 set no breakpoint there, and the memory taps record PCs only for hardware
+  accesses, which these helpers do not make. If they are reached, the runtime must emulate
+  Status reads and writes for them (a `manual` start and a stand-in for each, or the
+  interpreter with Status emulated), and FR could change at run time (decision 3).
 - The exception-frame offsets other than Cause, EPC, the FPRs and FCSR; Config's read-only
   fields.
 - What the game's SOUNDSTAT writes do, and what 0x17F00000 controls.
 - Whether IP3 has sources other than the IOASIC; the GT64010 cause-bit names come from MAME.
 - 7 of the 10 probable callbacks and 10 of the 16 unresolved jumps were not reached in MAME;
   141 leaf-shaped unreached ranges are dead code or reached in ways the analysis cannot see.
+  Every "the game does not" statement about reached code (no COP0 moves, Status never
+  written) holds only if those ranges stay unreached; the Status helpers above are one of
+  them.
 - `DIAG.EXE` starting `GAME.EXE` is static only (out of scope, since the port skips `DIAG.EXE`).
 - The IOASIC unlock is presumably done by the POST program (not analysed).
 - MAME is the oracle, not the board: where MAME's emulation is incomplete (for example the gun
