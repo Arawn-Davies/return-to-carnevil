@@ -92,6 +92,54 @@ timeout 2400 mame carnevil -rompath <roms> -nodrc -video none -sound none -nothr
   -seconds_to_run 90 -autoboot_script tools/mame/hwtap-split.lua
 ```
 
+**`insnvec.lua`**: runs the instruction test cases of `carnevil_tools/vectors.py` on MAME's
+R5000 core and writes `insnvec.jsonl` (one line per case: the registers and the non-zero
+words of the scratch page after the case). Unlike the other scripts, its output is synthetic
+(instruction words and register values chosen by `vectors.py`) and is merged into the committed
+`tests/vectors/insn.json`. It boots to `GAME.EXE`'s entry, clears Status IE, EXL and ERL, and
+from then on overwrites the pages 0x80100000 (code) and 0x80200000 (scratch) for each case; it
+reads back nothing but the registers and the scratch page. It needs `-nodrc`, because it sets
+the PC from inside the debugger's instruction hook. Input is `$CARNEVIL_VECTORS`. The run of
+1,320 cases took 36 s wall time (`date` around the run), nearly all of it the boot: a run of
+16 cases took 33 s.
+
+```
+python3 -m carnevil_tools vectors --write-cases <share>/mame/scripts/insnvec-cases.json
+CARNEVIL_VECTORS=<share>/mame/scripts/insnvec-cases.json CARNEVIL_MAME_OUT=. \
+  timeout 2400 mame carnevil -rompath <roms> -nodrc -debug -debugger none -debuglog \
+  -video none -sound none -nothrottle -cfg_directory cfg -nvram_directory nvram \
+  -snapshot_directory snap -diff_directory diff -autoboot_script tools/mame/insnvec.lua
+python3 -m carnevil_tools vectors --merge <share>/mame/scripts/insnvec-cases.json \
+  insnvec.jsonl -o tests/vectors/insn.json
+```
+
+How MAME exposes the state the script uses (MAME 0.276, `src/devices/cpu/mips/mips3.cpp`):
+the general registers are the 64-bit state entries `zero`, `at`, ... `ra` (ABI names; `R<n>`
+does not exist in this build), plus `HI`, `LO`, `PC`, `SR`, `Cause`, `EPC`. The FP registers
+are the 64-bit entries `FPR0` to `FPR31`; under FR = 0, half n (even) is the low 32 bits of
+`FPR<n>` and half n + 1 its high 32 bits, and `FPR<odd>` is unused. The case
+`mtc1.edge.fr0-halves` confirms it: `mtc1` into `$f3`, then `sdc1 $f2` stores half 2 at the
+address and the `mtc1` value at the address plus 4, `ldc1 $f4` fills halves 4 and 5 the same
+way, and `mfc1` of `$f5` reads the `mtc1` value back. FCSR cannot be read or written through
+the state: entry `CCR31` holds FCSR without its condition bits, which MAME keeps apart, so the
+script sets FCSR with a `ctc1` and reads it with a `cfc1` (both through `k0`, which is
+reloaded on the way into the case). The script reads registers through each entry's text
+(`%016X`), because the value of a 64-bit entry with bit 63 set reaches Lua as a float, and it
+copies `cpu.state` into a table first, because `cpu.state["at"]` is the container's `at`
+method, not the register.
+
+Not run in MAME (`vectors.NO_MAME`): `break` (it raises an exception, so a case cannot reach
+`ra`), and `div` of 0x80000000 by 0xFFFFFFFF (MAME divides on the host, where x86 `idiv`
+faults: the first run died of SIGFPE).
+
+Results that are MAME's rather than the hardware's (`vectors.MAME_SPECIFIC`): `div` and `divu`
+by zero leave `hi` and `lo` unchanged (undefined on the R5000); `trunc.w.s` and `trunc.w.d` of
+a NaN or of a value outside int32 give 0x80000000, the x86 conversion result, where the R5000
+signals an Unimplemented Operation. Also MAME-only, but invisible in the vectors: `cache` is a
+no-op (MAME models no caches); MAME raises no FP exception except division by zero with its
+enable set, and no `addi` overflow trap, so the cases keep FCSR's enables clear and `addi` from
+overflowing.
+
 The tap runs each kept MAME's state in a folder of their own (on the share, each run folder
 holds `cfg`, `nvram`, `snap` and `diff`), which gives the blank NVRAM: add
 `-cfg_directory`, `-nvram_directory`, `-snapshot_directory` and `-diff_directory` pointing

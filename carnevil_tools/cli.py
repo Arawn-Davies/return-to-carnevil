@@ -3,7 +3,7 @@ import argparse
 import os
 import sys
 
-from carnevil_tools import board, disk, exe, functions, hwcensus, loader, mips
+from carnevil_tools import board, disk, exe, functions, hwcensus, loader, mips, vectors
 
 DEFAULT_WORK = "/Volumes/archive/reincarnevilation/work"
 
@@ -291,6 +291,23 @@ def _verify(partition):
     return 1 if result.mismatched else 0
 
 
+def _vectors(write_cases, merge, out, seed):
+    """Write the input of tools/mame/insnvec.lua, or merge its output into the vector file."""
+    try:
+        if write_cases is not None:
+            case_list = vectors.cases(seed)
+            vectors.write_cases(case_list, write_cases)
+            run = sum(not c.no_mame for c in case_list)
+            print(f"wrote {run} cases to {write_cases} ({len(case_list) - run} not run in MAME)")
+        else:
+            n = vectors.merge(merge[0], merge[1], out)
+            print(f"wrote {n} cases to {out}")
+    except (ValueError, KeyError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def _positive_int(text):
     value = int(text)
     if value <= 0:
@@ -332,7 +349,20 @@ def main(argv=None):
     hwc.add_argument("--reach", action="store_true",
                      help="with --loader: per service slot, the loader functions it reaches "
                           "and the hardware regions among them")
+    vec = sub.add_parser("vectors", help="instruction test cases for MAME, and their results")
+    vec_mode = vec.add_mutually_exclusive_group(required=True)
+    vec_mode.add_argument("--write-cases", metavar="JSON",
+                          help="write the cases for tools/mame/insnvec.lua")
+    vec_mode.add_argument("--merge", nargs=2, metavar=("CASES", "RESULTS"),
+                          help="merge the script's results into the vector file (-o)")
+    vec.add_argument("-o", "--out", metavar="JSON")
+    vec.add_argument("--seed", type=int, default=1)
     args = parser.parse_args(argv)
+
+    if args.command == "vectors":
+        if args.merge is not None and args.out is None:
+            parser.error("--merge needs -o <file>")
+        return _vectors(args.write_cases, args.merge, args.out, args.seed)
 
     if args.command == "hwcensus":
         if (args.exe is None) == (args.loader is None):
