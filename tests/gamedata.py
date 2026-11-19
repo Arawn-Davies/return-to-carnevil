@@ -2,7 +2,7 @@
 import os
 import unittest
 
-DEFAULT_WORK = "/Volumes/archive/Gaming/Research/carnevil/work"
+DEFAULT_WORK = "/Volumes/archive/reincarnevilation/work"
 
 
 def work_dir():

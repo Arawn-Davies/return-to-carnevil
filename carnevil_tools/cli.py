@@ -5,7 +5,7 @@ import sys
 
 from carnevil_tools import disk
 
-DEFAULT_WORK = "/Volumes/archive/Gaming/Research/carnevil/work"
+DEFAULT_WORK = "/Volumes/archive/reincarnevilation/work"
 
 
 def _missing(path):

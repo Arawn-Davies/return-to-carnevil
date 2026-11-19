@@ -185,7 +185,7 @@ class CliTests(unittest.TestCase):
     def test_cli_without_data_explains(self):
         r = self.run_cli("split", "/nonexistent/carnevil.raw", "-o", "/nonexistent/out")
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn("/Volumes/archive/Gaming/Research/carnevil/work", r.stdout + r.stderr)
+        self.assertIn("/Volumes/archive/reincarnevilation/work", r.stdout + r.stderr)
         self.assertIn("CARNEVIL_WORK", r.stdout + r.stderr)
 
     def test_cli_extract_roundtrip(self):
