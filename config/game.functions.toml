@@ -1427,15 +1427,9 @@ sources = ["call"]
 
 [[function]]
 addr = 0x800D1574
-size = 20
+size = 284
 name = "func_800D1574"
 sources = ["call"]
-
-[[function]]
-addr = 0x800D1588
-size = 264
-name = "func_800D1588"
-sources = ["prologue"]
 
 [[function]]
 addr = 0x800D1690
@@ -3592,12 +3586,6 @@ name = "func_800F3868"
 sources = ["call", "prologue"]
 
 [[function]]
-addr = 0x800F38C4
-size = 4
-name = "func_800F38C4"
-sources = ["prologue"]
-
-[[function]]
 addr = 0x800F38C8
 size = 444
 name = "func_800F38C8"
@@ -3662,12 +3650,6 @@ addr = 0x800F44D8
 size = 316
 name = "func_800F44D8"
 sources = ["call"]
-
-[[function]]
-addr = 0x800F4614
-size = 4
-name = "func_800F4614"
-sources = ["prologue"]
 
 [[function]]
 addr = 0x800F4618
@@ -3916,12 +3898,6 @@ name = "func_800F6EB0"
 sources = ["pointer", "prologue"]
 
 [[function]]
-addr = 0x800F70B4
-size = 4
-name = "func_800F70B4"
-sources = ["prologue"]
-
-[[function]]
 addr = 0x800F70B8
 size = 532
 name = "func_800F70B8"
@@ -3986,12 +3962,6 @@ addr = 0x800F7960
 size = 36
 name = "func_800F7960"
 sources = ["call"]
-
-[[function]]
-addr = 0x800F7984
-size = 4
-name = "func_800F7984"
-sources = ["prologue"]
 
 [[function]]
 addr = 0x800F7988
@@ -5020,12 +4990,6 @@ name = "func_80102E04"
 sources = ["pointer", "prologue"]
 
 [[function]]
-addr = 0x80102E54
-size = 4
-name = "func_80102E54"
-sources = ["prologue"]
-
-[[function]]
 addr = 0x80102E58
 size = 564
 name = "func_80102E58"
@@ -5132,12 +5096,6 @@ addr = 0x80103C54
 size = 56
 name = "func_80103C54"
 sources = ["pointer", "prologue"]
-
-[[function]]
-addr = 0x80103C8C
-size = 4
-name = "func_80103C8C"
-sources = ["prologue"]
 
 [[function]]
 addr = 0x80103C90
@@ -5842,12 +5800,6 @@ name = "func_8010D77C"
 sources = ["call"]
 
 [[function]]
-addr = 0x8010D814
-size = 4
-name = "func_8010D814"
-sources = ["prologue"]
-
-[[function]]
 addr = 0x8010D818
 size = 300
 name = "func_8010D818"
@@ -6478,12 +6430,6 @@ name = "func_80118688"
 sources = ["call", "prologue"]
 
 [[function]]
-addr = 0x80118724
-size = 4
-name = "func_80118724"
-sources = ["prologue"]
-
-[[function]]
 addr = 0x80118728
 size = 608
 name = "func_80118728"
@@ -6658,12 +6604,6 @@ name = "func_8011B2DC"
 sources = ["call", "prologue"]
 
 [[function]]
-addr = 0x8011B50C
-size = 4
-name = "func_8011B50C"
-sources = ["prologue"]
-
-[[function]]
 addr = 0x8011B510
 size = 508
 name = "func_8011B510"
@@ -6806,12 +6746,6 @@ addr = 0x8011DCB8
 size = 196
 name = "func_8011DCB8"
 sources = ["call", "prologue"]
-
-[[function]]
-addr = 0x8011DD7C
-size = 4
-name = "func_8011DD7C"
-sources = ["prologue"]
 
 [[function]]
 addr = 0x8011DD80
@@ -7136,12 +7070,6 @@ addr = 0x80122CA8
 size = 404
 name = "func_80122CA8"
 sources = ["call"]
-
-[[function]]
-addr = 0x80122E3C
-size = 4
-name = "func_80122E3C"
-sources = ["prologue"]
 
 [[function]]
 addr = 0x80122E40
@@ -7516,12 +7444,6 @@ name = "func_8012831C"
 sources = ["call", "prologue"]
 
 [[function]]
-addr = 0x80128394
-size = 4
-name = "func_80128394"
-sources = ["prologue"]
-
-[[function]]
 addr = 0x80128398
 size = 508
 name = "func_80128398"
@@ -7654,12 +7576,6 @@ name = "func_80129C40"
 sources = ["call"]
 
 [[function]]
-addr = 0x80129D54
-size = 4
-name = "func_80129D54"
-sources = ["prologue"]
-
-[[function]]
 addr = 0x80129D58
 size = 508
 name = "func_80129D58"
@@ -7741,12 +7657,6 @@ sources = ["prologue"]
 addr = 0x8012B75C
 size = 120
 name = "func_8012B75C"
-sources = ["prologue"]
-
-[[function]]
-addr = 0x8012B7D4
-size = 4
-name = "func_8012B7D4"
 sources = ["prologue"]
 
 [[function]]
@@ -8188,12 +8098,6 @@ name = "func_80130BB8"
 sources = ["prologue"]
 
 [[function]]
-addr = 0x80130BF4
-size = 4
-name = "func_80130BF4"
-sources = ["prologue"]
-
-[[function]]
 addr = 0x80130BF8
 size = 508
 name = "func_80130BF8"
@@ -8275,12 +8179,6 @@ sources = ["prologue"]
 addr = 0x80131EAC
 size = 96
 name = "func_80131EAC"
-sources = ["prologue"]
-
-[[function]]
-addr = 0x80131F0C
-size = 4
-name = "func_80131F0C"
 sources = ["prologue"]
 
 [[function]]
@@ -8368,12 +8266,6 @@ name = "func_8013351C"
 sources = ["call", "prologue"]
 
 [[function]]
-addr = 0x8013357C
-size = 4
-name = "func_8013357C"
-sources = ["prologue"]
-
-[[function]]
 addr = 0x80133580
 size = 508
 name = "func_80133580"
@@ -8455,12 +8347,6 @@ sources = ["prologue"]
 addr = 0x8013487C
 size = 96
 name = "func_8013487C"
-sources = ["prologue"]
-
-[[function]]
-addr = 0x801348DC
-size = 4
-name = "func_801348DC"
 sources = ["prologue"]
 
 [[function]]
@@ -8629,12 +8515,6 @@ sources = ["prologue"]
 addr = 0x801382BC
 size = 96
 name = "func_801382BC"
-sources = ["prologue"]
-
-[[function]]
-addr = 0x8013831C
-size = 4
-name = "func_8013831C"
 sources = ["prologue"]
 
 [[function]]
@@ -8942,12 +8822,6 @@ addr = 0x8013B94C
 size = 120
 name = "func_8013B94C"
 sources = ["call", "prologue"]
-
-[[function]]
-addr = 0x8013B9C4
-size = 4
-name = "func_8013B9C4"
-sources = ["prologue"]
 
 [[function]]
 addr = 0x8013B9C8
@@ -10780,12 +10654,6 @@ name = "func_80150860"
 sources = ["pointer"]
 
 [[function]]
-addr = 0x80150DFC
-size = 4
-name = "func_80150DFC"
-sources = ["prologue"]
-
-[[function]]
 addr = 0x80150E00
 size = 428
 name = "func_80150E00"
@@ -10846,12 +10714,6 @@ name = "func_80151A38"
 sources = ["prologue"]
 
 [[function]]
-addr = 0x80151A84
-size = 4
-name = "func_80151A84"
-sources = ["prologue"]
-
-[[function]]
 addr = 0x80151A88
 size = 52
 name = "func_80151A88"
@@ -10877,32 +10739,8 @@ sources = ["prologue"]
 
 [[function]]
 addr = 0x80151BC0
-size = 20
+size = 1096
 name = "func_80151BC0"
-sources = ["call"]
-
-[[function]]
-addr = 0x80151BD4
-size = 272
-name = "func_80151BD4"
-sources = ["call"]
-
-[[function]]
-addr = 0x80151CE4
-size = 428
-name = "func_80151CE4"
-sources = ["call"]
-
-[[function]]
-addr = 0x80151E90
-size = 268
-name = "func_80151E90"
-sources = ["call"]
-
-[[function]]
-addr = 0x80151F9C
-size = 108
-name = "func_80151F9C"
 sources = ["call"]
 
 [[function]]
@@ -11671,12 +11509,6 @@ sources = ["call"]
 addr = 0x80160340
 size = 672
 name = "func_80160340"
-sources = ["prologue"]
-
-[[function]]
-addr = 0x80160624
-size = 4
-name = "func_80160624"
 sources = ["prologue"]
 
 [[function]]
@@ -13823,6 +13655,22 @@ start = 0x800F3654
 end = 0x800F3668
 
 [[unreached]]
+start = 0x800F38C4
+end = 0x800F38C8
+
+[[unreached]]
+start = 0x800F4614
+end = 0x800F4618
+
+[[unreached]]
+start = 0x800F70B4
+end = 0x800F70B8
+
+[[unreached]]
+start = 0x800F7984
+end = 0x800F7988
+
+[[unreached]]
 start = 0x800F9FF8
 end = 0x800FA004
 
@@ -13891,6 +13739,14 @@ start = 0x80102454
 end = 0x80102500
 
 [[unreached]]
+start = 0x80102E54
+end = 0x80102E58
+
+[[unreached]]
+start = 0x80103C8C
+end = 0x80103C90
+
+[[unreached]]
 start = 0x80104414
 end = 0x80104418
 
@@ -13913,6 +13769,10 @@ end = 0x80109454
 [[unreached]]
 start = 0x8010BF2C
 end = 0x8010BF30
+
+[[unreached]]
+start = 0x8010D814
+end = 0x8010D818
 
 [[unreached]]
 start = 0x8010EEF4
@@ -13947,6 +13807,18 @@ start = 0x801163CC
 end = 0x801163E8
 
 [[unreached]]
+start = 0x80118724
+end = 0x80118728
+
+[[unreached]]
+start = 0x8011B50C
+end = 0x8011B510
+
+[[unreached]]
+start = 0x8011DD7C
+end = 0x8011DD80
+
+[[unreached]]
 start = 0x80121D00
 end = 0x80121D2C
 
@@ -13963,6 +13835,10 @@ start = 0x801225A4
 end = 0x801225AC
 
 [[unreached]]
+start = 0x80122E3C
+end = 0x80122E40
+
+[[unreached]]
 start = 0x80123F84
 end = 0x801240E4
 
@@ -13971,8 +13847,20 @@ start = 0x80124AFC
 end = 0x80124C68
 
 [[unreached]]
+start = 0x80128394
+end = 0x80128398
+
+[[unreached]]
 start = 0x8012968C
 end = 0x80129694
+
+[[unreached]]
+start = 0x80129D54
+end = 0x80129D58
+
+[[unreached]]
+start = 0x8012B7D4
+end = 0x8012B7D8
 
 [[unreached]]
 start = 0x8012D49C
@@ -13989,6 +13877,26 @@ end = 0x8012FBF0
 [[unreached]]
 start = 0x801306B4
 end = 0x801306D0
+
+[[unreached]]
+start = 0x80130BF4
+end = 0x80130BF8
+
+[[unreached]]
+start = 0x80131F0C
+end = 0x80131F10
+
+[[unreached]]
+start = 0x8013357C
+end = 0x80133580
+
+[[unreached]]
+start = 0x801348DC
+end = 0x801348E0
+
+[[unreached]]
+start = 0x8013831C
+end = 0x80138320
 
 [[unreached]]
 start = 0x8013AF24
@@ -14021,6 +13929,10 @@ end = 0x8013B7B0
 [[unreached]]
 start = 0x8013B814
 end = 0x8013B850
+
+[[unreached]]
+start = 0x8013B9C4
+end = 0x8013B9C8
 
 [[unreached]]
 start = 0x8013EA04
@@ -14331,8 +14243,12 @@ start = 0x8015053C
 end = 0x80150540
 
 [[unreached]]
+start = 0x80150DFC
+end = 0x80150E00
+
+[[unreached]]
 start = 0x80151A70
-end = 0x80151A84
+end = 0x80151A88
 
 [[unreached]]
 start = 0x80151ABC
@@ -14400,7 +14316,7 @@ end = 0x8016020C
 
 [[unreached]]
 start = 0x801605E0
-end = 0x80160624
+end = 0x80160628
 
 [[unreached]]
 start = 0x80160C3C

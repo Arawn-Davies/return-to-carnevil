@@ -74,8 +74,14 @@ class Notes:
     code_pointer_functions: int = 0  # starts first found by a lui/addiu pair in code
     named: int = 0  # functions renamed from debug strings
     # Pointer values (data words or lui/addiu pairs) refused by the prologue-or-known-start
-    # rule that land exactly on the start of an unreached range: candidate leaf functions.
+    # rule that land anywhere inside an unreached range holding no undecodable word:
+    # candidate leaf functions or case labels.
     rejected_pointers: list[int] = field(default_factory=list)
+    # (address, target) of each `j` whose target is neither in its own function nor a
+    # known function start; not taken as a tail call.
+    jumps_out: list[tuple[int, int]] = field(default_factory=list)
+    # prologue starts withdrawn because reached code runs straight into them
+    withdrawn: list[int] = field(default_factory=list)
 
 
 # Instructions that write their rt field; everything else on SPECIAL writes rd
@@ -167,6 +173,8 @@ class _Descent:
         self.starts = {}  # function start -> set of sources
         self.tables = {}  # jr address -> JumpTable
         self.jumps = []  # (address, target) of every `j`
+        self.falls = set()  # words a path reaches by running on from the word before
+        self.returns = set()  # words a path reaches as the return point of a call
         self.pending = []
         self.notes = Notes()
         self._decoded = {}
@@ -207,6 +215,7 @@ class _Descent:
                 return
             if kind in ("normal", "trap"):
                 addr += 4
+                self.falls.add(addr)
                 continue
             if insn.mnemonic == "eret":  # no delay slot
                 return
@@ -229,6 +238,7 @@ class _Descent:
                     self._jump_table(addr, insn.rs)
                 return
             addr += 8  # fall-through, or the return point of a call
+            (self.returns if kind in ("call", "call_reg") else self.falls).add(addr)
 
     def _delay_slot(self, addr):
         if not self._mark(addr):
@@ -338,8 +348,12 @@ class _Descent:
                     break
 
     def tail_calls(self, text_end):
-        """A `j` to another function start, or out of its own function, is a tail call."""
+        """A `j` to another known function start, or out of its own function to a
+        stack-adjust prologue, is a tail call. A `j` out of its own function to
+        anywhere else is only reported (Notes.jumps_out): the owner comes from the
+        current starts, so taking it as a start would let one doubtful start cascade."""
         ordered = sorted(self.starts)
+        out = []
         for addr, target in self.jumps:
             i = bisect.bisect_right(ordered, addr) - 1
             if i < 0:
@@ -350,7 +364,35 @@ class _Descent:
                 if target != owner:
                     self.add_start(target, "call")
             elif not owner <= target < end:
-                self.add_start(target, "call")
+                if self.valid(target) and _is_prologue(self.insn(target)):
+                    self.add_start(target, "call")
+                else:
+                    out.append((addr, target))
+        self.notes.jumps_out = sorted(set(out))
+
+    def withdraw_fallen_into(self):
+        """Drop prologue-only starts that a later pass proved wrong:
+        - reached code runs straight into the start: it is inside the function
+          before it (whose own start lies further back than HOISTED, or was found
+          by another pass later);
+        - its hoisted run runs straight into another start: the hoist overshot
+          that start, and the words before it are unreached again."""
+        ordered = sorted(self.starts)
+        for i, addr in enumerate(ordered):
+            if self.starts[addr] != {"prologue"}:
+                continue
+            nxt = ordered[i + 1] if i + 1 < len(ordered) else None
+            if addr in self.falls:
+                del self.starts[addr]
+                self.notes.withdrawn.append(addr)
+            elif nxt is not None and nxt - addr <= 4 * HOISTED and all(
+                    self.insn(a).kind == "normal" for a in range(addr, nxt, 4)):
+                del self.starts[addr]
+                self.notes.withdrawn.append(addr)
+                for a in range(addr, nxt, 4):
+                    self.code.discard(a)
+                    self.walked.discard(a)
+                self.falls.discard(nxt)
 
     def prologues(self, text_start, text_end):
         """Each `addiu sp,sp,-n` in a gap starts a function. GCC schedules a few
@@ -358,7 +400,9 @@ class _Descent:
         for lo, hi in self.gaps(text_start, text_end):
             for addr in range(lo, hi, 4):
                 if _is_prologue(self.insn(addr)):
-                    self.add_start(self._hoisted_start(lo, addr), "prologue")
+                    start = self._hoisted_start(lo, addr)
+                    if start not in self.notes.withdrawn:  # never re-propose a refuted start
+                        self.add_start(start, "prologue")
 
     def _hoisted_start(self, lo, addr):
         """Earliest q in [lo, addr) such that [q, addr) can open a function: at most
@@ -436,8 +480,11 @@ def discover(image, entry, manual=()):
     for addr in manual:
         d.add_start(addr, "manual")
     d.run()
+    def state():
+        return len(d.code), sum(len(s) for s in d.starts.values()), len(d.notes.withdrawn)
+
     while True:
-        state = (len(d.code), sum(len(s) for s in d.starts.values()))
+        before = state()
         text_start, text_end = d.bounds()
         d.data_pointers(text_start, text_end)
         d.code_pointers(text_start, text_end)
@@ -446,9 +493,11 @@ def discover(image, entry, manual=()):
         d.run()
         d.prologues(text_start, text_end)
         d.run()
-        if (len(d.code), sum(len(s) for s in d.starts.values())) == state:
+        d.withdraw_fallen_into()
+        if state() == before:
             break
     text_start, text_end = d.bounds()
+    d.tail_calls(text_end)  # jumps_out against the final starts
     unreached = d.gaps(text_start, text_end)
     gap_at_end = {hi: lo for lo, hi in unreached}
     ordered = sorted(d.starts)
@@ -469,10 +518,18 @@ def discover(image, entry, manual=()):
                         [d.tables[a] for a in sorted(d.tables)], unreached)
     pairs = list(d.address_pairs())
     d.notes.named = naming.name_from_strings(image, analysis, pairs)
-    gap_starts = {lo for lo, _hi in unreached}
     values = {v for _a, v in pairs}
     values.update(image.word(a) for a in range(text_end, image.end_addr() - 3, 4))
-    d.notes.rejected_pointers = sorted(values & gap_starts)
+    # Ranges holding an undecodable word are data; pointers into them are data pointers.
+    code_like = [(lo, hi) for lo, hi in unreached
+                 if all(d.insn(a).kind != "unknown" for a in range(lo, hi, 4))]
+    gap_lo = [lo for lo, _hi in code_like]
+    refused = []
+    for value in sorted(values):
+        i = bisect.bisect_right(gap_lo, value) - 1
+        if value % 4 == 0 and i >= 0 and value < code_like[i][1]:
+            refused.append(value)
+    d.notes.rejected_pointers = refused
     return analysis, d.notes
 
 

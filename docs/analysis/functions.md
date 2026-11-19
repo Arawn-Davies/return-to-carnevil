@@ -11,11 +11,12 @@ Entry: 0x800C4000 (the load address).
 
 ## Result in one paragraph
 
-The text runs from 0x800C4000 to 0x8016DC4C (695,372 bytes). There are 2,119
+The text runs from 0x800C4000 to 0x8016DC4C (695,372 bytes). There are 2,091
 functions and 75 jump tables (1,488 entries, the largest has 121). One of the
-functions sits in the data, past text_end (0x801A355C, below). 165,771 words are
-reached as code and none of them decodes as unknown. 242 ranges (32,304 bytes,
-4.65% of the text) are not reached; 15 KB of that is one data block inside the
+functions sits in the data, past text_end (0x801A355C, below). 165,748 words are
+reached as code and none of them decodes as unknown. Outside the boot-ROM stub
+block, no function runs straight into the next one. 263 ranges (32,396 bytes,
+4.66% of the text) are not reached; 15 KB of that is one data block inside the
 text. 16 indirect jumps could not be resolved; their targets (about 1 KB of
 code) are among the unreached ranges, listed below.
 
@@ -24,13 +25,13 @@ code) are among the unreached ranges, listed below.
 A function counts once under each of its sources:
 
 - entry: 1
-- call: 1,245 (`jal`, and a `j` to another function, which is a tail call)
+- call: 1,241 (`jal`, plus tail calls by `j`, see departure 4)
 - pointer: 390
-- prologue: 1,109
+- prologue: 1,085
 - manual: 0
 
-The combinations that occur: call 945, call+prologue 291, call+pointer 1,
-call+pointer+prologue 8, pointer 63, pointer+prologue 318, prologue 492,
+The combinations that occur: call 941, call+prologue 291, call+pointer 1,
+call+pointer+prologue 8, pointer 63, pointer+prologue 318, prologue 468,
 entry 1.
 
 The lui/addiu (and lui/ori) pass over reached code found 47 function starts
@@ -97,23 +98,46 @@ this block from the file: its contents come from the boot ROM (Task 5).
    This rule set leaves out the padding words that come before a function
    (for example 0x0000003F at 0x800D3FFC and 0x8C63F0BC at 0x80100DBC).
    With the brief's literal rule (a gap starting with the prologue), the
-   result is 1,815 functions and 12.19% unreached, much of it real code
-   behind a dead tail or a leaf in the same gap. With this rule it is 2,119
-   functions and 4.65%, still with no unknown word in reached code.
+   result was 1,815 functions and 12.19% unreached, much of it real code
+   behind a dead tail or a leaf in the same gap. (That was measured before
+   the withdrawal step below was added.) With this rule it is 2,091
+   functions and 4.66%, still with no unknown word in reached code.
+
+   Because the passes run in rounds, a later pass can prove a prologue start
+   wrong. After each round, a start whose only source is `prologue` is
+   withdrawn in two cases:
+   - reached code runs straight into it. One case: 0x800D1588 is inside
+     0x800D1574, whose stack adjustment is 13 instructions in, past the
+     8-instruction limit. The `jal` to 0x800D1574 was found only after the
+     scan.
+   - its hoisted run of plain instructions runs straight into another start
+     that a later pass found. Its words become unreached again.
+
+   24 starts are withdrawn: 0x800D1588, and 23 single words before a
+   function, which the hoist took in before a pointer or call found the real
+   start (for example 0x800F38C4 before 0x800F38C8). A withdrawn start is
+   never proposed again.
 3. **Jump-table base.** GCC builds the table address as
    `lui at,%hi; addu at,at,idx; lw r,%lo(at)`, with the low half in the `lw`
    offset. The brief's `lui`/`addiu` form is also accepted. No entry of the
    75 tables falls outside the function that holds its `jr`.
-4. **Tail calls.** A `j` to another function start is a tail call, as the
-   brief says. A `j` whose target is outside the function it sits in also
-   makes that target a function (source `call`). 5 functions are known only
-   through a `j`.
+4. **Tail calls.** A `j` to another known function start is a tail call, as
+   the ruling says. A `j` out of the function it sits in, to an address that
+   is not a known start, is a tail call only when the target is a
+   stack-adjust prologue. The function a `j` belongs to is worked out from
+   the starts known so far, so taking any such target as a start would let
+   one doubtful start split a real function. Before review round 1 that
+   happened: 0x80151BD4, 0x80151CE4 and 0x80151F9C were labels inside one
+   function. The prologue case still finds `main` (0x800C4524), which
+   `_start` reaches only through its final `j`. It is the one function known
+   only through a `j`. The other out-of-function jumps are reported, not
+   taken (see "Jumps out of their function" below).
 5. **Sizes.** A function ends at the next function start, less any unreached
    words just before it. This keeps the data islands out of functions.
 
 ## Unreached ranges
 
-242 ranges, 32,304 bytes. functions.toml lists them all; they fall into these
+263 ranges, 32,396 bytes. functions.toml lists them all; they fall into these
 kinds:
 
 - **Data block inside the text: 0x80110B04 to 0x80114560** (14,940 bytes, 802
@@ -124,16 +148,18 @@ kinds:
   0x800F1D84. All seven are unreached and lie outside every function. Six
   are single-word ranges; 0x800C81B4 shares its range (0x800C819C to
   0x800C81B8) with an unreached leaf just before it.
-- **57 isolated single words** between reached code that decode as valid
-  instructions (228 bytes). They are padding of the same kind, for example
-  0x8C63F0BC at 0x80100DBC.
+- **78 isolated single words** between reached code that decode as valid
+  instructions (312 bytes). They are padding of the same kind, for example
+  0x8C63F0BC at 0x80100DBC. 21 of them are words the withdrawal step gave
+  back; the other 2 words it gave back (0x80151A84 and 0x80160624) joined
+  the neighbouring leaf ranges.
 - **7 zero-padding runs** (48 bytes).
-- **149 ranges of leaf-shaped code** (16,208 bytes): clean decode, ending in
-  `jr ra`, no stack frame. For 142 of them nothing in the image references
-  the start, so they are either dead code or leaves reached in a way this
-  analysis cannot see. The other 7 begin at addresses that code builds (see
-  the refused pointers below). The largest are 0x800F3008 to 0x800F3580 (1,400 bytes) and 0x8012F6C8
-  to 0x8012FBF0 (1,320 bytes). Among them, 0x80167FB8 to 0x80167FF4 holds four
+- **149 ranges of leaf-shaped code** (16,216 bytes): clean decode, ending in
+  `jr ra`, no stack frame. For 141 of them no pointer value in the image
+  lands anywhere inside the range, so they are either dead code or leaves
+  reached in a way this analysis cannot see. The other 8 contain a code-built
+  address (see the refused pointers below). The largest are 0x800F3008 to
+  0x800F3580 (1,400 bytes) and 0x8012F6C8 to 0x8012FBF0 (1,320 bytes). Among them, 0x80167FB8 to 0x80167FF4 holds four
   Status-register helpers (`mfc0`/`mtc0` on register 12). These are the only
   COP0 moves in the text, and nothing references them.
 - **21 other clean ranges** (828 bytes) with no `jr ra`. 488 bytes of that
@@ -161,29 +187,42 @@ milestone needs their targets:
   example 0x80176AD8) to the 28-byte tails at 0x801644F4, 0x801646A0,
   0x80164838, 0x801649A0, 0x80164F24, 0x801650B0 and 0x80165300.
 
+## Jumps out of their function
+
+2 `j` instructions leave their function for an address that is neither a
+known start nor a prologue: 0x80151B48 and 0x80151B78, both to 0x80151E90.
+0x80151E90 begins `addi sp,sp,204` and then reloads registers from the
+stack. It looks like the shared restore path of hand-written save/restore
+code around 0x80151AC0 to 0x80152008, which is not GCC output. The
+recompiler has to treat it as a jump between functions.
+
 ## Pointers refused by the prologue-or-known-start rule
 
-19 pointer values, from data words or lui pairs, land exactly on the start of
-an unreached range:
+50 pointer values, from data words or lui pairs, land somewhere inside an
+unreached range that holds no undecodable word. Values inside the data block
+at 0x80110B04 are data pointers and are not counted.
 
 - 0x800C408C: the stub block's start, from `_start`'s copy loop.
-- 0x80110B04: the data block.
-- 0x8012DCB0, 0x8015017C, 0x801644F4, 0x801646A0, 0x80164838, 0x801649A0,
-  0x80164F24, 0x801650B0, 0x80165300: case labels of the unresolved jumps.
-- 0x800C6030, 0x800C6F28, 0x800FE924, 0x800FEDB0, 0x80101CD8, 0x80102454,
-  0x801150C8, 0x80151A70: code builds each of these addresses with a lui pair,
-  and each lands on code with no stack frame (7 of them end in `jr ra`). They
-  are probably callbacks. They are candidates for `manual` starts; the rule
-  as specified refuses them.
+- 39 case labels of the unresolved jumps:
+  - 6 in 0x8012DCB0 to 0x8012DD3C;
+  - 5 in 0x8015017C to 0x801501F0;
+  - 4 in each of the seven 28-byte tails at 0x801644F4, 0x801646A0,
+    0x80164838, 0x801649A0, 0x80164F24, 0x801650B0 and 0x80165300.
+- 10 probable callbacks: 0x800C6030, 0x800C6F28, 0x800FE924, 0x800FEDB0,
+  0x80101CD8, 0x80102454, 0x801150C8, 0x801478C0, 0x8014A930, 0x80151A70.
+  Code builds each of these addresses with a lui pair, and each lands on code
+  with no stack frame. 0x801478C0 lies right after a `jr ra` delay slot in the
+  middle of its range; 0x8014A930 lies one word in. They are candidates for
+  `manual` starts; the rule as specified refuses them.
 
 ## Census of reached code
 
-Restricted to the 165,771 reached words (all functions, minus the unreached
+Restricted to the 165,748 reached words (all functions, minus the unreached
 ranges). This is the list of instructions the recompiler has to handle.
 
 Unknown words: 0.
 
-Mnemonic counts: addiu 26682, lw 16440, lui 16010, addu 14938, sw 14705,
+Mnemonic counts: addiu 26677, lw 16439, lui 15995, addu 14936, sw 14705,
 sll 12959, jal 11199, lwc1 6678, beq 4834, swc1 4481, j 4231, bne 3443,
 sh 2755, jr 2139, ori 1802, lhu 1604, mul.s 1589, andi 1513, slti 1497,
 add.s 1221, lh 1152, sub.s 1106, sra 928, ldc1 801, mtc1 791, sdc1 697,

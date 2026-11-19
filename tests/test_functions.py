@@ -251,6 +251,86 @@ class Discovery(unittest.TestCase):
         self.assertEqual(found[L["g"]].sources, {"call"})
         self.assertEqual(found[L["f"]].size, L["g"] - L["f"])
 
+    def test_jump_into_another_function_is_not_a_start(self):
+        # h jumps to a label in the middle of f: reported, not made a function
+        a = Asm()
+        a.emit(jal("f"), NOP, jal("h"), NOP, jr(RA), NOP)
+        a.label("f")
+        a.emit(addiu(SP, SP, -8), addiu(V0, ZERO, 1))
+        a.label("mid")
+        a.emit(addiu(SP, SP, 8), jr(RA), NOP)
+        a.label("h")
+        a.emit(j("mid"), NOP)
+        a.label("data")
+        a.emit(DATA_WORD)
+        L = a.labels
+        res, notes = functions.discover(a.image(), BASE)
+        self.assertEqual([f.addr for f in res.functions], [BASE, L["f"], L["h"]])
+        self.assertEqual(notes.jumps_out, [(L["h"], L["mid"])])
+
+    def test_prologue_start_inside_a_later_found_function_is_withdrawn(self):
+        # f runs 10 instructions before its stack adjustment, more than the hoist
+        # limit, and is only found (by g's jal) after the prologue scan proposed f+8.
+        a = Asm()
+        a.emit(jal("h"), NOP, jr(RA), NOP)
+        a.label("f")
+        a.emit(*[addiu(V0, A0, k) for k in range(10)])
+        a.emit(addiu(SP, SP, -8), addiu(SP, SP, 8), jr(RA), NOP)
+        a.label("g")
+        a.emit(addiu(SP, SP, -8), jal("f"), NOP, addiu(SP, SP, 8), jr(RA), NOP)
+        a.label("h")
+        a.emit(jr(RA), NOP)
+        a.label("data")
+        a.emit(DATA_WORD)
+        L = a.labels
+        res, notes = functions.discover(a.image(), BASE)
+        found = self.by_addr(res)
+        self.assertEqual(sorted(found), [BASE, L["f"], L["g"], L["h"]])
+        self.assertEqual(found[L["f"]].sources, {"call"})
+        self.assertEqual(found[L["f"]].size, L["g"] - L["f"])
+        self.assertEqual(notes.withdrawn, [L["f"] + 8])
+
+    def test_hoist_over_padding_before_a_later_found_start_is_withdrawn(self):
+        # The prologue scan hoists f's start over a padding word that reads only
+        # live registers; a later pass finds f itself through a pointer.
+        a = Asm()
+        a.emit(jal("h"), NOP, jr(RA), NOP)
+        a.label("pad")
+        a.emit(addiu(6, ZERO, 15))
+        a.label("f")
+        a.emit(addiu(SP, SP, -8), addiu(SP, SP, 8), jr(RA), NOP)
+        a.label("g")
+        a.emit(addiu(SP, SP, -8), lui_hi(A0, "f"), addiu_lo(A0, A0, "f"),
+               addiu(SP, SP, 8), jr(RA), NOP)
+        a.label("h")
+        a.emit(jr(RA), NOP)
+        a.label("data")
+        a.emit(DATA_WORD)
+        L = a.labels
+        res, notes = functions.discover(a.image(), BASE)
+        found = self.by_addr(res)
+        self.assertEqual(sorted(found), [BASE, L["f"], L["g"], L["h"]])
+        self.assertEqual(found[L["f"]].sources, {"pointer"})
+        self.assertEqual(res.unreached, [(L["pad"], L["f"])])
+        self.assertEqual(notes.withdrawn, [L["pad"]])
+
+    def test_refused_pointer_inside_unreached_range(self):
+        # A pointer to a frameless leaf in the middle of an unreached range is reported
+        a = Asm()
+        a.emit(lui_hi(A0, "leaf2"), addiu_lo(A0, A0, "leaf2"), jal("g"), NOP, jr(RA), NOP)
+        a.label("dead")
+        a.emit(addiu(V0, ZERO, 1), jr(RA), NOP)
+        a.label("leaf2")
+        a.emit(addiu(V0, ZERO, 2), jr(RA), NOP)
+        a.label("g")
+        a.emit(jr(RA), NOP)
+        a.label("data")
+        a.emit(DATA_WORD)
+        L = a.labels
+        res, notes = functions.discover(a.image(), BASE)
+        self.assertEqual(res.unreached, [(L["dead"], L["g"])])
+        self.assertEqual(notes.rejected_pointers, [L["leaf2"]])
+
     def test_data_island_unreached(self):
         a = Asm()
         a.emit(jal("f"), NOP, jr(RA), NOP)
@@ -424,6 +504,21 @@ class GameExe(unittest.TestCase):
         # The one code island in the data: a `break` stub called from the text
         islands = [(f.addr, f.size) for f in res.functions if f.addr >= res.text_end]
         self.assertEqual(islands, [(0x801A355C, 16)])
+        # No function runs straight into the next one: when they touch, the
+        # previous one ends in a path end plus its delay slot. The boot-ROM stub
+        # block is excluded: it is zeros in the file, filled at boot from 0xA0000000.
+        stub_block = range(0x800C408C, 0x800C42D8 + 1)
+        for f, nxt in zip(res.functions, res.functions[1:]):
+            end = f.addr + f.size
+            if end != nxt.addr or nxt.addr in stub_block:
+                continue
+            last = mips.decode(image.word(end - 8), end - 8) if f.size >= 8 else None
+            self.assertTrue(last is not None and functions._ends_path(last),
+                            "0x%08X runs into 0x%08X" % (f.addr, nxt.addr))
+        # Labels inside a function are not taken as starts (review round 1)
+        for addr in (0x80151BD4, 0x80151CE4, 0x80151F9C, 0x800D1588):
+            self.assertNotIn(addr, addrs)
+        self.assertIn(0x800C4524, addrs)  # main, reached by _start's tail `j`
         starts = set(addrs)
         unreached = set()
         for lo, hi in res.unreached:

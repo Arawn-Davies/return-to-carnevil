@@ -92,8 +92,11 @@ def _functions(path, out):
     print(f"jump tables {len(res.jump_tables)} ({entries} entries)")
     print(f"unresolved jr (no table found) {len(notes.unresolved_jr)}: {_hex_list(sorted(notes.unresolved_jr))}")
     print(f"unreached {len(res.unreached)} ranges, {gap} bytes, {100 * gap / span:.2f}% of the text")
-    print(f"rejected pointers at the start of an unreached range {len(notes.rejected_pointers)}: "
+    print(f"rejected pointers into unreached code {len(notes.rejected_pointers)}: "
           f"{_hex_list(notes.rejected_pointers)}")
+    jumps = " ".join(f"0x{a:08X}->0x{t:08X}" for a, t in notes.jumps_out) or "-"
+    print(f"j out of its function, not taken as a tail call {len(notes.jumps_out)}: {jumps}")
+    print(f"prologue starts withdrawn {len(notes.withdrawn)}: {_hex_list(sorted(notes.withdrawn))}")
     print(f"control transfers out of the image {len(notes.bad_targets)}, calls out of the image "
           f"{len(notes.external_calls)}, control transfers in delay slots {len(notes.cti_in_delay_slot)}")
     print(f"unknown words reached as code {len(notes.unknown)}: {_hex_list(sorted(notes.unknown))}")
