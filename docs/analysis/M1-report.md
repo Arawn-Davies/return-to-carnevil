@@ -22,7 +22,7 @@ Every fact below carries its basis, as in the [M0 report](M0-report.md):
   (0x80151AC0, 0x80151B50). 91 jump tables (1,619 entries; 75 found by the analysis, 16 from the
   manual file), 0 `jr` left to `rt_jump` (static, `make recomp`).
 - **Output**: 33 files of up to 64 functions plus `funcs.h`, `func_table.c` and `manifest.toml`;
-  248,659 lines, 7,984,973 bytes of C. Two runs give identical bytes (static, test).
+  248,659 lines, 7,987,844 bytes of C. Two runs give identical bytes (static, test).
 - **What the generated C calls**: `rt_call` at the 64 `jalr` sites, `rt_loader` at 279 call
   sites plus the 29 thunks, `rt_break` at 38 sites, `rt_jump` only in the 91 `switch` defaults,
   `interp_run` in the 2 thunks, and 3,159 interrupt check points (static, counted in the
@@ -130,6 +130,8 @@ not share.
   a stub and no interrupt handler of the game has run in the port.
 - **Nothing that touches hardware**, and no loader service: the stub bus returns 0 and the
   stub `rt_loader` records the slot.
+- **No FP exception.** The vectors keep FCSR's enables clear, so the divide-by-zero trap the
+  game enables (below) was never compared: MAME takes it, the port returns the IEEE result.
 - **No task switch.** No function that yields has run end to end, in either mode.
 - **The 7 probable callbacks and the 141 unreferenced leaf-shaped ranges** are not recompiled.
   If one is ever called, the interpreter runs it and logs the address.
@@ -159,8 +161,9 @@ wrong.
   the R5000's default is 0x7FBFFFFF). Accepted and documented in `recomp.h`: canonicalising
   would cost a branch per FP operation, for bits the game would have to inspect as integers.
 - **Helpers only where C has no plain operator.** Signed shifts and compares, sign extension,
-  FP arithmetic and negation, `recip.s` and the conversions stay inline in both the emitter and
-  the interpreter. The plan's wording allowed this; a broader reading during the work would
+  FP addition, subtraction, multiplication and negation, `recip.s` and the conversions stay
+  inline in both the emitter and the interpreter. FP divide alone goes through a helper
+  (`rc_div_s`, `rc_div_d`), still a plain `/`, as the seam for M2's divide-by-zero trap. The plan's wording allowed this; a broader reading during the work would
   have wrapped single operators in helpers for no gain.
 - **One interrupt check-point rule.** The plan put `RT_CHECK` at entry and before every
   backward jump. Applied literally, a backward jump to another function's start checked twice
@@ -381,6 +384,13 @@ gives the number of tasks, the yield rate and the stack sizes the design needs.
   roundings) follow MAME; where the board would trap into the game's own FPU handler, the port
   does not. Logging the first occurrence of each in the runtime would show whether attract mode
   or play ever reaches them.
+- **The FP divide-by-zero trap is not implemented.** `main` installs FPU exception handlers
+  through the loader (from 0x800C46A0 for cause 5, handler 0x80150860; from 0x800C46C0 for
+  cause 3, divide by zero, handler 0x8014FEF0), and the loader service sets the matching FCSR
+  enable (read). MAME then raises the exception on a division by zero; the port returns the
+  IEEE result, so after `main`'s setup a `div.s` or `div.d` by zero diverges from MAME. Both
+  modes divide through `rc_div_s` / `rc_div_d` in `recomp.h`; M2 adds the trap there, with a
+  runtime entry point that enters the game's handler.
 - **Code size and compile time.** 8 MB of C compiles in 27 s with GCC on a 4-core container,
   where the PS4 build is made, so build time is not a problem. The result is 3.4 MB of x86-64
   code; how it behaves in the instruction caches of the PS4's Jaguar cores is not measured and
@@ -419,8 +429,8 @@ Tools and runtime:
   over 100 characters.
 - `insnvec.lua` parses a hand-written JSON subset without escapes.
 - The interpreter exits on a fetch outside RAM (for example the boot ROM) instead of handing it
-  on; its entry log merges kseg0 and kseg1 aliases, and logs a non-RAM entry every time.
-- `rt_loader` has no stated contract about interrupt checks in `recomp.h`.
+  on (documented in `recomp.h`; the change is M2's); its entry log merges kseg0 and kseg1
+  aliases, and logs a non-RAM entry every time.
 - `recomp.py`'s `body()` adds labels while emitting, an ordering assumption without a comment.
 - `recompile`: a short `umask(0)` window; a failure to remove the set-aside folder raises after
   a successful swap; a failed restore rename masks the original exception.

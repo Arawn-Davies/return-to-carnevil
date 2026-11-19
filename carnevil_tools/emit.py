@@ -211,6 +211,12 @@ def _fp_binary(op, fmt):
     return lambda i: [f"{put}(c, {i.sa}, {get(i.rd)} {op} {get(i.rt)});"]
 
 
+def _fp_divide(fmt):
+    """fd = fs / ft through recomp.h's rc_div_s / rc_div_d (where M2 adds the trap)."""
+    get, put = (_fs, "rc_set_fs") if fmt == "s" else (_fd, "rc_set_fd")
+    return lambda i: [f"{put}(c, {i.sa}, rc_div_{fmt}({get(i.rd)}, {get(i.rt)}));"]
+
+
 def _fp_unary(fmt, expr):
     """fd = expr(fs) in format fmt."""
     get, put = (_fs, "rc_set_fs") if fmt == "s" else (_fd, "rc_set_fd")
@@ -257,9 +263,9 @@ def _mtc1(i):
 
 _FLOAT = {
     "add.s": _fp_binary("+", "s"), "sub.s": _fp_binary("-", "s"),
-    "mul.s": _fp_binary("*", "s"), "div.s": _fp_binary("/", "s"),
+    "mul.s": _fp_binary("*", "s"), "div.s": _fp_divide("s"),
     "add.d": _fp_binary("+", "d"), "sub.d": _fp_binary("-", "d"),
-    "mul.d": _fp_binary("*", "d"), "div.d": _fp_binary("/", "d"),
+    "mul.d": _fp_binary("*", "d"), "div.d": _fp_divide("d"),
     "sqrt.s": _fp_unary("s", lambda a: f"rc_sqrt_s({a})"),
     "neg.s": _fp_unary("s", lambda a: f"-{a}"),
     "neg.d": _fp_unary("d", lambda a: f"-{a}"),

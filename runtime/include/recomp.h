@@ -40,27 +40,76 @@ typedef void (*recomp_fn)(uint8_t *ram, cpu_t *c);
 
 /* --- provided by a runtime ------------------------------------------------------------ */
 
+/* bus_read, bus_write: a load or store whose address mem_is_ram rejects (hardware, or kuseg
+ * outside the mapped RAM). size is 1, 2 or 4 (lb/lbu/sb, lh/lhu/sh, the word accesses; ldc1
+ * and sdc1 are two word accesses). The caller masks a read's result to the size, so a
+ * runtime may return a wider value; a write's value arrives masked to the size. The address
+ * is not checked for alignment (see "memory" below). The generated code passes no guest PC
+ * (c->pc is kept by the interpreter only), so a runtime cannot tell which instruction made
+ * the access. */
 uint32_t bus_read(cpu_t *c, uint32_t addr, int size);
 void bus_write(cpu_t *c, uint32_t addr, int size, uint32_t value);
+
+/* rt_loader: a call or jump into the stub block, where the resident loader's services are
+ * (config/boot_state.toml, [[external_call]]). slot is the byte offset of the slot from the
+ * stub block's start (0x800C408C in the supported revision), so 0x000 to 0x238 in steps of
+ * 8. At entry the transfer is done as far as the board would have done it: for a jal, ra is
+ * already the return address (the jal's address + 8); the delay slot has run; the arguments
+ * are in a0-a3 and on the guest stack (o32). On return the runtime has set what the service
+ * returns (v0, v1) and whatever else the service writes (RAM, registers it clobbers). The
+ * caller then goes on after a jal, and returns to its own caller after a j or from a stub
+ * thunk (a function whose body is this call). rt_loader may re-enter game code through
+ * rt_call (a registered callback or handler). It is not an interrupt check point: a service
+ * that waits (for DMA, a frame) must poll or call rt_interrupt itself. */
 void rt_loader(uint8_t *ram, cpu_t *c, uint32_t slot);
-/* code: the 20-bit field of the break word, bits 6 to 25 */
+
+/* rt_break: a break instruction at pc; code is the 20-bit field of the break word, bits 6 to
+ * 25. Returning resumes at the next instruction (pc + 4), so a runtime must not return from
+ * a break the game treats as fatal (0x407, an assert). */
 void rt_break(uint8_t *ram, cpu_t *c, uint32_t pc, uint32_t code);
+
+/* rt_interrupt: called by RT_CHECK (below) when irq_pending is non-zero, with the guest state
+ * in *c. It must leave all guest state (r, hi, lo, fpr, fcsr and fcc, and RAM apart from what
+ * the handlers write) and the host FP environment as an exception return would, apart from
+ * what the handlers' ABI changes. The runtime clears irq_pending (or masks the source) before
+ * it runs a handler: the game's handlers are recompiled functions with RT_CHECK at their
+ * entry, so otherwise rt_interrupt re-enters itself. It may call rt_call. Handlers run on
+ * whatever host context (stack, fiber, thread) is current at the check point. irq_pending is
+ * volatile only: a runtime that sets it from another thread must use its own
+ * synchronisation or an atomic store of a word. */
 void rt_interrupt(uint8_t *ram, cpu_t *c);
-/* the recompiled function at addr, or NULL when there is none */
+
+/* recomp_lookup: the recompiled function at addr, or NULL when there is none. The generated
+ * func_table.c provides it for the game; a test harness may provide its own. rt_call and the
+ * interpreter use it to choose between recompiled code and interp_run. */
 recomp_fn recomp_lookup(uint32_t addr);
 
 /* --- provided by runtime/core --------------------------------------------------------- */
 
-/* The recompiled function at addr if there is one, otherwise the interpreter. */
+/* rt_call: a call to addr (jalr, a jal to an address that is no known function start, the
+ * interpreter's calls and tail jumps, a runtime's callback): the recompiled function at addr
+ * if recomp_lookup has one, otherwise interp_run from addr. A call's link register is
+ * already written. It returns when the callee returns (its jr ra). */
 void rt_call(uint8_t *ram, cpu_t *c, uint32_t addr);
-/* The same, for a jump that leaves its function. */
+/* rt_jump: the same, for a jump that leaves its function (a jr that is not on ra and has no
+ * resolved table, or a table's default); the caller returns straight after it. Each such
+ * jump nests one host frame. */
 void rt_jump(uint8_t *ram, cpu_t *c, uint32_t addr);
-/* FCSR as ctc1 $31 writes it (condition bits in place); also sets the host rounding mode
- * from RM and host flush-to-zero from FS. */
+
+/* rt_set_fcsr: FCSR as ctc1 $31 writes it (condition bits in place); also sets the host
+ * rounding mode from RM and host flush-to-zero from FS (runtime/core/fpu.c says how).
+ * rt_get_fcsr: FCSR as cfc1 $31 reads it.
+ *
+ * The host FP environment: rt_set_fcsr is the only thing that sets it, and it belongs to the
+ * process (per thread), not to cpu_t, so a runtime's own float code runs under the guest's
+ * rounding and flush settings. A runtime that loads a guest state, or switches host context
+ * or thread, must re-apply it: rt_set_fcsr(c, rt_get_fcsr(c)). */
 void rt_set_fcsr(cpu_t *c, uint32_t value);
-/* FCSR as cfc1 $31 reads it. */
 uint32_t rt_get_fcsr(const cpu_t *c);
-/* Called once per distinct address the interpreter is entered at; NULL: not called. */
+
+/* rt_log_unrecompiled: when not NULL, called once per distinct address the interpreter is
+ * entered at (a RAM address is reported once until interp_forget_entries; any other address
+ * each time, and its fetch then stops the process). */
 extern void (*rt_log_unrecompiled)(uint32_t addr);
 
 /* Interrupt check points, the same in recompiled code and the interpreter: at the entry of
@@ -79,10 +128,15 @@ extern void (*rt_log_unrecompiled)(uint32_t addr);
 
 /* --- provided by runtime/interp ------------------------------------------------------- */
 
-/* Run from pc until the function entered there returns (its jr ra). */
+/* interp_run: run from pc until the function entered there returns (its jr ra), calling
+ * through rt_call (runtime/interp/interp.c says how each transfer is handled). It fetches
+ * code from ram, so the runtime must keep the EXE image there. A fetch outside RAM or from
+ * an unaligned pc (a jump through a null or corrupt pointer, or into the boot ROM) stops the
+ * process with a message naming the address, as does an instruction outside the census:
+ * a limitation that M2 lifts. */
 void interp_run(uint8_t *ram, cpu_t *c, uint32_t pc);
-/* Forget the entry addresses already given to rt_log_unrecompiled (for test harnesses
- * that run independent cases in one process). */
+/* interp_forget_entries: forget the entry addresses already given to rt_log_unrecompiled
+ * (for test harnesses that run independent cases in one process). */
 void interp_forget_entries(void);
 
 /* --- memory ---------------------------------------------------------------------------- */
@@ -93,9 +147,12 @@ void interp_forget_entries(void);
  * except the even page of entry 0 (0x00000000-0x0003FFFF), and entries 16-47 (virtual 8 MB
  * to 24 MB) with both pages invalid; GAME.EXE writes no TLB entry (no mtc0 in its reached
  * code). MAME 0.276 agrees: GAME.EXE's stores through 0x00237xxx and 0x00317xxx-0x0031Fxxx
- * changed RAM at the same physical addresses (task 6 replay captures). So kuseg
+ * changed RAM at the same physical addresses (the function-replay captures). So kuseg
  * 0x00040000-0x007FFFFF is RAM; every other kuseg address (a TLB exception on the board) is
- * the bus here. The interpreter's fetch goes through mem_is_ram too. */
+ * the bus here. The interpreter's fetch goes through mem_is_ram too.
+ *
+ * Alignment is not checked: an unaligned load or store is performed (a memcpy in RAM, or a
+ * bus access at the unaligned address), where the board would raise an address error. */
 #define KUSEG_RAM_START 0x00040000u
 
 /* RAM is kseg0 and kseg1 below RAM_SIZE, and kuseg from KUSEG_RAM_START to RAM_SIZE; for
@@ -237,6 +294,24 @@ static inline void rc_set_fd(cpu_t *c, unsigned n, double d)
     memcpy(&bits, &d, 8);
     c->fpr[n & 30] = (uint32_t)bits;
     c->fpr[(n & 30) + 1] = (uint32_t)(bits >> 32);
+}
+
+/* --- FP divide -------------------------------------------------------------------------- */
+
+/* div.s and div.d, in generated code and in the interpreter: the seam for the FP
+ * divide-by-zero trap. The game enables that trap: main installs FPU exception handlers
+ * through the loader (slot 0x1E8, which also sets the matching FCSR enable), from 0x800C46A0
+ * for cause 5 (handler 0x80150860) and from 0x800C46C0 for cause 3, divide by zero (handler
+ * 0x8014FEF0). MAME raises the exception when the enable is set; the port does not yet: it
+ * returns the IEEE result (an infinity, or a NaN for 0 / 0). M2 adds the trap here. */
+static inline float rc_div_s(float a, float b)
+{
+    return a / b;
+}
+
+static inline double rc_div_d(double a, double b)
+{
+    return a / b;
 }
 
 /* --- FP conversions --------------------------------------------------------------------- */

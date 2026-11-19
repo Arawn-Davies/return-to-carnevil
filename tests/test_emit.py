@@ -243,6 +243,19 @@ class EmitStaticTest(unittest.TestCase):
         ctc1 = emit.statement(mips.decode(A("ctc1", rt=T0, fs=31), 0), 0)
         self.assertEqual(ctc1, [f"rt_set_fcsr(c, c->r[{T0}]);"])
 
+    def test_fp_divide_goes_through_the_shared_helpers(self):
+        # rc_div_s / rc_div_d in recomp.h are where M2 adds the divide-by-zero trap: emitted
+        # code and the interpreter both divide through them, never with a plain `/`
+        div_s = emit.statement(mips.decode(A("div.s", fd=0, fs=1, ft=2), 0), 0)
+        self.assertEqual(div_s, ["rc_set_fs(c, 0, rc_div_s(rc_fs(c, 1), rc_fs(c, 2)));"])
+        div_d = emit.statement(mips.decode(A("div.d", fd=4, fs=6, ft=8), 0), 0)
+        self.assertEqual(div_d, ["rc_set_fd(c, 4, rc_div_d(rc_fd(c, 6), rc_fd(c, 8)));"])
+        with open(os.path.join(REPO, "runtime", "interp", "interp.c")) as f:
+            interp = f.read()
+        self.assertIn("rc_div_s(a, b)", interp)
+        self.assertIn("rc_div_d(a, b)", interp)
+        self.assertNotIn("a / b", interp)
+
     def test_write_to_zero_is_dropped_statically(self):
         for word in ZERO_WRITES:
             self.assertEqual(emit.statement(mips.decode(word, 0), 0), [], hex(word))

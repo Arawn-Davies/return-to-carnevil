@@ -529,7 +529,8 @@ class FunctionTest(RecompTestCase):
 
     def test_kuseg_ram_mapping(self):
         """The loader's TLB maps kuseg 0x00040000-0x007FFFFF onto RAM at the same physical
-        address (MAME: GAME.EXE stores through such addresses, task 6); the first 256 KB of
+        address (MAME: GAME.EXE stores through such addresses in the function-replay
+        captures); the first 256 KB of
         kuseg and kuseg from 8 MB up are not RAM and go to the bus, as does an access that
         straddles either edge. Every edge in both modes."""
         p = Asm()

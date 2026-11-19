@@ -147,7 +147,7 @@ static void exec_fp_s(cpu_t *c, uint32_t pc, uint32_t w)
     case 0x00: rc_set_fs(c, fd, a + b); return;                        /* add.s */
     case 0x01: rc_set_fs(c, fd, a - b); return;                        /* sub.s */
     case 0x02: rc_set_fs(c, fd, a * b); return;                        /* mul.s */
-    case 0x03: rc_set_fs(c, fd, a / b); return;                        /* div.s */
+    case 0x03: rc_set_fs(c, fd, rc_div_s(a, b)); return;               /* div.s */
     default: break;
     }
     if (FUNCT(w) >= 0x30) {
@@ -181,7 +181,7 @@ static void exec_fp_d(cpu_t *c, uint32_t pc, uint32_t w)
     case 0x00: rc_set_fd(c, fd, a + b); return;                        /* add.d */
     case 0x01: rc_set_fd(c, fd, a - b); return;                        /* sub.d */
     case 0x02: rc_set_fd(c, fd, a * b); return;                        /* mul.d */
-    case 0x03: rc_set_fd(c, fd, a / b); return;                        /* div.d */
+    case 0x03: rc_set_fd(c, fd, rc_div_d(a, b)); return;               /* div.d */
     default: break;
     }
     if (FUNCT(w) >= 0x30) {

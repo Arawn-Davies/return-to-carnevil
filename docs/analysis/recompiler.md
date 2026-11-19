@@ -25,7 +25,7 @@ writes:
   2,093 functions in 33 files, 29 loader stubs, 2 interpreted functions, 91 jump tables, 0
   `jr`s left to `rt_jump`.
 
-That is 248,659 lines and 7,984,973 bytes of C in all. Two runs give identical bytes.
+That is 248,659 lines and 7,987,844 bytes of C in all. Two runs give identical bytes.
 
 Each MIPS function becomes one C function, `void fn_<ADDR>(uint8_t *ram, cpu_t *c)`, named
 after its address in eight upper-case hexadecimal digits, with the analysis name in a comment.
@@ -66,21 +66,31 @@ The generated C, the interpreter and any runtime share one header.
   RAM is read and written with `memcpy`, little-endian; a big-endian host is a compile error.
   Every other address, an access that straddles the end of RAM included, goes to the runtime's
   `bus_read` and `bus_write`. This is where the Voodoo, the gun, the sound FIFO and the CMOS
-  will be modelled.
+  will be modelled. Alignment is not checked: an unaligned access is performed, where the
+  board would raise an address error.
 - **Arithmetic helpers** (`rc_*`), one per operation whose C is not a plain operator:
-  division, multiplication into `hi`/`lo`, the FP register getters and setters, `trunc.w`, the
-  FP compares and condition codes, `sqrt.s` and the multiply-add family. Plain operators stay
-  inline in both the emitter and the interpreter: signed shifts and compares through `int32_t`
-  casts, sign extension, FP `+ - * /` and negation, `recip.s` as `1.0f / x`, and the
-  conversion casts. Each such operator is pinned by the MAME vectors in both copies.
+  division, multiplication into `hi`/`lo`, the FP register getters and setters, FP divide
+  (`rc_div_s`, `rc_div_d`: a plain `/` today, and where M2 adds the divide-by-zero trap, below),
+  `trunc.w`, the FP compares and condition codes, `sqrt.s` and the multiply-add family. Plain
+  operators stay inline in both the emitter and the interpreter: signed shifts and compares
+  through `int32_t` casts, sign extension, FP `+ - *` and negation, `recip.s` as `1.0f / x`,
+  and the conversion casts. Each such operator is pinned by the MAME vectors in both copies.
 - **Entry points a runtime provides**: `bus_read`, `bus_write`, `rt_loader(ram, c, slot)`,
   `rt_break(ram, c, pc, code)`, `rt_interrupt(ram, c)` and `recomp_lookup(addr)` (the
-  generated `func_table.c` provides the last).
+  generated `func_table.c` provides the last). `recomp.h` gives the contract of each in a
+  comment block: the sizes and masking of a bus access; the unit of `slot` (the byte offset
+  from 0x800C408C), the state at a loader call and what the caller does after it; that
+  returning from `rt_break` resumes at the next instruction; and that `rt_interrupt` must
+  leave the guest state and the host FP environment as an exception return would, clears
+  `irq_pending` before it runs a handler, and runs the handler on whatever host context is
+  current.
 - **Provided by `runtime/core`**: `rt_call` and `rt_jump` (the recompiled function at an
   address if there is one, otherwise the interpreter), `rt_set_fcsr` and `rt_get_fcsr` (FCSR's
   rounding mode and flush-to-zero become the host's: FPCR on arm64, MXCSR on x86-64; any other
   host is a compile error), and `rt_log_unrecompiled`, called once per address the
-  interpreter is entered at.
+  interpreter is entered at. The host FP environment is the process's (per thread), and only
+  `rt_set_fcsr` sets it, so a runtime that loads a state or switches host context or thread
+  re-applies it with `rt_set_fcsr(c, rt_get_fcsr(c))`.
 - **`RT_CHECK(ram, c)`**: calls `rt_interrupt` when `irq_pending` is set.
 
 Every C file is built with `-std=c11 -O2 -ffp-contract=off -frounding-math
@@ -237,3 +247,15 @@ NaN operand's payload propagates the same way on both hosts.
 MAME-only behaviour the vectors cannot show: `cache` is a no-op, no FP exception is raised
 except division by zero with its enable set, and `addi` never traps on overflow
 ([tools/mame/README.md](../../tools/mame/README.md)).
+
+## A divergence from MAME: the FP divide-by-zero trap
+
+The game enables an FP exception that the port does not raise. `main` installs two FPU
+exception handlers through the loader's slot 0x1E8, which also sets the matching FCSR enable:
+from 0x800C46A0 for cause 5, unimplemented operation (handler 0x80150860), and from 0x800C46C0
+for cause 3, divide by zero (handler 0x8014FEF0) (read). MAME raises the divide-by-zero
+exception when its enable is set, so on MAME a `div.s` or `div.d` by zero after that point
+enters the game's handler. The port does not trap: it returns the IEEE result (an infinity, or
+a NaN for 0 / 0) and carries on. The vectors cannot show this (they keep FCSR's enables clear),
+so it is not checked against MAME. Both the generated C and the interpreter divide through
+`rc_div_s` and `rc_div_d` in `recomp.h`, which is where M2 adds the trap.
