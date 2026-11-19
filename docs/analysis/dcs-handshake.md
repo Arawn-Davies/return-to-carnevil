@@ -41,8 +41,8 @@ read from code.
   poll.
 - One write routine, 0x8016A6E8, waits until both 0x8000 and 0x0080 are set (it masks with
   0x8080 and compares with 0x8080; read); the others test 0x80 or 0x40 alone (read). Bit
-  0x8000 was set in most SOUNDSTAT reads of the bulk download (0x8388 and 0x83B0 are the
-  commonest values: 246,461 and 856,370 of the 1,679,832 reads; measured).
+  0x8000 was set in 1,119,145 of the 1,679,832 SOUNDSTAT reads; the commonest values were
+  0x83B0 (856,370 reads), 0x03B0 (412,433) and 0x8388 (246,461) (measured).
 - The other bits seen vary (0x0008, 0x0010, 0x0020, 0x0100, 0x0200; 19 distinct values from
   0x0088 to 0x83B0; measured). No game code tests them (read: the masks above are the only
   ones applied to a SOUNDSTAT result in 0x8016A42C to 0x8016AAA8). So a stand-in that returns
@@ -83,9 +83,10 @@ means a command word followed by a header and data words, sent back to back.
 13. 12.790 s: SOUNDOUT 0x55AA, 0xC837, 0x55B2, 0xBB44, 0x55AE, 0x0100 (no reply); SOUNDCTL
     read 0x0001 and written 0x0001, then 0x000F; INTCTL written 0x4008, then 0x4009 (the
     IOASIC interrupt enabled, see below); INTSTAT read twice (0x2089, 0x2081).
-14. 12.790 s to 19.775 s: SOUNDOUT 0x55D7, 0x0000, 0xFF00, 0x0000 (no reply), then five
-    rounds of 0x55D2, 0x55D3 (stale reads as in step 8), a `0x55D1` block of 9 or 13 words
-    and a long `0x55D1` block (up to 560,227 words), **each block answered by its data sum**.
+14. 12.790 s to 19.775 s: SOUNDOUT 0x55D7, 0x0000, 0xFF00, 0x0000 (no reply), then four
+    rounds of 0x55D2, 0x55D3 (stale reads as in step 8), a short `0x55D1` block (13 words with
+    its header the first time, 9 the other three) and a long `0x55D1` block (22,288 to 560,227
+    words), **each block answered by its data sum**.
 15. 22.600 s: SOUNDOUT 0x00B9, 0xFF7F, 0x8000, 0x55AE, 0x0100. No reply. Nothing more was
     sent or read on the DCS ioctls up to 155 s.
 

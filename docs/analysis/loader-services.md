@@ -901,7 +901,8 @@ The code is the instruction word at EPC shifted right 6.
 - Console: flags word 0x800B6E50 = 0; ring buffer empty (head = tail = 0x800B6E5C).
 - Not in the dump (hardware registers): the value of IOASIC INTCTL, the interrupt enable
   register (0x17300000; its bit 7 is set only when line 0 is installed), CPU_MASK beyond bit 8,
-  and TIMER_CONTROL. These need a MAME read (open question 1, answered below).
+  and TIMER_CONTROL. These need a MAME read (open question 1, answered below for all but
+  TIMER_CONTROL, whose debugger read was not reproducible).
 
 ## 8. What each stand-in must do
 
@@ -1003,11 +1004,15 @@ file in `mame/m2-facts/` on the share.
    **Answer (measured, debugger reads without side effects; `entry-hw.txt`):** IOASIC INTSTAT
    0x000020C9, INTCTL 0x00004000; interrupt enable 0x17300000 = 0x00000002 (bit 7, VBLANK, is
    clear until slot 0x200 installs line 0); interrupt configuration 0x17400000 = 0x00008004;
-   GT64010 INTR_CAUSE 0, CPU_MASK 0x0010011E (bits 1 to 4, 8 and 20), TIMER_CONTROL 0x00000003
-   (timer 0 enabled in timer mode, the others stopped); TIMER0 0x00313793 (counting down from
-   0x4C4B40), TIMER1 and TIMER2 0x442AFB52 (what MAME returns for these never-loaded timers;
-   not meaningful as counts, inferred), TIMER3 0x00F0BDB9; Status 0x30010401. A blank NVRAM
-   is filled with 0xFF: all 32,768 CMOS bytes read 0xFF at the entry.
+   GT64010 INTR_CAUSE 0, CPU_MASK 0x0010011E (bits 1 to 4, 8 and 20), TIMER0 0x00313793
+   (counting down from 0x4C4B40), TIMER3 0x00F0BDB9; Status 0x30010401. The debugger reads of
+   TIMER_CONTROL, TIMER1 and TIMER2 are **not reproducible**: two identical runs gave
+   TIMER_CONTROL 0x00000003 and 0x50000027, TIMER1 and TIMER2 0x442AFB52 and 0 (facts-A and
+   facts-A2), so they are not measured start values. That timer 0 runs in timer mode at the
+   entry is read from the dump (section 7: the loader's tick, count 0x4C4B40) and agrees with
+   TIMER0 counting down; whether timers 1 to 3 are enabled in TIMER_CONTROL is inferred (their
+   saved counts are 0, section 7), not measured. A blank NVRAM is filled with 0xFF: all 32,768
+   CMOS bytes read 0xFF at the entry.
 2. **Whether `pci:` is fd 6.** Breakpoint on the return of slot 0x088 called from 0x800C4540;
    log v0 (expected 6).
    **Answer (measured, `loader-calls.md`, call 3; `opens.txt`):** yes. `open("pci:", 2)` from
