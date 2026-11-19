@@ -188,8 +188,8 @@ CPU interrupt-line table (0x800146A0), the GT64010 cause table (0x800146E0), the
 
 `_start` (0x800C4000) sets sp = 0x80800000, clears 0x801A4228 to 0x80800000 byte by byte, and
 copies 0x240 bytes (144 words) from 0xA0000000 to 0xA00C408C, that is physical 0x000 to 0x23F
-to the zeroed block 0x800C408C to 0x800C42CB, through KSEG1. The source is the loader's slot
-table: at entry the first 0x240 bytes of RAM equal the loader's ROM image byte for byte, and
+to the zeroed block 0x800C408C to 0x800C42CC (end exclusive), through KSEG1. The source is
+the loader's slot table: at entry the first 0x240 bytes of RAM equal the loader's ROM image byte for byte, and
 not the POST program's. The copy therefore holds 72 `j` instructions into the resident loader
 plus their `nop`s. Because `j` keeps the upper 4 address bits, each copied slot still jumps to
 the loader's routine at 0x8000xxxx.
@@ -310,8 +310,8 @@ Hit Writeback Invalidate, Hit Writeback) in its memory-fill and flush routines a
 
 1. **Native stand-ins for the whole slot table, not an interpreted loader.** Every call from
    GAME.EXE into the loader goes through the 29 slots of the stub block (plus break 0x409 and
-   0x407, plus the reset jump). The runtime should fill 0x800C408C to 0x800C42CB itself and
-   bind each slot to a native routine: the file calls (open, close, read, write, ioctl, lseek,
+   0x407, plus the reset jump). The runtime should fill 0x800C408C to 0x800C42CC (end
+   exclusive) itself and bind each slot to a native routine: the file calls (open, close, read, write, ioctl, lseek,
    isatty) to the host's game-data files and device emulation; the PCI calls to the Voodoo
    emulation or its replacement; the cache call to a no-op; the disk partition and raw IDE
    calls to a disk image reader; the handler-registration calls to the runtime's own interrupt

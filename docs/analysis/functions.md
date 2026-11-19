@@ -2,50 +2,59 @@
 
 Produced by `python3 -m carnevil_tools functions GAME.EXE -o config/game.functions.toml`
 (`carnevil_tools/functions.py`, names from `carnevil_tools/naming.py`). The
-command prints every number below. `config/game.functions.toml` holds the
-result: text bounds, functions (address, size, name, sources), jump tables
-(the `jr`, the table address, the targets) and the unreached ranges. Counts and
-addresses only.
+command prints every number below. It reads the hand-maintained
+`config/game.manual.toml` (the output's name with `.functions.toml` replaced
+by `.manual.toml`): the stub block and three function starts MAME showed, each
+with the note that shows it. `config/game.functions.toml` holds the result:
+`format = 1`, the SHA-256 of the EXE it came from, text bounds, the stub
+block, functions (address, size, name, sources), jump tables (the `jr`, the
+table address, the targets) and the unreached ranges. Counts and addresses
+only. A game-data test checks that the committed file equals a fresh analysis.
 
 Re-run in Task 5b on the chain-extracted GAME.EXE (SHA-256 f9455ce8...d3a6,
-`disk-format.md`): `config/game.functions.toml` is byte-for-byte unchanged
+`disk-format.md`): `config/game.functions.toml` was byte-for-byte unchanged
 from the run on the earlier, contiguously extracted file (no function added or
-removed), and the printed numbers below are unchanged. The corrected bytes
-(0x801A3FF8 to 0x801A4224) are data, past the 16-byte code island at
-0x801A355C.
+removed). The corrected bytes (0x801A3FF8 to 0x801A4224) are data, past the
+16-byte code island at 0x801A355C. The numbers below are from the later run
+with the manual input and the stub block ("What the manual input changed").
 
 Entry: 0x800C4000 (the load address).
 
 ## Result in one paragraph
 
-The text runs from 0x800C4000 to 0x8016DC4C (695,372 bytes). There are 2,091
-functions and 75 jump tables (1,488 entries, the largest has 121). One of the
-functions sits in the data, past text_end (0x801A355C, below). 165,748 words are
-reached as code and none of them decodes as unknown. Outside the boot-ROM stub
-block, no function runs straight into the next one. 263 ranges (32,396 bytes,
-4.66% of the text) are not reached; 15 KB of that is one data block inside the
-text. 16 indirect jumps could not be resolved; their targets (about 1 KB of
-code) are among the unreached ranges, listed below.
+The text runs from 0x800C4000 to 0x8016DC4C (695,372 bytes). There are 2,093
+functions: 29 one-slot stubs in the boot-ROM stub block and 2,064 of the
+game's own. There are 75 jump tables (1,488 entries, the largest has 121). One
+of the functions sits in the data, past text_end (0x801A355C, below). 165,638
+words are reached as code and none of them decodes as unknown. No function runs
+straight into the next one. 262 ranges (32,260 bytes, 4.64% of the text) are
+not reached; 15 KB of that is one data block inside the text. 16 indirect jumps
+could not be resolved; their targets (about 1 KB of code) are among the
+unreached ranges, listed below.
 
 ## Functions by source
 
 A function counts once under each of its sources:
 
 - entry: 1
-- call: 1,241 (`jal`, plus tail calls by `j`, see departure 4)
-- pointer: 390
-- prologue: 1,085
-- manual: 0
+- call: 1,213 (`jal`, plus tail calls by `j`, see departure 4)
+- pointer: 396
+- prologue: 981
+- manual: 3 (`config/game.manual.toml`)
+- stub: 29 (call targets inside the stub block)
 
-The combinations that occur: call 941, call+prologue 291, call+pointer 1,
-call+pointer+prologue 8, pointer 63, pointer+prologue 318, prologue 468,
-entry 1.
+The combinations that occur: call 907, call+prologue 295, call+pointer 9,
+call+pointer+prologue 2, pointer 163, pointer+prologue 219, prologue 465,
+manual+pointer 3, stub 29, entry 1.
 
-The lui/addiu (and lui/ori) pass over reached code found 47 function starts
+The lui/addiu (and lui/ori) pass over reached code found 146 function starts
 that no other pass had found when it ran. These are callbacks whose address is
 built in code: the `pointer` source covers both this pass and the data scan.
-The pass runs before the prologue scan in each round, so some of the 47 have a
-prologue and would also have been found by it.
+The pass runs before the prologue scan in each round, so some of the 146 have a
+prologue and would also have been found by it. Which pass finds a start first
+depends on how far the code reached in the earlier rounds extends, so the
+sources of a function, unlike the set of functions, shift when the inputs
+change (see "What the manual input changed").
 
 ## Names from debug strings
 
@@ -78,16 +87,52 @@ wider than all the code beyond it. On this image it gives 0x8016DC4C.
 Functions past text_end take their size from the code reached (16 bytes here)
 and are not part of the text range.
 
-## The boot-ROM stub block at 0x800C408C to 0x800C42CC
+## The boot-ROM stub block at 0x800C408C to 0x800C42CC (end exclusive)
 
 In the file these 576 bytes are all zero. 29 call targets (0x800C40A4 to
 0x800C42AC) lie inside the block. `_start` fills it at boot by copying from
 0xA0000000, which is physical address 0 and was left there by the boot ROM.
-The descent reads the zeros as `nop`s and follows them to the next `jr ra`,
-which is how 0x800C42CC (the bytes "spri", decoded as `ldl`) comes to count
-as reached code. The sizes of these 29 functions in functions.toml come from
-the zeros in the file and mean nothing. The recompiler must not translate
-this block from the file: its contents come from the boot ROM (Task 5).
+The block is declared in `config/game.manual.toml` and recorded as
+`[[stub_block]]` in functions.toml. Discovery never decodes its words or
+descends into them: each call or jump target inside it is a function of one
+slot (8 bytes, a `j` and its delay slot once filled) with the single source
+`stub`, and the block's words are neither reached code nor unreached ranges.
+`boot_state.toml` maps each stub to its loader slot (stub = 0x800C408C +
+slot). The recompiler must not translate this block from the file: its
+contents come from the boot ROM (Task 5).
+
+The three words after the block, 0x800C42CC to 0x800C42D8 (the first is the
+bytes "spri"), are unreached. Before the block was declared, the descent read
+the zeros as `nop`s and ran through them into these words, which is how one
+`ldl` came to count as reached code.
+
+## What the manual input changed
+
+Against the run without `config/game.manual.toml` (2,091 functions; the list
+committed before the stub block and the manual starts were added):
+
+- Added: 0x800C6030 (size 236), 0x8014A930 (40) and 0x80151A70 (20), each
+  with sources manual and pointer. 0x800C6030 swallows 0x800C6070, a start
+  the prologue scan had found inside it, which is gone (172 bytes).
+- Resized: the 29 stub-block entries are 8 bytes each and have the source
+  `stub` instead of `call`; 14 of them had other sizes (16 to 80 bytes) read
+  from the zeros. No other function changed size and none was renamed.
+- Unreached: 263 ranges (32,396 bytes) became 262 (32,260 bytes). Gone:
+  0x800C408C to 0x800C40A4 (now stub block), 0x800C6030 to 0x800C6070,
+  0x8014A92C to 0x8014A958 and 0x80151A70 to 0x80151A88. New: 0x800C42CC to
+  0x800C42D8, 0x8014A92C to 0x8014A930 and 0x80151A84 to 0x80151A88.
+- The jump tables, the text bounds and the 16 unresolved jumps are unchanged.
+- The sources of 353 other functions changed, though the functions did not:
+  with 0x8014A930 and 0x80151A70 reached from the start, the second round
+  works with a text range up to 0x800EC188 instead of 0x800CA4D0, and the
+  passes find starts in a different order: 227 functions lose the prologue
+  source (the start was already code when the scan ran), 124 gain it, and 2
+  gain pointer. In the same way, 20 of the starts the hoist had overshot are
+  now never proposed, which is why fewer are withdrawn.
+- 0x800DE094, an `addiu sp,sp,-16` in the delay slot of a branch inside
+  0x800DE084, was proposed by the prologue scan before 0x800DE084 was reached
+  in this order. A prologue-only start that reached code takes as a delay slot
+  is now withdrawn as well, like one that reached code runs into.
 
 ## Where the algorithm departs from the brief, and why
 
@@ -107,22 +152,24 @@ this block from the file: its contents come from the boot ROM (Task 5).
    With the brief's literal rule (a gap starting with the prologue), the
    result was 1,815 functions and 12.19% unreached, much of it real code
    behind a dead tail or a leaf in the same gap. (That was measured before
-   the withdrawal step below was added.) With this rule it is 2,091
-   functions and 4.66%, still with no unknown word in reached code.
+   the withdrawal step below was added.) With this rule it is 2,093
+   functions and 4.64% (with the manual input), still with no unknown word
+   in reached code.
 
    Because the passes run in rounds, a later pass can prove a prologue start
    wrong. After each round, a start whose only source is `prologue` is
    withdrawn in two cases:
-   - reached code runs straight into it. One case: 0x800D1588 is inside
-     0x800D1574, whose stack adjustment is 13 instructions in, past the
-     8-instruction limit. The `jal` to 0x800D1574 was found only after the
-     scan.
+   - reached code runs straight into it, or reaches it as the delay slot of
+     a branch. One case: 0x800D1588 is inside 0x800D1574, whose stack
+     adjustment is 13 instructions in, past the 8-instruction limit. The
+     `jal` to 0x800D1574 was found only after the scan. The delay-slot case
+     is 0x800DE094, inside 0x800DE084.
    - its hoisted run of plain instructions runs straight into another start
      that a later pass found. Its words become unreached again.
 
-   24 starts are withdrawn: 0x800D1588, and 23 single words before a
-   function, which the hoist took in before a pointer or call found the real
-   start (for example 0x800F38C4 before 0x800F38C8). A withdrawn start is
+   5 starts are withdrawn: 0x800D1588, 0x800DE094, and 3 single words before
+   a function, which the hoist took in before a pointer or call found the
+   real start (0x80150DFC, 0x80151A84 and 0x80160624). A withdrawn start is
    never proposed again.
 3. **Jump-table base.** GCC builds the table address as
    `lui at,%hi; addu at,at,idx; lw r,%lo(at)`, with the low half in the `lw`
@@ -140,11 +187,16 @@ this block from the file: its contents come from the boot ROM (Task 5).
    only through a `j`. The other out-of-function jumps are reported, not
    taken (see "Jumps out of their function" below).
 5. **Sizes.** A function ends at the next function start, less any unreached
-   words just before it. This keeps the data islands out of functions.
+   words just before it. This keeps the data islands out of functions. A
+   function before a stub block ends at the block, and a stub is one slot.
+6. **Jump tables are all or nothing.** A table is recorded only if every
+   entry is a word address inside the text; otherwise its `jr` is listed as
+   unresolved and discovery runs again without it, so `targets[k]` is always
+   case k. All 75 tables pass.
 
 ## Unreached ranges
 
-263 ranges, 32,396 bytes. functions.toml lists them all; they fall into these
+262 ranges, 32,260 bytes. functions.toml lists them all; they fall into these
 kinds:
 
 - **Data block inside the text: 0x80110B04 to 0x80114560** (14,940 bytes, 802
@@ -155,21 +207,22 @@ kinds:
   0x800F1D84. All seven are unreached and lie outside every function. Six
   are single-word ranges; 0x800C81B4 shares its range (0x800C819C to
   0x800C81B8) with an unreached leaf just before it.
-- **78 isolated single words** between reached code that decode as valid
-  instructions (312 bytes). They are padding of the same kind, for example
-  0x8C63F0BC at 0x80100DBC. 21 of them are words the withdrawal step gave
-  back; the other 2 words it gave back (0x80151A84 and 0x80160624) joined
-  the neighbouring leaf ranges.
-- **7 zero-padding runs** (48 bytes).
-- **149 ranges of leaf-shaped code** (16,216 bytes): clean decode, ending in
+- **80 isolated single words** between reached code that decode as valid
+  instructions (320 bytes). They are padding of the same kind, for example
+  0x8C63F0BC at 0x80100DBC. 2 of them (0x80150DFC and 0x80151A84) are words
+  the withdrawal step gave back; the third word it gave back (0x80160624)
+  joined the neighbouring leaf range.
+- **6 zero-padding runs** (24 bytes).
+- **149 ranges of leaf-shaped code** (16,204 bytes): clean decode, ending in
   `jr ra`, no stack frame. For 141 of them no pointer value in the image
   lands anywhere inside the range, so they are either dead code or leaves
-  reached in a way this analysis cannot see. The other 8 contain a code-built
-  address (see the refused pointers below). The largest are 0x800F3008 to
-  0x800F3580 (1,400 bytes) and 0x8012F6C8 to 0x8012FBF0 (1,320 bytes). Among them, 0x80167FB8 to 0x80167FF4 holds four
+  reached in a way this analysis cannot see. The other 8 contain a
+  code-built address (see the refused pointers below). The largest are
+  0x800F3008 to 0x800F3580 (1,400 bytes) and 0x8012F6C8 to 0x8012FBF0
+  (1,320 bytes). Among them, 0x80167FB8 to 0x80167FF4 holds four
   Status-register helpers (`mfc0`/`mtc0` on register 12). These are the only
   COP0 moves in the text, and nothing references them.
-- **21 other clean ranges** (828 bytes) with no `jr ra`. 488 bytes of that
+- **19 other clean ranges** (720 bytes) with no `jr ra`. 488 bytes of that
   are the case blocks of the unresolved indirect jumps below.
 
 11 ranges (504 bytes) end inside a function rather than at a function start.
@@ -205,47 +258,51 @@ recompiler has to treat it as a jump between functions.
 
 ## Pointers refused by the prologue-or-known-start rule
 
-50 pointer values, from data words or lui pairs, land somewhere inside an
+47 pointer values, from data words or lui pairs, land somewhere inside an
 unreached range that holds no undecodable word. Values inside the data block
 at 0x80110B04 are data pointers and are not counted.
 
-- 0x800C408C: the stub block's start, from `_start`'s copy loop.
+- 0x800C42CC: the stub block's end, from `_start`'s copy loop. (The block's
+  start, 0x800C408C, is no longer counted: the block is not unreached.)
 - 39 case labels of the unresolved jumps:
   - 6 in 0x8012DCB0 to 0x8012DD3C;
   - 5 in 0x8015017C to 0x801501F0;
   - 4 in each of the seven 28-byte tails at 0x801644F4, 0x801646A0,
     0x80164838, 0x801649A0, 0x80164F24, 0x801650B0 and 0x80165300.
-- 10 probable callbacks: 0x800C6030, 0x800C6F28, 0x800FE924, 0x800FEDB0,
-  0x80101CD8, 0x80102454, 0x801150C8, 0x801478C0, 0x8014A930, 0x80151A70.
-  Code builds each of these addresses with a lui pair, and each lands on code
-  with no stack frame. 0x801478C0 lies right after a `jr ra` delay slot in the
-  middle of its range; 0x8014A930 lies one word in. They are candidates for
-  `manual` starts; the rule as specified refuses them.
+- 7 probable callbacks: 0x800C6F28, 0x800FE924, 0x800FEDB0, 0x80101CD8,
+  0x80102454, 0x801150C8 and 0x801478C0. Code builds each of these addresses
+  with a lui pair, and each lands on code with no stack frame. 0x801478C0
+  lies right after a `jr ra` delay slot in the middle of its range. They are
+  candidates for `manual` starts; the rule as specified refuses them. Three
+  more of this kind, 0x800C6030, 0x8014A930 and 0x80151A70, were seen
+  running or registered in MAME and are manual starts now
+  (`config/game.manual.toml`).
 
 ## Census of reached code
 
-Restricted to the 165,748 reached words (all functions, minus the unreached
-ranges). This is the list of instructions the recompiler has to handle.
+Restricted to the 165,638 reached words (all functions, minus the unreached
+ranges and the stub block). This is the list of instructions the recompiler
+has to handle.
 
 Unknown words: 0.
 
-Mnemonic counts: addiu 26677, lw 16439, lui 15995, addu 14936, sw 14705,
-sll 12959, jal 11199, lwc1 6678, beq 4834, swc1 4481, j 4231, bne 3443,
+Mnemonic counts: addiu 26682, lw 16445, lui 15999, addu 14937, sw 14706,
+sll 12824, jal 11199, lwc1 6678, beq 4834, swc1 4481, j 4232, bne 3446,
 sh 2755, jr 2139, ori 1802, lhu 1604, mul.s 1589, andi 1513, slti 1497,
 add.s 1221, lh 1152, sub.s 1106, sra 928, ldc1 801, mtc1 791, sdc1 697,
 or 616, mfc1 551, lbu 513, bc1f 510, c.lt.s 484, subu 479, and 474, slt 459,
 cvt.s.w 443, mov.s 389, beql 325, bnel 323, blez 312, sltiu 310, div.s 306,
 sb 258, srl 210, c.le.s 209, bc1t 182, sltu 166, c.eq.s 137, bgez 134,
 neg.s 128, cvt.d.s 118, trunc.w.s 107, bc1tl 102, cvt.s.d 102, movz 82,
-mult 73, xor 72, bc1fl 71, mflo 65, madd.s 64, jalr 62, lb 60, add.d 59,
-cvt.d.w 54, bltz 53, mul.d 48, break 37, bgtz 35, movn 33, nor 32, xori 30,
-mfhi 29, c.lt.d 24, sllv 23, c.le.d 22, bltzl 21, sub.d 21, cache 20,
-mov.d 18, c.eq.d 16, div 14, msub.s 14, div.d 13, bgezl 11, addi 10,
+mult 73, xor 72, bc1fl 71, mflo 65, madd.s 64, jalr 63, lb 60, add.d 59,
+cvt.d.w 54, bltz 53, mul.d 48, break 39, bgtz 35, movn 33, nor 32, mfhi 30,
+xori 30, c.lt.d 24, sllv 23, c.le.d 22, bltzl 21, sub.d 21, cache 20,
+mov.d 18, c.eq.d 16, div 15, msub.s 14, div.d 13, bgezl 11, addi 10,
 trunc.w.d 8, madd.d 6, nmsub.s 6, movf 5, blezl 4, divu 4, movt 2, bgtzl 1,
-ctc1 1, ldl 1, multu 1, neg.d 1, nmadd.s 1, recip.s 1, sqrt.s 1.
+ctc1 1, multu 1, neg.d 1, nmadd.s 1, recip.s 1, sqrt.s 1.
 
-The one `ldl` is the stub-block artefact at 0x800C42CC. The one `ctc1` is in
-`_start`, where it sets FCSR.
+The one `ctc1` is in `_start`, where it sets FCSR. (Before the stub block
+was declared, one `ldl` was counted: the stub-block artefact at 0x800C42CC.)
 
 MIPS IV instructions: movz 82, movn 33, movf 5, movt 2, madd.s 64, madd.d 6,
 msub.s 14, nmsub.s 6, nmadd.s 1, recip.s 1. No pref, prefx, indexed FP
@@ -261,12 +318,13 @@ eret, wait, tlb* or bc0* in reached code. Every COP0 move, `wait` and `bc0*`
 in the whole-image census lies in the data, apart from the four unreferenced
 Status helpers above.
 
-Traps: there are 37 `break`s. 32 are the divide-by-zero (`break 7`, word
-0x0007000D) and overflow (`break 6`, word 0x0006000D) checks that GCC emits.
+Traps: there are 39 `break`s. 34 are the divide-by-zero (`break 7`, word
+0x0007000D, 19) and overflow (`break 6`, word 0x0006000D, 15) checks that
+GCC emits; 2 of them are in the VBLANK handler 0x800C6030.
 4 are the word 0x000101CD, at 0x801447BC, 0x80144814, 0x801448B4 and
 0x80151AD0. The last is the stub at 0x801A355C (word 0x0001024D). There is
 no syscall and no conditional trap.
 
 The whole-image census flagged `cache`, the traps, `bc0*` and `wait` as
-mostly data. Only `cache` (20) and `break` (37) occur in reached code. No
+mostly data. Only `cache` (20) and `break` (39) occur in reached code. No
 word reached as code is a reserved encoding, so the decoder needs no change.

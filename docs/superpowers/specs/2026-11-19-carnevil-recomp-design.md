@@ -124,7 +124,7 @@ The design above is kept as written; these are the assumptions M0 showed wrong o
 - Disk access: GAME.EXE does none itself; it calls 29 services of the boot ROM's RAM-resident loader.
 - "The game's own file system code" (section 4, IDE): there is none in GAME.EXE; how the port supplies the loader's services is an open decision for M2.
 - Extraction: files are block-chained; the first pinned GAME.EXE hash was of a mis-extracted file (re-pinned as `f9455ce8…d3a6`).
-- Function count: 2,091 entries, 29 of them loader slots, so 2,062 game functions; plus 16 unresolved indirect jumps and 10 probable callbacks.
+- Function count: 2,093 entries, 29 of them loader slots (`stub`), so 2,064 game functions, 3 of them manual starts MAME showed; plus 16 unresolved indirect jumps and 7 probable callbacks.
 - MIPS IV list (section 3): reached code uses no indexed FP loads/stores and no `pref`, and FP condition codes 0 to 2 only; FR = 0.
 - CMOS: the game reads it directly at 0xB6100000; writes go through the loader.
 - Security PIC: not checked by the game; three loader-held words suffice.

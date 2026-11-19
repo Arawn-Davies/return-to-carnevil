@@ -115,7 +115,9 @@ note = "above the loader's BSS; most likely left by the boot ROM's POST program 
 
 # Calls from GAME.EXE's reached code to targets outside its text range
 # [0x800C4000, 0x8016DC4C). For the stub block, addr is where the copied `j` lands in the
-# resident loader, stub is the slot GAME.EXE calls and slot its offset in the table.
+# resident loader, stub is the slot GAME.EXE calls and slot its offset in the table:
+# stub = 0x800C408C + slot, and each stub is a function with source "stub" in
+# config/game.functions.toml (the [[stub_block]] 0x800C408C to 0x800C42CC, end exclusive).
 
 [[external_call]]
 addr = 0xBFC00000

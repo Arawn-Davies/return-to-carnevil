@@ -3,7 +3,8 @@
 A string in the data section of the form "name(): ..." or "name: ..." whose
 address is formed (lui + addiu/ori) by exactly one function names that
 function. A function whose strings give two different names, or a name that
-two functions would get, is left alone, and the entry keeps `_start`.
+two functions would get, is left alone, and the entry keeps `_start`. A name
+equal to `_start` or to a name a function already has is refused.
 """
 import bisect
 import re
@@ -45,8 +46,13 @@ def name_from_strings(image, analysis, pairs):
         if len(names) == 1:
             claims.setdefault(next(iter(names)), []).append(addr)
     named = 0
+    taken = {f.name for f in analysis.functions} | {"_start"}
     for name, addrs in claims.items():
-        if len(addrs) == 1 and by_addr[addrs[0]].name != "_start" and not name.startswith("func_"):
-            by_addr[addrs[0]].name = name
-            named += 1
+        if len(addrs) != 1 or by_addr[addrs[0]].name == "_start":
+            continue
+        if name.startswith("func_") or name in taken:
+            continue  # never a second `_start`, nor a name another function holds
+        by_addr[addrs[0]].name = name
+        taken.add(name)
+        named += 1
     return named

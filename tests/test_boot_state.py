@@ -13,6 +13,7 @@ BOOT_STATE = os.path.join(REPO, "config", "boot_state.toml")
 FUNCTIONS = os.path.join(REPO, "config", "game.functions.toml")
 
 ENTRY = 0x800C4000
+STUB_START, STUB_END = 0x800C408C, 0x800C42CC  # the stub block, end exclusive
 RAM_START, RAM_END = 0x80000000, 0x80800000
 SOURCES = {"boot_rom_copy", "diag_leftover", "loader_data", "unknown"}
 REGIONS = {"boot_rom", "low_ram", "stub_block", "other"}
@@ -67,9 +68,16 @@ class BootState(unittest.TestCase):
         stubs = [c["stub"] for c in self.state["external_call"] if c["region"] == "stub_block"]
         self.assertEqual(len(stubs), 29)
         self.assertEqual(len(set(stubs)), 29)
-        for stub in stubs:
-            self.assertTrue(0x800C408C <= stub < 0x800C42CC and stub % 8 == 0x800C408C % 8,
-                            hex(stub))
+        sources = {f.addr: f.sources for f in self.analysis.functions}
+        self.assertEqual(self.analysis.stub_blocks, [(STUB_START, STUB_END)])
+        for c in self.state["external_call"]:
+            if c["region"] != "stub_block":
+                self.assertNotIn("stub", c, c)
+                continue
+            stub = c["stub"]
+            self.assertTrue(STUB_START <= stub < STUB_END, hex(stub))
+            self.assertEqual(stub, STUB_START + c["slot"], hex(stub))
+            self.assertEqual(sources.get(stub), {"stub"}, "0x%08X in game.functions.toml" % stub)
 
 
 if __name__ == "__main__":

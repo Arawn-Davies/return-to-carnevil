@@ -1,5 +1,6 @@
 import io
 import os
+import shutil
 import struct
 import tempfile
 import unittest
@@ -290,6 +291,30 @@ class Discovery(unittest.TestCase):
         self.assertEqual(found[L["f"]].size, L["g"] - L["f"])
         self.assertEqual(notes.withdrawn, [L["f"] + 8])
 
+    def test_prologue_start_in_a_later_found_delay_slot_is_withdrawn(self):
+        # f's stack adjustment sits in a branch delay slot; the prologue scan proposes
+        # it before g's jal finds f, which then reaches it as a delay slot.
+        a = Asm()
+        a.emit(jal("h"), NOP, jr(RA), NOP)
+        a.label("f")
+        a.emit(beq(A0, ZERO, "out"))
+        a.label("slot")
+        a.emit(addiu(SP, SP, -8), addiu(SP, SP, 8))
+        a.label("out")
+        a.emit(jr(RA), NOP)
+        a.label("g")
+        a.emit(addiu(SP, SP, -8), jal("f"), NOP, addiu(SP, SP, 8), jr(RA), NOP)
+        a.label("h")
+        a.emit(jr(RA), NOP)
+        a.label("data")
+        a.emit(DATA_WORD)
+        L = a.labels
+        res, notes = functions.discover(a.image(), BASE)
+        found = self.by_addr(res)
+        self.assertEqual(sorted(found), [BASE, L["f"], L["g"], L["h"]])
+        self.assertEqual(found[L["f"]].size, L["g"] - L["f"])
+        self.assertEqual(notes.withdrawn, [L["slot"]])
+
     def test_hoist_over_padding_before_a_later_found_start_is_withdrawn(self):
         # The prologue scan hoists f's start over a padding word that reads only
         # live registers; a later pass finds f itself through a pointer.
@@ -462,20 +487,116 @@ class Discovery(unittest.TestCase):
                          [BASE, BASE + 4] + list(range(BASE + 0x10, BASE + 0x20, 4)))
         self.assertEqual(sorted(words[BASE + 0x20]), list(range(BASE + 0x20, BASE + 0x40, 4)))
 
+    def test_stub_block_is_not_code(self):
+        # Calls and a jump into a block the program fills at run time: each target is a
+        # one-slot "stub" function, and the block's words are never decoded.
+        a = Asm()
+        a.emit(jal("s1"), NOP, jal("s2"), NOP, jal("g"), NOP, j("s3"), NOP)
+        a.label("block")
+        a.emit(NOP, NOP)
+        a.label("s1")
+        a.emit(NOP, NOP)
+        a.label("s2")
+        a.emit(jr(RA), NOP)  # would be code if the block were descended into
+        a.label("s3")
+        a.emit(NOP, NOP)
+        a.label("after")
+        a.emit(addiu(V0, ZERO, 1))  # reachable only by running on from the block
+        a.label("g")
+        a.emit(jr(RA), NOP)
+        a.label("data")
+        a.emit(DATA_WORD)
+        L = a.labels
+        block = (L["block"], L["after"])
+        res = functions.analyse(a.image(), BASE, stub_blocks=[block])
+        self.assertEqual(
+            [(f.addr, f.size, f.sources) for f in res.functions],
+            [(BASE, L["block"] - BASE, {"entry"}), (L["s1"], 8, {"stub"}),
+             (L["s2"], 8, {"stub"}), (L["s3"], 8, {"stub"}), (L["g"], 8, {"call"})])
+        self.assertEqual(res.stub_blocks, [block])
+        self.assertEqual(res.unreached, [(L["after"], L["g"])])
+        words = functions.reached_words(res)
+        for stub in ("s1", "s2", "s3"):
+            self.assertEqual(words[L[stub]], set())
+        self.assertEqual(sorted(words[BASE]), list(range(BASE, L["block"], 4)))
+
+    def test_jump_table_with_an_entry_outside_the_text_is_unresolved(self):
+        # One bad entry would shift every later case: no table is recorded.
+        for bad in ("beyond the text", "outside the image"):
+            with self.subTest(bad=bad):
+                a = self._switch("lw")
+                a.emit(*([DATA_WORD] * 15))
+                L = a.labels
+                k = (L["table"] - BASE) // 4 + 2
+                a.items[k] = L["table"] + 4 * 19 if bad == "beyond the text" else 0x90000000
+                res, notes = functions.discover(a.image(), BASE)
+                self.assertEqual(res.jump_tables, [])
+                self.assertEqual(notes.unresolved_jr, [L["jr"]])
+                self.assertTrue(all(t < res.text_end for t in (L["case0"], L["jr"])))
+
+    def test_entry_outside_the_image(self):
+        a = Asm()
+        a.emit(jr(RA), NOP)
+        for entry in (BASE - 4, BASE + 8):
+            with self.assertRaisesRegex(ValueError, "entry outside the image"):
+                functions.analyse(a.image(), entry)
+
+    def test_debug_string_never_names_a_second_start(self):
+        a = Asm()
+        a.emit(jal("f"), NOP, jr(RA), NOP)
+        a.label("f")
+        a.emit(lui_hi(A0, "s"), addiu_lo(A0, A0, "s"), jr(RA), NOP)
+        a.label("s")
+        a.emit(*ascii_words("_start: boot"))
+        res = functions.analyse(a.image(), BASE)
+        self.assertEqual([f.name for f in res.functions], ["_start", fname(a.labels["f"])])
+
     def test_toml_roundtrip(self):
         a = self._switch("lw")
         res = functions.analyse(a.image(), BASE)
         res.functions[0].sources.add("manual")
         res.unreached.append((0x80010100, 0x80010108))
+        res.stub_blocks.append((0x80010200, 0x80010240))
+        res.exe_sha256 = "ab" * 32
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "f.toml")
             functions.write_toml(res, path)
             self.assertEqual(functions.read_toml(path), res)
             with open(path, encoding="utf-8") as f:
                 first = f.read()
+            self.assertIn("\nformat = 1\n", first)
+            self.assertIn('\nexe_sha256 = "%s"\n' % ("ab" * 32), first)
             functions.write_toml(functions.read_toml(path), path)
             with open(path, encoding="utf-8") as f:
                 self.assertEqual(f.read(), first)
+
+    def test_read_toml_rejects_a_missing_or_unknown_format(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "f.toml")
+            for header in ("", "format = 2\n"):
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(header + 'exe_sha256 = ""\ntext_start = 0\ntext_end = 0\n')
+                with self.assertRaisesRegex(ValueError, "format"):
+                    functions.read_toml(path)
+
+    def test_read_manual(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "m.toml")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write('[[stub_block]]\nstart = 0x80010000\nend = 0x80010010\nreason = "r"\n'
+                        '[[manual]]\naddr = 0x80010020\nreason = "seen in MAME"\n')
+            self.assertEqual(functions.read_manual(path),
+                             ([0x80010020], [(0x80010000, 0x80010010)]))
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("[[manual]]\naddr = 0x80010020\n")
+            with self.assertRaisesRegex(ValueError, "reason"):
+                functions.read_manual(path)
+
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+COMMITTED = os.path.join(REPO, "config", "game.functions.toml")
+MANUAL = os.path.join(REPO, "config", "game.manual.toml")
+STUB_BLOCK = (0x800C408C, 0x800C42CC)  # [start, end): the boot-ROM stub block
 
 
 class Cli(unittest.TestCase):
@@ -488,25 +609,49 @@ class Cli(unittest.TestCase):
             self.assertEqual(status, 2)
             self.assertIn("not found", err.getvalue())
 
+    def test_default_manual_is_named_after_the_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "game.functions.toml")
+            self.assertIsNone(cli.default_manual(out))
+            manual = os.path.join(tmp, "game.manual.toml")
+            open(manual, "w").close()
+            self.assertEqual(cli.default_manual(out), manual)
+            self.assertIsNone(cli.default_manual(os.path.join(tmp, "other.toml")))
+
+    def test_missing_manual_is_an_error(self):
+        err = io.StringIO()
+        with redirect_stderr(err):
+            status = cli.main(["functions", "/nonexistent/GAME.EXE", "-o", "/nonexistent/f.toml",
+                               "--manual", "/nonexistent/m.toml"])
+        self.assertEqual(status, 1)
+        self.assertIn("is not a file", err.getvalue())
+
     @requires_file("part0_files", "GAME.EXE")
-    def test_writes_analysis(self):
+    def test_regenerates_the_committed_file(self):
+        # The CLI, given the committed manual file next to its output, writes
+        # config/game.functions.toml byte for byte.
         path = work_path("part0_files", "GAME.EXE")
         with tempfile.TemporaryDirectory() as tmp:
-            out = os.path.join(tmp, "f.toml")
+            out = os.path.join(tmp, "game.functions.toml")
+            shutil.copy(MANUAL, os.path.join(tmp, "game.manual.toml"))
             with redirect_stdout(io.StringIO()) as printed:
                 self.assertEqual(cli.main(["functions", path, "-o", out]), 0)
-            self.assertEqual(functions.read_toml(out),
-                             functions.analyse(exe.load_exe(path), 0x800C4000))
-            self.assertIn("unknown words reached as code 0", printed.getvalue())
+            with open(out, "rb") as f, open(COMMITTED, "rb") as g:
+                self.assertTrue(f.read() == g.read(), "config/game.functions.toml is stale")
+        self.assertIn("unknown words reached as code 0", printed.getvalue())
+        self.assertIn("3 starts, 1 stub blocks", printed.getvalue())
 
 
 class GameExe(unittest.TestCase):
     @requires_file("part0_files", "GAME.EXE")
     def test_game_exe(self):
         image = exe.load_exe(work_path("part0_files", "GAME.EXE"))
-        res = functions.analyse(image, 0x800C4000)
-        self.assertGreaterEqual(len(res.functions), 1800)
-        self.assertLessEqual(len(res.functions), 2600)
+        manual, stubs = functions.read_manual(MANUAL)
+        res = functions.analyse(image, 0x800C4000, manual, stubs)
+        # The committed file is this analysis (I2): format, hash, every entry.
+        self.assertEqual(functions.read_toml(COMMITTED), res)
+        self.assertEqual(res.exe_sha256, exe.GAME_EXE_SHA256)
+        self.assertEqual(res.stub_blocks, [STUB_BLOCK])
         addrs = [f.addr for f in res.functions]
         self.assertEqual(addrs, sorted(addrs))
         for f, nxt in zip(res.functions, res.functions[1:]):
@@ -515,13 +660,19 @@ class GameExe(unittest.TestCase):
         # The one code island in the data: a `break` stub called from the text
         islands = [(f.addr, f.size) for f in res.functions if f.addr >= res.text_end]
         self.assertEqual(islands, [(0x801A355C, 16)])
-        # No function runs straight into the next one: when they touch, the
-        # previous one ends in a path end plus its delay slot. The boot-ROM stub
-        # block is excluded: it is zeros in the file, filled at boot from 0xA0000000.
-        stub_block = range(0x800C408C, 0x800C42D8 + 1)
+        # The stub block holds only one-slot stub functions, and nothing else is a stub.
+        for f in res.functions:
+            in_block = STUB_BLOCK[0] <= f.addr < STUB_BLOCK[1]
+            self.assertEqual(f.sources == {"stub"}, in_block, hex(f.addr))
+            if in_block:
+                self.assertEqual(f.size, 8, hex(f.addr))
+        for addr in manual:
+            self.assertIn("manual", next(f for f in res.functions if f.addr == addr).sources)
+        # No function runs straight into the next one: when they touch, the previous one
+        # ends in a path end plus its delay slot. A stub has no code in the file.
         for f, nxt in zip(res.functions, res.functions[1:]):
             end = f.addr + f.size
-            if end != nxt.addr or nxt.addr in stub_block:
+            if end != nxt.addr or f.sources == {"stub"}:
                 continue
             last = mips.decode(image.word(end - 8), end - 8) if f.size >= 8 else None
             self.assertTrue(last is not None and mips.ends_path(last),
@@ -531,7 +682,7 @@ class GameExe(unittest.TestCase):
             self.assertNotIn(addr, addrs)
         self.assertIn(0x800C4524, addrs)  # main, reached by _start's tail `j`
         starts = set(addrs)
-        unreached = set()
+        unreached = set(range(*STUB_BLOCK, 4))
         for lo, hi in res.unreached:
             unreached.update(range(lo, hi, 4))
         for addr in range(res.text_start, res.text_end, 4):
@@ -548,6 +699,12 @@ class GameExe(unittest.TestCase):
             self.assertIn(lo, unreached, "data island 0x%08X" % lo)
             inside = [f.name for f in res.functions if f.addr <= lo < f.addr + f.size]
             self.assertEqual(inside, [], "data island 0x%08X" % lo)
+        # Every jump-table target lies inside the function that owns the `jr` (I10).
+        for t in res.jump_tables:
+            owner = next(f for f in res.functions if f.addr <= t.jr_addr < f.addr + f.size)
+            for target in t.targets:
+                self.assertTrue(owner.addr <= target < owner.addr + owner.size,
+                                "0x%08X: case 0x%08X" % (t.jr_addr, target))
 
 
 if __name__ == "__main__":

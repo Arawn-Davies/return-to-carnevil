@@ -102,7 +102,7 @@ union over a register's functions; jumps through the handler tables are not foll
 
 ## GAME.EXE
 
-Measured statically over 2,091 functions with `GAME_RETURNS` applied, with
+Measured statically over 2,093 functions with `GAME_RETURNS` applied, with
 `hwcensus.hardware_accesses`; then checked dynamically by the three MAME runs (sections
 "Dynamic check" below). Which regions GAME.EXE's own code touches is settled by the hardware
 run (attract mode only), not by the census: the census cannot see the CMOS reads below.
@@ -480,7 +480,7 @@ registers).
   target, not the access. The CMOS reads counted for GAME.EXE are not such a case: their PC,
   0x801458DC, follows the `lbu` at 0x801458D8 in the CRC loop (read). The groups are
   GAME.EXE (0x800C4000 to 0x801A4224, the stub block excluded), the stub block
-  (0x800C408C to 0x800C42CB), the loader (0x80000000 to 0x80015C40) and other.
+  (0x800C408C to 0x800C42CC, end exclusive), the loader (0x80000000 to 0x80015C40) and other.
 - 90.0 emulated seconds, 4,892 frames, average speed 28%. The first access by GAME.EXE code
   came at 9 emulated seconds. Taps were reinstalled every 30 frames, as before.
 - The taps report the 32-bit-aligned address, so byte registers that share a word (the IDE

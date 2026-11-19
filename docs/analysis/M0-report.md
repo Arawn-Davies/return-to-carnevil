@@ -27,10 +27,11 @@ Every fact below carries its basis:
 - Text 0x800C4000 to 0x8016DC4C (695,372 bytes); data from there to 0x801A4224, with one
   16-byte code island at 0x801A355C; BSS 0x801A4228 to 0x80800000, cleared by `_start`, which
   also sets sp to 0x80800000 (static, read).
-- 2,091 entries in `config/game.functions.toml`. 29 of them are the slots of the stub block
-  (below) and are not the game's code, so the game has 2,062 functions of its own, including
-  the island. 75 jump tables (1,488 entries), 165,748 words reached as code, none of them an
-  unknown encoding, 263 unreached ranges (4.66% of the text) (static).
+- 2,093 entries in `config/game.functions.toml`. 29 of them are one-slot `stub` entries for
+  the stub block (below) and are not the game's code, so the game has 2,064 functions of its
+  own, including the island and the 3 manual starts of `config/game.manual.toml`. 75 jump
+  tables (1,488 entries), 165,638 words reached as code, none of them an unknown encoding,
+  262 unreached ranges (4.64% of the text) (static).
 - Built with GCC, with 3dfx's Glide, an IDT MIPS runtime and DJ Delorie's libc linked in. 21
   functions are named from debug strings, 6 of those names probably wrong (static).
 
@@ -122,9 +123,9 @@ Each item is an assumption of the design document that M0 showed wrong or incomp
   pinned `GAME.EXE` hash (`47aea64a…`) was of the mis-extracted file. Fixed in an extra task
   (5b) and re-pinned ([disk-format](disk-format.md), "Correction").
 - **Function count.** The design's estimate was "on the order of 2,000" from `jr ra` and
-  prologue counts. Discovery gives 2,091 entries, of which 29 are loader slots, so 2,062 game
-  functions, plus 75 jump tables, 16 unresolved indirect jumps and 10 probable callbacks that
-  need manual entries ([functions](functions.md)).
+  prologue counts. Discovery gives 2,093 entries, of which 29 are loader slots, so 2,064 game
+  functions (3 of them manual starts MAME showed), plus 75 jump tables, 16 unresolved indirect
+  jumps and 7 probable callbacks that still need manual entries ([functions](functions.md)).
 - **MIPS IV needs.** The design lists indexed FP loads and stores, `pref` and FP condition
   codes 0 to 7. Reached code uses none of the indexed forms or `pref`, and condition codes 0 to
   2 only ([functions](functions.md), "Census of reached code").
@@ -260,23 +261,23 @@ From the census of reached code ([functions](functions.md)):
   FR = 0 has to be checked (inferred risk).
 - Likely branches: 858 in reached code (`beql` 325, `bnel` 323, `bc1tl` 102, `bc1fl` 71, the
   rest 37). No control transfer sits in a delay slot (static).
-- No 64-bit integer instructions and no `ll`/`sc` in reached code; the one `ldl` is the
-  stub-block artefact (static).
-- `break`: the 32 GCC checks (`break 7` divide by zero, `break 6` overflow) call the hooks the
+- No 64-bit integer instructions and no `ll`/`sc` in reached code (static).
+- `break`: the 34 GCC checks (`break 7` divide by zero, `break 6` overflow) call the hooks the
   game registers; `break 0x409` installs a handler (a0 code, a1 handler); `break 0x407` is an
   assert. These become runtime calls, not traps through a vector.
-- The stub block 0x800C408C to 0x800C42CB must not be translated from the file: calls to its
-  29 slots become calls to the runtime's loader stand-ins (decision 1).
+- The stub block 0x800C408C to 0x800C42CC (end exclusive) must not be translated from the
+  file: calls to its 29 slots become calls to the runtime's loader stand-ins (decision 1).
+  `config/game.functions.toml` marks it as `[[stub_block]]` and its 29 entries as `stub`.
 - 75 jump tables as `switch`. 16 unresolved `jr`: 2 switches whose tables are known
   (0x80174328, 0x801757A8) and 14 label-table dispatches in the block-copy routines; they need
   `manual` entries or the interpreter fallback. 6 of the 14 ran in MAME.
-- 10 probable callbacks need `manual` function starts; 0x800C6030 is the VBLANK handler and
-  ran thousands of times, 0x8014A930 ran, 0x80151A70 is registered as the trap handler (MAME).
-  `functions.discover` accepts manual starts, but the `functions` command has no option for
-  them yet (static).
+- Of the 10 probable callbacks, the 3 MAME showed are manual starts in
+  `config/game.manual.toml`: 0x800C6030 is the VBLANK handler and ran thousands of times,
+  0x8014A930 ran, 0x80151A70 is registered as the trap handler (MAME). The other 7 still need
+  `manual` starts or the interpreter fallback (static).
 - 2 `j` instructions into 0x80151E90, a shared restore path in hand-written code, must be
   treated as jumps between functions (static).
-- 62 `jalr` sites, through the lookup table of recompiled functions.
+- 63 `jalr` sites, through the lookup table of recompiled functions.
 
 ### 4. What the runtime provides at game entry
 
@@ -328,7 +329,7 @@ From `config/boot_state.toml`:
   fields.
 - What the game's SOUNDSTAT writes do, and what 0x17F00000 controls.
 - Whether IP3 has sources other than the IOASIC; the GT64010 cause-bit names come from MAME.
-- 7 of the 10 probable callbacks and 10 of the 16 unresolved jumps were not reached in MAME;
+- The 7 probable callbacks left and 10 of the 16 unresolved jumps were not reached in MAME;
   141 leaf-shaped unreached ranges are dead code or reached in ways the analysis cannot see.
   Every "the game does not" statement about reached code (no COP0 moves, Status never
   written) holds only if those ranges stay unreached; the Status helpers above are one of

@@ -22,6 +22,13 @@ fixpoint:
 Names come from debug strings (carnevil_tools/naming.py). What stays unreached
 in the text range is listed in `Analysis.unreached`; a function's size stops
 short of unreached words between it and the next function.
+
+What the analysis cannot discover comes from a hand-maintained file
+(config/game.manual.toml, `read_manual`): manual starts, and stub blocks, ranges
+the program fills at run time. Stub-block words are never decoded; each call or
+jump target inside one is a function of one slot with source "stub". A jump
+table is recorded only when every entry lies in the text, so targets[k] is
+always case k.
 """
 import bisect
 import tomllib
@@ -29,7 +36,9 @@ from dataclasses import dataclass, field
 
 from carnevil_tools import mips, naming
 
-SOURCES = ("entry", "call", "pointer", "prologue", "manual")
+SOURCES = ("entry", "call", "pointer", "prologue", "manual", "stub")
+FORMAT = 1  # version of the TOML layout written by write_toml
+STUB_SLOT = 8  # bytes per slot of a stub block (a `j` and its delay slot)
 RA = mips.RA
 JUMP_TABLE_LOOKBACK = 12  # instructions searched back from a `jr reg`
 MAX_JUMP_TABLE = 4096  # entries; a larger sltiu bound is not taken for a table
@@ -60,6 +69,9 @@ class Analysis:
     functions: list[Function]
     jump_tables: list[JumpTable]
     unreached: list[tuple[int, int]]
+    # [start, end) ranges filled at run time, not code in the file (game.manual.toml)
+    stub_blocks: list[tuple[int, int]] = field(default_factory=list)
+    exe_sha256: str = ""  # SHA-256 of the file the analysis was made from
 
 
 @dataclass
@@ -67,7 +79,8 @@ class Notes:
     """Diagnostics of one run, for the CLI summary and docs/analysis/functions.md."""
 
     unknown: list[int] = field(default_factory=list)  # unknown words reached as code
-    unresolved_jr: list[int] = field(default_factory=list)  # jr reg with no table found
+    # jr reg with no table found, or whose table has an entry outside the text
+    unresolved_jr: list[int] = field(default_factory=list)
     bad_targets: list[int] = field(default_factory=list)  # control transfers outside the image
     external_calls: list[int] = field(default_factory=list)  # call targets outside the image
     cti_in_delay_slot: list[int] = field(default_factory=list)
@@ -105,15 +118,17 @@ def _entry_run_ok(run):
 
 
 class _Descent:
-    def __init__(self, image):
+    def __init__(self, image, stub_blocks=(), refused_tables=()):
         self.image = image
+        self.stub_blocks = sorted(stub_blocks)
+        self.refused_tables = set(refused_tables)  # jr addresses whose table left the text
         self.code = set()  # every word known to be an instruction
         self.walked = set()  # words a path has continued from (delay slots may not be)
         self.starts = {}  # function start -> set of sources
         self.tables = {}  # jr address -> JumpTable
         self.jumps = []  # (address, target) of every `j`
         self.falls = set()  # words a path reaches by running on from the word before
-        self.returns = set()  # words a path reaches as the return point of a call
+        self.delay_slots = set()  # words reached as the delay slot of a control transfer
         self.pending = []
         self.notes = Notes()
         self.insn = mips.Decoder(image).insn
@@ -121,14 +136,27 @@ class _Descent:
     def valid(self, addr):
         return addr % 4 == 0 and self.image.contains(addr)
 
+    def in_stub(self, addr):
+        return any(lo <= addr < hi for lo, hi in self.stub_blocks)
+
     def add_start(self, addr, source):
-        if self.valid(addr):
-            self.starts.setdefault(addr, set()).add(source)
-            self.pending.append(addr)
+        """A function start. Inside a stub block every start is a "stub" and is not
+        descended into: its words are filled at run time."""
+        if not self.valid(addr):
+            return
+        if self.in_stub(addr):
+            self.starts.setdefault(addr, set()).add("stub")
+            return
+        self.starts.setdefault(addr, set()).add(source)
+        self.pending.append(addr)
 
     def run(self):
         while self.pending:
-            self._path(self.pending.pop())
+            addr = self.pending.pop()
+            if self.in_stub(addr):  # a branch or jump target in a stub block
+                self.add_start(addr, "stub")
+            else:
+                self._path(addr)
 
     def _mark(self, addr):
         """Record a reached word as code; False if it cannot be (outside the image)."""
@@ -139,7 +167,7 @@ class _Descent:
         return True
 
     def _path(self, addr):
-        while addr not in self.walked and self._mark(addr):
+        while addr not in self.walked and not self.in_stub(addr) and self._mark(addr):
             self.walked.add(addr)
             insn = self.insn(addr)
             kind = insn.kind
@@ -171,11 +199,13 @@ class _Descent:
                     self._jump_table(addr, insn.rs)
                 return
             addr += 8  # fall-through, or the return point of a call
-            (self.returns if kind in ("call", "call_reg") else self.falls).add(addr)
+            if kind not in ("call", "call_reg"):
+                self.falls.add(addr)
 
     def _delay_slot(self, addr):
-        if not self._mark(addr):
+        if self.in_stub(addr) or not self._mark(addr):
             return
+        self.delay_slots.add(addr)
         insn = self.insn(addr)
         if insn.kind == "unknown":
             self.notes.unknown.append(addr)
@@ -192,7 +222,13 @@ class _Descent:
         return seq
 
     def _jump_table(self, jr_addr, reg):
+        """Record the table of `jr reg`, or list the jr as unresolved. Every entry must be
+        a word address in the image (and, checked by `discover`, in the text), so that
+        targets[k] is case k."""
         if jr_addr in self.tables:
+            return
+        if jr_addr in self.refused_tables:
+            self.notes.unresolved_jr.append(jr_addr)
             return
         seq = self._window(jr_addr, JUMP_TABLE_LOOKBACK)
         table = _table_address(seq, reg)
@@ -203,12 +239,11 @@ class _Descent:
         if table % 4 or not (self.image.contains(table) and self.image.contains(table + 4 * bound - 1)):
             self.notes.unresolved_jr.append(jr_addr)
             return
-        targets = []
-        for k in range(bound):
-            target = self.image.word(table + 4 * k)
-            if self.valid(target):
-                targets.append(target)
-                self.pending.append(target)
+        targets = [self.image.word(table + 4 * k) for k in range(bound)]
+        if not all(self.valid(t) and not self.in_stub(t) for t in targets):
+            self.notes.unresolved_jr.append(jr_addr)
+            return
+        self.pending.extend(targets)
         self.tables[jr_addr] = JumpTable(jr_addr, table, targets)
 
     def bounds(self):
@@ -230,11 +265,12 @@ class _Descent:
         return ordered[0], end
 
     def gaps(self, text_start, text_end):
-        """Maximal runs of non-code words in [text_start, text_end)."""
+        """Maximal runs of non-code words in [text_start, text_end), stub blocks aside
+        (their words are neither code nor data in the file)."""
         out = []
         lo = None
         for addr in range(text_start, text_end, 4):
-            if addr in self.code:
+            if addr in self.code or self.in_stub(addr):
                 if lo is not None:
                     out.append((lo, addr))
                     lo = None
@@ -247,7 +283,9 @@ class _Descent:
     def _function_like(self, value, text_start, text_end):
         if value % 4 or not text_start <= value < text_end:
             return False
-        return value in self.starts or mips.is_prologue(self.insn(value))
+        if value in self.starts:
+            return True
+        return not self.in_stub(value) and mips.is_prologue(self.insn(value))
 
     def data_pointers(self, text_start, text_end):
         for addr in range(text_end, self.image.end_addr() - 3, 4):
@@ -297,7 +335,9 @@ class _Descent:
                 if target != owner:
                     self.add_start(target, "call")
             elif not owner <= target < end:
-                if self.valid(target) and mips.is_prologue(self.insn(target)):
+                if self.valid(target) and self.in_stub(target):
+                    self.add_start(target, "stub")
+                elif self.valid(target) and mips.is_prologue(self.insn(target)):
                     self.add_start(target, "call")
                 else:
                     out.append((addr, target))
@@ -305,9 +345,9 @@ class _Descent:
 
     def withdraw_fallen_into(self):
         """Drop prologue-only starts that a later pass proved wrong:
-        - reached code runs straight into the start: it is inside the function
-          before it (whose own start lies further back than HOISTED, or was found
-          by another pass later);
+        - reached code runs straight into the start, or reaches it as the delay
+          slot of a branch: it is inside the function before it (whose own start
+          lies further back than HOISTED, or was found by another pass later);
         - its hoisted run runs straight into another start: the hoist overshot
           that start, and the words before it are unreached again."""
         ordered = sorted(self.starts)
@@ -315,7 +355,7 @@ class _Descent:
             if self.starts[addr] != {"prologue"}:
                 continue
             nxt = ordered[i + 1] if i + 1 < len(ordered) else None
-            if addr in self.falls:
+            if addr in self.falls or addr in self.delay_slots:
                 del self.starts[addr]
                 self.notes.withdrawn.append(addr)
             elif nxt is not None and nxt - addr <= 4 * HOISTED and all(
@@ -395,18 +435,19 @@ def _table_address(seq, reg):
     return None
 
 
-def analyse(image, entry, manual=()):
+def analyse(image, entry, manual=(), stub_blocks=()):
     """Discover the functions, jump tables and text/data boundary of an ExeImage."""
-    return discover(image, entry, manual)[0]
+    return discover(image, entry, manual, stub_blocks)[0]
 
 
-def discover(image, entry, manual=()):
-    """As `analyse`, also returning the run's Notes."""
-    d = _Descent(image)
+def _descend(image, entry, manual, stub_blocks, refused_tables):
+    """Run the passes to a fixpoint; (descent, text_start, text_end)."""
+    d = _Descent(image, stub_blocks, refused_tables)
     d.add_start(entry, "entry")
     for addr in manual:
         d.add_start(addr, "manual")
     d.run()
+
     def state():
         return len(d.code), sum(len(s) for s in d.starts.values()), len(d.notes.withdrawn)
 
@@ -424,25 +465,52 @@ def discover(image, entry, manual=()):
         if state() == before:
             break
     text_start, text_end = d.bounds()
+    return d, text_start, text_end
+
+
+def discover(image, entry, manual=(), stub_blocks=()):
+    """As `analyse`, also returning the run's Notes.
+
+    stub_blocks: [start, end) ranges whose words are filled at run time: never decoded,
+    and each call or jump target inside one is a function of one slot (STUB_SLOT bytes)
+    with source "stub". A jump table with an entry outside [text_start, text_end) is
+    not recorded; its `jr` is listed as unresolved and the discovery is run again
+    without it, so no case is lost or shifted."""
+    if entry % 4 or not image.contains(entry):
+        raise ValueError("entry outside the image")
+    stub_blocks = sorted((lo, hi) for lo, hi in stub_blocks)
+    refused = set()
+    while True:
+        d, text_start, text_end = _descend(image, entry, manual, stub_blocks, refused)
+        bad = {t.jr_addr for t in d.tables.values()
+               if not all(text_start <= v < text_end for v in t.targets)}
+        if not bad:
+            break
+        refused |= bad
     d.tail_calls(text_end)  # jumps_out against the final starts
     unreached = d.gaps(text_start, text_end)
     gap_at_end = {hi: lo for lo, hi in unreached}
     ordered = sorted(d.starts)
     funcs = []
     for i, addr in enumerate(ordered):
-        if addr >= text_end:  # a code island in the data: just the code reached
+        block = next(((lo, hi) for lo, hi in stub_blocks if lo <= addr < hi), None)
+        if block is not None:
+            end = min(addr + STUB_SLOT, block[1])
+        elif addr >= text_end:  # a code island in the data: just the code reached
             end = addr
             while end in d.code and (i + 1 == len(ordered) or end < ordered[i + 1]):
                 end += 4
         else:
             end = min(ordered[i + 1], text_end) if i + 1 < len(ordered) else text_end
+            end = min([end] + [lo for lo, _hi in stub_blocks if addr < lo])
             gap = gap_at_end.get(end)
             if gap is not None and gap > addr:
                 end = gap  # trailing data before the next function is not part of this one
         name = "_start" if addr == entry else "func_%08X" % addr
         funcs.append(Function(addr, end - addr, name, set(d.starts[addr])))
     analysis = Analysis(text_start, text_end, funcs,
-                        [d.tables[a] for a in sorted(d.tables)], unreached)
+                        [d.tables[a] for a in sorted(d.tables)], unreached,
+                        list(stub_blocks), image.sha256)
     pairs = list(d.address_pairs())
     d.notes.named = naming.name_from_strings(image, analysis, pairs)
     values = {v for _a, v in pairs}
@@ -462,8 +530,9 @@ def discover(image, entry, manual=()):
 
 def reached_words(analysis):
     """Function start -> the set of its reached words: the words of [addr, addr + size)
-    outside every unreached range (a function's size spans interior unreached ranges)."""
-    unreached = sorted(analysis.unreached)
+    outside every unreached range (a function's size spans interior unreached ranges) and
+    every stub block (a stub function has no words in the file: the set is empty)."""
+    unreached = sorted(analysis.unreached + analysis.stub_blocks)
     lows = [lo for lo, _hi in unreached]
     out = {}
     for f in sorted(analysis.functions, key=lambda f: f.addr):
@@ -490,9 +559,13 @@ def write_toml(analysis, path):
     lines = [
         "# Function discovery: python3 -m carnevil_tools functions <exe> -o <this file>",
         "# Addresses, sizes, names and sources only. See docs/analysis/functions.md.",
+        "format = %d" % FORMAT,
+        "exe_sha256 = " + _toml_string(analysis.exe_sha256),
         "text_start = " + _hex(analysis.text_start),
         "text_end = " + _hex(analysis.text_end),
     ]
+    for lo, hi in sorted(analysis.stub_blocks):
+        lines += ["", "[[stub_block]]", "start = " + _hex(lo), "end = " + _hex(hi)]
     for f in sorted(analysis.functions, key=lambda f: f.addr):
         lines += ["", "[[function]]", "addr = " + _hex(f.addr), "size = %d" % f.size,
                   "name = " + _toml_string(f.name),
@@ -510,8 +583,14 @@ def write_toml(analysis, path):
 
 
 def read_toml(path):
+    """The Analysis in a TOML written by `write_toml`; ValueError if its `format` is
+    missing or not FORMAT."""
     with open(path, "rb") as f:
         data = tomllib.load(f)
+    if data.get("format") != FORMAT:
+        raise ValueError("%s: unsupported functions TOML format %r (expected format = %d; "
+                         "regenerate it with the functions command)"
+                         % (path, data.get("format"), FORMAT))
     return Analysis(
         data["text_start"],
         data["text_end"],
@@ -520,4 +599,28 @@ def read_toml(path):
         [JumpTable(t["jr_addr"], t["table_addr"], list(t["targets"]))
          for t in data.get("jump_table", [])],
         [(u["start"], u["end"]) for u in data.get("unreached", [])],
+        [(b["start"], b["end"]) for b in data.get("stub_block", [])],
+        data["exe_sha256"],
     )
+
+
+def read_manual(path):
+    """(manual starts, stub blocks) from a hand-maintained input such as
+    config/game.manual.toml: [[manual]] entries (addr, reason) and [[stub_block]]
+    entries (start, end exclusive, reason). Every entry needs a reason."""
+    with open(path, "rb") as f:
+        data = tomllib.load(f)
+    unknown = set(data) - {"manual", "stub_block"}
+    if unknown:
+        raise ValueError("%s: unknown keys %s" % (path, ", ".join(sorted(unknown))))
+    for table in ("manual", "stub_block"):
+        for entry in data.get(table, []):
+            if not isinstance(entry.get("reason"), str) or not entry["reason"].strip():
+                raise ValueError("%s: a [[%s]] entry has no reason" % (path, table))
+    manual = [m["addr"] for m in data.get("manual", [])]
+    blocks = [(b["start"], b["end"]) for b in data.get("stub_block", [])]
+    for lo, hi in blocks:
+        if lo % 4 or hi % 4 or lo >= hi:
+            raise ValueError("%s: stub block 0x%08X-0x%08X is empty or unaligned"
+                             % (path, lo, hi))
+    return manual, blocks

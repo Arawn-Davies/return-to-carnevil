@@ -60,7 +60,7 @@ About the boot:
 About the code:
 
 - The code runs from `0x800C4000` to `0x8016DC4C`, about 695 KB, with data after it.
-- There are 2,091 functions and 75 jump tables. 29 of the 2,091 are entries of the block described below, which leaves 2,062 functions of the game's own.
+- There are 2,093 functions and 75 jump tables. 29 of the 2,093 are entries of the block described below, which leaves 2,064 functions of the game's own (3 of them added by hand because MAME showed them running or registered).
 - Every instruction reached as code decodes cleanly. The MIPS IV features in use are conditional moves and fused multiply-add, plus two extra floating point condition codes in one function; the indexed floating point loads and stores do not occur in reached code.
 - A small block near the start of the image is empty in the file and is filled at start-up with a copy of the loader's jump table: 72 slots, each a jump into the loader. The game calls 29 of them, so those 29 services have to be supplied by the port.
 - The game's own code contains no exception entry code. The loader's exception vectors and dispatcher run, and call the handlers the game registers with the loader.

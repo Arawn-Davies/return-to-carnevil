@@ -1,7 +1,13 @@
 # Function discovery: python3 -m carnevil_tools functions <exe> -o <this file>
 # Addresses, sizes, names and sources only. See docs/analysis/functions.md.
+format = 1
+exe_sha256 = "f9455ce801d2e5c26a7b6e00eff88efa573deb7ab15fa29f9c90100623bfd3a6"
 text_start = 0x800C4000
 text_end = 0x8016DC4C
+
+[[stub_block]]
+start = 0x800C408C
+end = 0x800C42CC
 
 [[function]]
 addr = 0x800C4000
@@ -11,177 +17,177 @@ sources = ["entry"]
 
 [[function]]
 addr = 0x800C40A4
-size = 16
+size = 8
 name = "func_800C40A4"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C40B4
-size = 16
+size = 8
 name = "func_800C40B4"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C40C4
-size = 80
+size = 8
 name = "func_800C40C4"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C4114
 size = 8
 name = "func_800C4114"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C411C
-size = 48
+size = 8
 name = "func_800C411C"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C414C
 size = 8
 name = "func_800C414C"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C4154
-size = 16
+size = 8
 name = "func_800C4154"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C4164
 size = 8
 name = "func_800C4164"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C416C
 size = 8
 name = "func_800C416C"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C4174
 size = 8
 name = "func_800C4174"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C417C
 size = 8
 name = "func_800C417C"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C4184
-size = 16
+size = 8
 name = "func_800C4184"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C4194
 size = 8
 name = "func_800C4194"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C419C
 size = 8
 name = "func_800C419C"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C41A4
-size = 16
+size = 8
 name = "func_800C41A4"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C41B4
-size = 48
+size = 8
 name = "func_800C41B4"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C41E4
-size = 56
+size = 8
 name = "func_800C41E4"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C421C
 size = 8
 name = "func_800C421C"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C4224
-size = 16
+size = 8
 name = "func_800C4224"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C4234
-size = 16
+size = 8
 name = "func_800C4234"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C4244
 size = 8
 name = "func_800C4244"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C424C
-size = 24
+size = 8
 name = "func_800C424C"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C4264
 size = 8
 name = "func_800C4264"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C426C
 size = 8
 name = "func_800C426C"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C4274
 size = 8
 name = "func_800C4274"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C427C
 size = 8
 name = "func_800C427C"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C4284
 size = 8
 name = "func_800C4284"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C428C
-size = 32
+size = 8
 name = "func_800C428C"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C42AC
-size = 44
+size = 8
 name = "func_800C42AC"
-sources = ["call"]
+sources = ["stub"]
 
 [[function]]
 addr = 0x800C42D8
@@ -304,10 +310,10 @@ name = "func_800C5FE8"
 sources = ["call", "prologue"]
 
 [[function]]
-addr = 0x800C6070
-size = 172
-name = "func_800C6070"
-sources = ["prologue"]
+addr = 0x800C6030
+size = 236
+name = "func_800C6030"
+sources = ["manual", "pointer"]
 
 [[function]]
 addr = 0x800C611C
@@ -709,13 +715,13 @@ sources = ["call"]
 addr = 0x800CA4D0
 size = 516
 name = "func_800CA4D0"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800CA6D4
 size = 680
 name = "func_800CA6D4"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800CA97C
@@ -727,7 +733,7 @@ sources = ["call"]
 addr = 0x800CAC64
 size = 516
 name = "func_800CAC64"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800CAE68
@@ -757,7 +763,7 @@ sources = ["call"]
 addr = 0x800CAF80
 size = 116
 name = "func_800CAF80"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800CAFF4
@@ -775,7 +781,7 @@ sources = ["call"]
 addr = 0x800CB084
 size = 220
 name = "func_800CB084"
-sources = ["pointer"]
+sources = ["pointer", "prologue"]
 
 [[function]]
 addr = 0x800CB17C
@@ -859,7 +865,7 @@ sources = ["pointer", "prologue"]
 addr = 0x800CBAB4
 size = 184
 name = "func_800CBAB4"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800CBB70
@@ -883,13 +889,13 @@ sources = ["prologue"]
 addr = 0x800CBBB4
 size = 2020
 name = "func_800CBBB4"
-sources = ["pointer"]
+sources = ["pointer", "prologue"]
 
 [[function]]
 addr = 0x800CC398
 size = 128
 name = "func_800CC398"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800CC418
@@ -937,13 +943,13 @@ sources = ["prologue"]
 addr = 0x800CCA70
 size = 352
 name = "func_800CCA70"
-sources = ["pointer"]
+sources = ["pointer", "prologue"]
 
 [[function]]
 addr = 0x800CCBD0
 size = 376
 name = "func_800CCBD0"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800CCD48
@@ -973,49 +979,49 @@ sources = ["prologue"]
 addr = 0x800CD094
 size = 356
 name = "func_800CD094"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800CD1F8
 size = 292
 name = "func_800CD1F8"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800CD31C
 size = 400
 name = "func_800CD31C"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800CD4AC
 size = 356
 name = "func_800CD4AC"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800CD610
 size = 400
 name = "func_800CD610"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800CD7A0
 size = 356
 name = "func_800CD7A0"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800CD904
 size = 412
 name = "func_800CD904"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800CDAA0
 size = 348
 name = "func_800CDAA0"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800CDC00
@@ -1075,13 +1081,13 @@ sources = ["call"]
 addr = 0x800CE2F8
 size = 76
 name = "func_800CE2F8"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800CE344
 size = 124
 name = "func_800CE344"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800CE3C0
@@ -1105,7 +1111,7 @@ sources = ["call"]
 addr = 0x800CE680
 size = 160
 name = "func_800CE680"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800CE720
@@ -1177,13 +1183,13 @@ sources = ["call", "prologue"]
 addr = 0x800CF240
 size = 196
 name = "func_800CF240"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800CF304
 size = 680
 name = "func_800CF304"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800CF5AC
@@ -1225,7 +1231,7 @@ sources = ["prologue"]
 addr = 0x800CF98C
 size = 184
 name = "func_800CF98C"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800CFA44
@@ -1255,7 +1261,7 @@ sources = ["prologue"]
 addr = 0x800CFDA8
 size = 140
 name = "func_800CFDA8"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800CFE34
@@ -1297,7 +1303,7 @@ sources = ["call", "prologue"]
 addr = 0x800D01A4
 size = 180
 name = "func_800D01A4"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D0258
@@ -1345,7 +1351,7 @@ sources = ["call"]
 addr = 0x800D06B4
 size = 92
 name = "func_800D06B4"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D0710
@@ -1381,7 +1387,7 @@ sources = ["call"]
 addr = 0x800D0D34
 size = 272
 name = "func_800D0D34"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D0E44
@@ -1423,7 +1429,7 @@ sources = ["prologue"]
 addr = 0x800D14A4
 size = 208
 name = "func_800D14A4"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D1574
@@ -1441,7 +1447,7 @@ sources = ["call", "prologue"]
 addr = 0x800D1750
 size = 744
 name = "func_800D1750"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D1A38
@@ -1459,7 +1465,7 @@ sources = ["call", "prologue"]
 addr = 0x800D2174
 size = 584
 name = "func_800D2174"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D23BC
@@ -1471,37 +1477,37 @@ sources = ["prologue"]
 addr = 0x800D2664
 size = 824
 name = "func_800D2664"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D299C
 size = 1080
 name = "func_800D299C"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D2DD4
 size = 540
 name = "func_800D2DD4"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D2FF0
 size = 636
 name = "func_800D2FF0"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D326C
 size = 700
 name = "func_800D326C"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D3528
 size = 780
 name = "func_800D3528"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D3834
@@ -1525,19 +1531,19 @@ sources = ["prologue"]
 addr = 0x800D4070
 size = 324
 name = "func_800D4070"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D41B4
 size = 552
 name = "func_800D41B4"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D43DC
 size = 72
 name = "func_800D43DC"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D4424
@@ -1549,7 +1555,7 @@ sources = ["call"]
 addr = 0x800D45DC
 size = 716
 name = "func_800D45DC"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D48A8
@@ -1669,7 +1675,7 @@ sources = ["call"]
 addr = 0x800D5A84
 size = 960
 name = "func_800D5A84"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D5E44
@@ -1681,7 +1687,7 @@ sources = ["call"]
 addr = 0x800D5E78
 size = 188
 name = "func_800D5E78"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D5F34
@@ -1783,7 +1789,7 @@ sources = ["call"]
 addr = 0x800D6E94
 size = 88
 name = "func_800D6E94"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D6EF0
@@ -1801,7 +1807,7 @@ sources = ["call"]
 addr = 0x800D719C
 size = 68
 name = "func_800D719C"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D71E0
@@ -1831,7 +1837,7 @@ sources = ["prologue"]
 addr = 0x800D7B44
 size = 540
 name = "func_800D7B44"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D7D60
@@ -1843,7 +1849,7 @@ sources = ["prologue"]
 addr = 0x800D7DFC
 size = 728
 name = "func_800D7DFC"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D80D4
@@ -1855,7 +1861,7 @@ sources = ["prologue"]
 addr = 0x800D8198
 size = 856
 name = "func_800D8198"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D84F0
@@ -1879,7 +1885,7 @@ sources = ["call"]
 addr = 0x800D870C
 size = 280
 name = "func_800D870C"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D8824
@@ -1891,7 +1897,7 @@ sources = ["call"]
 addr = 0x800D88BC
 size = 204
 name = "func_800D88BC"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D8988
@@ -1927,7 +1933,7 @@ sources = ["call"]
 addr = 0x800D8D6C
 size = 148
 name = "func_800D8D6C"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D8E00
@@ -1939,7 +1945,7 @@ sources = ["call"]
 addr = 0x800D8E70
 size = 120
 name = "func_800D8E70"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D8EE8
@@ -1951,7 +1957,7 @@ sources = ["call"]
 addr = 0x800D8F38
 size = 100
 name = "func_800D8F38"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D8F9C
@@ -1963,7 +1969,7 @@ sources = ["call"]
 addr = 0x800D8FEC
 size = 124
 name = "func_800D8FEC"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D9068
@@ -1975,25 +1981,25 @@ sources = ["call"]
 addr = 0x800D90C8
 size = 276
 name = "func_800D90C8"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D91DC
 size = 276
 name = "func_800D91DC"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D92F0
 size = 304
 name = "func_800D92F0"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D9420
 size = 304
 name = "func_800D9420"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800D9550
@@ -2035,37 +2041,37 @@ sources = ["call", "prologue"]
 addr = 0x800DA0F0
 size = 736
 name = "func_800DA0F0"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800DA3D0
 size = 664
 name = "func_800DA3D0"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800DA668
 size = 740
 name = "func_800DA668"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800DA94C
 size = 704
 name = "func_800DA94C"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800DAC0C
 size = 164
 name = "func_800DAC0C"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800DACB0
 size = 152
 name = "func_800DACB0"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800DAD48
@@ -2089,19 +2095,19 @@ sources = ["call"]
 addr = 0x800DB158
 size = 456
 name = "func_800DB158"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800DB320
 size = 408
 name = "func_800DB320"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800DB4B8
 size = 752
 name = "func_800DB4B8"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800DB7A8
@@ -2119,13 +2125,13 @@ sources = ["call"]
 addr = 0x800DB810
 size = 880
 name = "func_800DB810"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800DBB80
 size = 900
 name = "func_800DBB80"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800DBF04
@@ -2143,7 +2149,7 @@ sources = ["call"]
 addr = 0x800DBF9C
 size = 688
 name = "func_800DBF9C"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800DC24C
@@ -2161,7 +2167,7 @@ sources = ["call", "prologue"]
 addr = 0x800DC908
 size = 708
 name = "func_800DC908"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800DCBCC
@@ -2203,19 +2209,19 @@ sources = ["prologue"]
 addr = 0x800DDC90
 size = 740
 name = "func_800DDC90"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800DDF74
 size = 128
 name = "func_800DDF74"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800DDFF4
 size = 144
 name = "func_800DDFF4"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800DE084
@@ -2227,19 +2233,19 @@ sources = ["call"]
 addr = 0x800DE118
 size = 728
 name = "func_800DE118"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800DE3F0
 size = 744
 name = "func_800DE3F0"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800DE6D8
 size = 852
 name = "func_800DE6D8"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800DEA30
@@ -2275,7 +2281,7 @@ sources = ["prologue"]
 addr = 0x800E0268
 size = 396
 name = "func_800E0268"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800E03F4
@@ -2287,7 +2293,7 @@ sources = ["prologue"]
 addr = 0x800E059C
 size = 316
 name = "func_800E059C"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800E06D8
@@ -2347,7 +2353,7 @@ sources = ["prologue"]
 addr = 0x800E2220
 size = 924
 name = "func_800E2220"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800E25BC
@@ -2383,13 +2389,13 @@ sources = ["call"]
 addr = 0x800E2A34
 size = 788
 name = "func_800E2A34"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800E2D48
 size = 448
 name = "func_800E2D48"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800E2F08
@@ -2401,7 +2407,7 @@ sources = ["call"]
 addr = 0x800E2FE4
 size = 1196
 name = "func_800E2FE4"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800E3490
@@ -2413,25 +2419,25 @@ sources = ["prologue"]
 addr = 0x800E3560
 size = 420
 name = "func_800E3560"
-sources = ["call"]
+sources = ["call", "pointer"]
 
 [[function]]
 addr = 0x800E3704
 size = 696
 name = "func_800E3704"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800E39BC
 size = 696
 name = "func_800E39BC"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800E3C74
 size = 124
 name = "func_800E3C74"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800E3CF0
@@ -2443,7 +2449,7 @@ sources = ["prologue"]
 addr = 0x800E3DE8
 size = 1784
 name = "func_800E3DE8"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800E44E0
@@ -2455,25 +2461,25 @@ sources = ["call"]
 addr = 0x800E44F4
 size = 68
 name = "func_800E44F4"
-sources = ["pointer"]
+sources = ["pointer", "prologue"]
 
 [[function]]
 addr = 0x800E4538
 size = 280
 name = "func_800E4538"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800E4650
 size = 700
 name = "func_800E4650"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800E490C
 size = 692
 name = "func_800E490C"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800E4BC0
@@ -2491,7 +2497,7 @@ sources = ["call"]
 addr = 0x800E4C70
 size = 52
 name = "func_800E4C70"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800E4CA4
@@ -2503,7 +2509,7 @@ sources = ["call"]
 addr = 0x800E4CD0
 size = 104
 name = "func_800E4CD0"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800E4D38
@@ -2545,13 +2551,13 @@ sources = ["pointer", "prologue"]
 addr = 0x800E5560
 size = 552
 name = "func_800E5560"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800E5788
 size = 560
 name = "func_800E5788"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800E59B8
@@ -2563,7 +2569,7 @@ sources = ["call"]
 addr = 0x800E5D94
 size = 1140
 name = "func_800E5D94"
-sources = ["pointer"]
+sources = ["pointer", "prologue"]
 
 [[function]]
 addr = 0x800E6208
@@ -2575,25 +2581,25 @@ sources = ["call"]
 addr = 0x800E6358
 size = 792
 name = "func_800E6358"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800E6670
 size = 840
 name = "func_800E6670"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800E69B8
 size = 1784
 name = "func_800E69B8"
-sources = ["pointer"]
+sources = ["pointer", "prologue"]
 
 [[function]]
 addr = 0x800E70B0
 size = 128
 name = "func_800E70B0"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800E7130
@@ -2641,13 +2647,13 @@ sources = ["call"]
 addr = 0x800E77EC
 size = 1152
 name = "func_800E77EC"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800E7C6C
 size = 140
 name = "func_800E7C6C"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800E7CF8
@@ -2659,7 +2665,7 @@ sources = ["pointer", "prologue"]
 addr = 0x800E7D50
 size = 492
 name = "func_800E7D50"
-sources = ["pointer"]
+sources = ["pointer", "prologue"]
 
 [[function]]
 addr = 0x800E7F64
@@ -2671,13 +2677,13 @@ sources = ["prologue"]
 addr = 0x800E7FBC
 size = 428
 name = "func_800E7FBC"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800E8168
 size = 124
 name = "func_800E8168"
-sources = ["prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x800E81E4
@@ -2713,13 +2719,13 @@ sources = ["prologue"]
 addr = 0x800E82C8
 size = 584
 name = "func_800E82C8"
-sources = ["pointer"]
+sources = ["pointer", "prologue"]
 
 [[function]]
 addr = 0x800E8510
 size = 636
 name = "func_800E8510"
-sources = ["pointer"]
+sources = ["pointer", "prologue"]
 
 [[function]]
 addr = 0x800E878C
@@ -2731,7 +2737,7 @@ sources = ["prologue"]
 addr = 0x800E8B78
 size = 1040
 name = "func_800E8B78"
-sources = ["pointer"]
+sources = ["pointer", "prologue"]
 
 [[function]]
 addr = 0x800E8F88
@@ -2743,13 +2749,13 @@ sources = ["prologue"]
 addr = 0x800E9140
 size = 380
 name = "func_800E9140"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800E92BC
 size = 544
 name = "func_800E92BC"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800E9560
@@ -2761,7 +2767,7 @@ sources = ["call"]
 addr = 0x800E9570
 size = 3860
 name = "func_800E9570"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800EA484
@@ -2779,25 +2785,25 @@ sources = ["call"]
 addr = 0x800EA5A0
 size = 192
 name = "func_800EA5A0"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800EA670
 size = 116
 name = "func_800EA670"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800EA6E4
 size = 192
 name = "func_800EA6E4"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800EA7A4
 size = 204
 name = "func_800EA7A4"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800EA870
@@ -2833,13 +2839,13 @@ sources = ["pointer", "prologue"]
 addr = 0x800EB018
 size = 48
 name = "func_800EB018"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800EB048
 size = 136
 name = "func_800EB048"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800EB0D0
@@ -2893,7 +2899,7 @@ sources = ["call", "prologue"]
 addr = 0x800EBB18
 size = 44
 name = "func_800EBB18"
-sources = ["call"]
+sources = ["call", "pointer"]
 
 [[function]]
 addr = 0x800EBB44
@@ -2905,7 +2911,7 @@ sources = ["call"]
 addr = 0x800EBB6C
 size = 312
 name = "func_800EBB6C"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800EBCA4
@@ -2917,7 +2923,7 @@ sources = ["call"]
 addr = 0x800EBCF4
 size = 60
 name = "func_800EBCF4"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800EBD30
@@ -2929,25 +2935,25 @@ sources = ["call", "prologue"]
 addr = 0x800EBD70
 size = 76
 name = "func_800EBD70"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800EBDBC
 size = 120
 name = "func_800EBDBC"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800EBE34
 size = 56
 name = "func_800EBE34"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800EBE6C
 size = 32
 name = "func_800EBE6C"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800EBE8C
@@ -2959,7 +2965,7 @@ sources = ["call"]
 addr = 0x800EBEA0
 size = 84
 name = "func_800EBEA0"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800EBEF4
@@ -2977,7 +2983,7 @@ sources = ["call", "prologue"]
 addr = 0x800EBFA8
 size = 96
 name = "func_800EBFA8"
-sources = ["call"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x800EC008
@@ -3061,25 +3067,25 @@ sources = ["call"]
 addr = 0x800EC3B0
 size = 68
 name = "func_800EC3B0"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800EC3F4
 size = 68
 name = "func_800EC3F4"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800EC438
 size = 68
 name = "func_800EC438"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800EC47C
 size = 68
 name = "func_800EC47C"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800EC4C0
@@ -3103,13 +3109,13 @@ sources = ["pointer", "prologue"]
 addr = 0x800EC5AC
 size = 492
 name = "func_800EC5AC"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800EC798
 size = 100
 name = "func_800EC798"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800EC7FC
@@ -3163,7 +3169,7 @@ sources = ["pointer"]
 addr = 0x800ED1E0
 size = 376
 name = "func_800ED1E0"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800ED358
@@ -3205,7 +3211,7 @@ sources = ["pointer", "prologue"]
 addr = 0x800ED7E8
 size = 564
 name = "func_800ED7E8"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x800EDA1C
@@ -3241,7 +3247,7 @@ sources = ["call"]
 addr = 0x800EDFF0
 size = 488
 name = "func_800EDFF0"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x800EE1D8
@@ -3253,7 +3259,7 @@ sources = ["pointer", "prologue"]
 addr = 0x800EE228
 size = 3064
 name = "func_800EE228"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x800EEE20
@@ -3277,13 +3283,13 @@ sources = ["prologue"]
 addr = 0x800EF110
 size = 272
 name = "func_800EF110"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800EF220
 size = 200
 name = "func_800EF220"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800EF344
@@ -3631,7 +3637,7 @@ sources = ["call"]
 addr = 0x800F3F1C
 size = 360
 name = "func_800F3F1C"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x800F4084
@@ -3643,7 +3649,7 @@ sources = ["pointer", "prologue"]
 addr = 0x800F40C8
 size = 1040
 name = "func_800F40C8"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x800F44D8
@@ -3697,7 +3703,7 @@ sources = ["call"]
 addr = 0x800F4C50
 size = 412
 name = "func_800F4C50"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x800F4DEC
@@ -3709,7 +3715,7 @@ sources = ["pointer", "prologue"]
 addr = 0x800F4E24
 size = 1056
 name = "func_800F4E24"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x800F5244
@@ -3943,7 +3949,7 @@ sources = ["call"]
 addr = 0x800F7680
 size = 340
 name = "func_800F7680"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x800F77D4
@@ -3955,7 +3961,7 @@ sources = ["pointer", "prologue"]
 addr = 0x800F7824
 size = 316
 name = "func_800F7824"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x800F7960
@@ -4021,7 +4027,7 @@ sources = ["call"]
 addr = 0x800F8860
 size = 964
 name = "func_800F8860"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x800F8C24
@@ -4033,7 +4039,7 @@ sources = ["pointer", "prologue"]
 addr = 0x800F8C84
 size = 2596
 name = "func_800F8C84"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x800F96A8
@@ -4057,13 +4063,13 @@ sources = ["call", "prologue"]
 addr = 0x800FA004
 size = 448
 name = "func_800FA004"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800FA1C4
 size = 716
 name = "func_800FA1C4"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800FA490
@@ -4075,7 +4081,7 @@ sources = ["call"]
 addr = 0x800FA5B4
 size = 240
 name = "func_800FA5B4"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800FA6A4
@@ -4333,7 +4339,7 @@ sources = ["prologue"]
 addr = 0x800FBAAC
 size = 204
 name = "func_800FBAAC"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800FBB78
@@ -4345,7 +4351,7 @@ sources = ["prologue"]
 addr = 0x800FBBA0
 size = 204
 name = "func_800FBBA0"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800FBC6C
@@ -4357,7 +4363,7 @@ sources = ["call"]
 addr = 0x800FBE5C
 size = 324
 name = "func_800FBE5C"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800FBFA0
@@ -4375,7 +4381,7 @@ sources = ["prologue"]
 addr = 0x800FC16C
 size = 480
 name = "func_800FC16C"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800FC34C
@@ -4387,25 +4393,25 @@ sources = ["call"]
 addr = 0x800FC550
 size = 284
 name = "func_800FC550"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800FC66C
 size = 608
 name = "func_800FC66C"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800FC8CC
 size = 1188
 name = "func_800FC8CC"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800FCD70
 size = 596
 name = "func_800FCD70"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800FCFC4
@@ -4423,25 +4429,25 @@ sources = ["call"]
 addr = 0x800FD0A8
 size = 320
 name = "func_800FD0A8"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800FD1E8
 size = 112
 name = "func_800FD1E8"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800FD258
 size = 408
 name = "func_800FD258"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800FD3F0
 size = 396
 name = "func_800FD3F0"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800FD57C
@@ -4459,7 +4465,7 @@ sources = ["call", "prologue"]
 addr = 0x800FD6B0
 size = 180
 name = "func_800FD6B0"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800FD764
@@ -4471,7 +4477,7 @@ sources = ["call"]
 addr = 0x800FD7B8
 size = 468
 name = "func_800FD7B8"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800FD990
@@ -4483,7 +4489,7 @@ sources = ["call"]
 addr = 0x800FD9AC
 size = 92
 name = "func_800FD9AC"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800FDA08
@@ -4495,7 +4501,7 @@ sources = ["call"]
 addr = 0x800FDA34
 size = 84
 name = "func_800FDA34"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800FDA88
@@ -4525,7 +4531,7 @@ sources = ["call"]
 addr = 0x800FDCF4
 size = 524
 name = "func_800FDCF4"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800FDF00
@@ -4603,13 +4609,13 @@ sources = ["call"]
 addr = 0x800FE92C
 size = 644
 name = "func_800FE92C"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x800FEBB0
 size = 32
 name = "func_800FEBB0"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x800FEBD0
@@ -4621,13 +4627,13 @@ sources = ["call"]
 addr = 0x800FECD4
 size = 220
 name = "func_800FECD4"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x800FEDB8
 size = 32
 name = "func_800FEDB8"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x800FEDD8
@@ -4639,7 +4645,7 @@ sources = ["call"]
 addr = 0x800FEE08
 size = 272
 name = "func_800FEE08"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800FEF18
@@ -4663,7 +4669,7 @@ sources = ["call"]
 addr = 0x800FF190
 size = 648
 name = "func_800FF190"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800FF418
@@ -4711,13 +4717,13 @@ sources = ["call"]
 addr = 0x800FFE60
 size = 208
 name = "func_800FFE60"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x800FFF30
 size = 336
 name = "func_800FFF30"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80100080
@@ -4729,7 +4735,7 @@ sources = ["call", "prologue"]
 addr = 0x80100284
 size = 500
 name = "func_80100284"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80100478
@@ -4741,7 +4747,7 @@ sources = ["call"]
 addr = 0x80100488
 size = 208
 name = "func_80100488"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80100558
@@ -4939,7 +4945,7 @@ sources = ["call"]
 addr = 0x801026B0
 size = 716
 name = "func_801026B0"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8010297C
@@ -4975,13 +4981,13 @@ sources = ["prologue"]
 addr = 0x80102BB8
 size = 404
 name = "func_80102BB8"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80102D4C
 size = 184
 name = "func_80102D4C"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80102E04
@@ -5029,13 +5035,13 @@ sources = ["prologue"]
 addr = 0x801032C8
 size = 344
 name = "func_801032C8"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80103420
 size = 248
 name = "func_80103420"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80103518
@@ -5047,7 +5053,7 @@ sources = ["pointer", "prologue"]
 addr = 0x80103568
 size = 668
 name = "func_80103568"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80103804
@@ -5083,13 +5089,13 @@ sources = ["prologue"]
 addr = 0x80103A1C
 size = 404
 name = "func_80103A1C"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80103BB0
 size = 164
 name = "func_80103BB0"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80103C54
@@ -5137,13 +5143,13 @@ sources = ["prologue"]
 addr = 0x80104170
 size = 412
 name = "func_80104170"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8010430C
 size = 184
 name = "func_8010430C"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x801043C4
@@ -5155,7 +5161,7 @@ sources = ["pointer", "prologue"]
 addr = 0x80104418
 size = 720
 name = "func_80104418"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x801046E8
@@ -5191,13 +5197,13 @@ sources = ["prologue"]
 addr = 0x80104928
 size = 404
 name = "func_80104928"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80104ABC
 size = 184
 name = "func_80104ABC"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80104B74
@@ -5209,7 +5215,7 @@ sources = ["pointer", "prologue"]
 addr = 0x80104BC8
 size = 740
 name = "func_80104BC8"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80104EAC
@@ -5245,13 +5251,13 @@ sources = ["prologue"]
 addr = 0x801050EC
 size = 404
 name = "func_801050EC"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80105280
 size = 184
 name = "func_80105280"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80105338
@@ -5263,13 +5269,13 @@ sources = ["pointer", "prologue"]
 addr = 0x80105388
 size = 572
 name = "func_80105388"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x801055C4
 size = 188
 name = "func_801055C4"
-sources = ["call", "pointer", "prologue"]
+sources = ["call", "pointer"]
 
 [[function]]
 addr = 0x80105688
@@ -5299,7 +5305,7 @@ sources = ["call"]
 addr = 0x801058BC
 size = 348
 name = "func_801058BC"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80105A18
@@ -5311,7 +5317,7 @@ sources = ["pointer", "prologue"]
 addr = 0x80105A78
 size = 572
 name = "func_80105A78"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80105CB4
@@ -5323,13 +5329,13 @@ sources = ["call"]
 addr = 0x80105E38
 size = 608
 name = "func_80105E38"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80106098
 size = 200
 name = "func_80106098"
-sources = ["call", "pointer", "prologue"]
+sources = ["call", "pointer"]
 
 [[function]]
 addr = 0x80106168
@@ -5359,7 +5365,7 @@ sources = ["call"]
 addr = 0x80106584
 size = 368
 name = "func_80106584"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x801066F4
@@ -5371,7 +5377,7 @@ sources = ["pointer", "prologue"]
 addr = 0x8010674C
 size = 380
 name = "func_8010674C"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x801068C8
@@ -5383,7 +5389,7 @@ sources = ["call"]
 addr = 0x80106928
 size = 404
 name = "func_80106928"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80106ABC
@@ -5425,7 +5431,7 @@ sources = ["call"]
 addr = 0x80106E78
 size = 364
 name = "func_80106E78"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80106FE4
@@ -5437,7 +5443,7 @@ sources = ["pointer", "prologue"]
 addr = 0x8010701C
 size = 576
 name = "func_8010701C"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8010725C
@@ -5629,7 +5635,7 @@ sources = ["call", "prologue"]
 addr = 0x80109688
 size = 368
 name = "func_80109688"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x801097F8
@@ -5677,13 +5683,13 @@ sources = ["pointer", "prologue"]
 addr = 0x80109CF4
 size = 880
 name = "func_80109CF4"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8010A064
 size = 188
 name = "func_8010A064"
-sources = ["call", "pointer", "prologue"]
+sources = ["call", "pointer"]
 
 [[function]]
 addr = 0x8010A120
@@ -5719,7 +5725,7 @@ sources = ["call"]
 addr = 0x8010AA68
 size = 516
 name = "func_8010AA68"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8010AC6C
@@ -5731,7 +5737,7 @@ sources = ["pointer", "prologue"]
 addr = 0x8010ACAC
 size = 1752
 name = "func_8010ACAC"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8010B384
@@ -5743,13 +5749,13 @@ sources = ["call"]
 addr = 0x8010B658
 size = 196
 name = "func_8010B658"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8010B71C
 size = 140
 name = "func_8010B71C"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8010B7A8
@@ -5761,13 +5767,13 @@ sources = ["call"]
 addr = 0x8010BD0C
 size = 272
 name = "func_8010BD0C"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8010BE1C
 size = 272
 name = "func_8010BE1C"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8010BF30
@@ -5809,25 +5815,25 @@ sources = ["call"]
 addr = 0x8010D944
 size = 428
 name = "func_8010D944"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8010DAF0
 size = 244
 name = "func_8010DAF0"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8010DBE4
 size = 300
 name = "func_8010DBE4"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8010DD10
 size = 292
 name = "func_8010DD10"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8010DE34
@@ -5899,25 +5905,25 @@ sources = ["prologue"]
 addr = 0x8010F144
 size = 52
 name = "func_8010F144"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8010F178
 size = 56
 name = "func_8010F178"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8010F1B0
 size = 32
 name = "func_8010F1B0"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8010F1D0
 size = 2140
 name = "func_8010F1D0"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8010FA2C
@@ -6055,7 +6061,7 @@ sources = ["call"]
 addr = 0x8011464C
 size = 456
 name = "func_8011464C"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80114814
@@ -6079,25 +6085,25 @@ sources = ["prologue"]
 addr = 0x80114B8C
 size = 336
 name = "func_80114B8C"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80114CDC
 size = 276
 name = "func_80114CDC"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80114DF0
 size = 300
 name = "func_80114DF0"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80114F1C
 size = 188
 name = "func_80114F1C"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80114FD8
@@ -6349,7 +6355,7 @@ sources = ["prologue"]
 addr = 0x801163E8
 size = 508
 name = "func_801163E8"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x801165E4
@@ -6385,7 +6391,7 @@ sources = ["call"]
 addr = 0x80116E10
 size = 536
 name = "func_80116E10"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80117028
@@ -6397,7 +6403,7 @@ sources = ["pointer", "prologue"]
 addr = 0x80117080
 size = 3080
 name = "func_80117080"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80117C88
@@ -6409,13 +6415,13 @@ sources = ["call"]
 addr = 0x80118104
 size = 848
 name = "func_80118104"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80118454
 size = 408
 name = "func_80118454"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x801185EC
@@ -6469,7 +6475,7 @@ sources = ["call"]
 addr = 0x8011905C
 size = 460
 name = "func_8011905C"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80119228
@@ -6481,7 +6487,7 @@ sources = ["pointer", "prologue"]
 addr = 0x80119280
 size = 1556
 name = "func_80119280"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80119894
@@ -6493,49 +6499,49 @@ sources = ["call"]
 addr = 0x80119944
 size = 280
 name = "func_80119944"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80119A5C
 size = 188
 name = "func_80119A5C"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80119B18
 size = 112
 name = "func_80119B18"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80119B88
 size = 464
 name = "func_80119B88"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80119D58
 size = 440
 name = "func_80119D58"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80119F10
 size = 272
 name = "func_80119F10"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8011A020
 size = 336
 name = "func_8011A020"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8011A170
 size = 508
 name = "func_8011A170"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8011A36C
@@ -6571,7 +6577,7 @@ sources = ["call"]
 addr = 0x8011A6F8
 size = 384
 name = "func_8011A6F8"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8011A878
@@ -6583,7 +6589,7 @@ sources = ["pointer", "prologue"]
 addr = 0x8011A8D0
 size = 1668
 name = "func_8011A8D0"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8011AF54
@@ -6595,13 +6601,13 @@ sources = ["call"]
 addr = 0x8011B124
 size = 440
 name = "func_8011B124"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8011B2DC
 size = 560
 name = "func_8011B2DC"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8011B510
@@ -6643,7 +6649,7 @@ sources = ["call"]
 addr = 0x8011BA5C
 size = 384
 name = "func_8011BA5C"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8011BBDC
@@ -6655,7 +6661,7 @@ sources = ["pointer", "prologue"]
 addr = 0x8011BC34
 size = 608
 name = "func_8011BC34"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8011BE94
@@ -6667,7 +6673,7 @@ sources = ["call"]
 addr = 0x8011BF38
 size = 524
 name = "func_8011BF38"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8011C144
@@ -6703,7 +6709,7 @@ sources = ["call"]
 addr = 0x8011C8D4
 size = 1004
 name = "func_8011C8D4"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8011CCC0
@@ -6715,7 +6721,7 @@ sources = ["pointer", "prologue"]
 addr = 0x8011CD18
 size = 2540
 name = "func_8011CD18"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8011D704
@@ -6727,13 +6733,13 @@ sources = ["call"]
 addr = 0x8011D910
 size = 612
 name = "func_8011D910"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8011DB74
 size = 128
 name = "func_8011DB74"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8011DBF4
@@ -6787,7 +6793,7 @@ sources = ["call"]
 addr = 0x8011E674
 size = 452
 name = "func_8011E674"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8011E838
@@ -6799,7 +6805,7 @@ sources = ["pointer", "prologue"]
 addr = 0x8011E890
 size = 2016
 name = "func_8011E890"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8011F070
@@ -6811,19 +6817,19 @@ sources = ["call"]
 addr = 0x8011F1DC
 size = 564
 name = "func_8011F1DC"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8011F410
 size = 208
 name = "func_8011F410"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8011F4E0
 size = 340
 name = "func_8011F4E0"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8011F634
@@ -6865,7 +6871,7 @@ sources = ["pointer", "prologue"]
 addr = 0x8011FA7C
 size = 1128
 name = "func_8011FA7C"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8011FEE4
@@ -6901,7 +6907,7 @@ sources = ["call"]
 addr = 0x80120714
 size = 632
 name = "func_80120714"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8012098C
@@ -6913,7 +6919,7 @@ sources = ["pointer", "prologue"]
 addr = 0x801209EC
 size = 2348
 name = "func_801209EC"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80121318
@@ -6925,37 +6931,37 @@ sources = ["call"]
 addr = 0x8012142C
 size = 648
 name = "func_8012142C"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x801216B4
 size = 500
 name = "func_801216B4"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x801218A8
 size = 96
 name = "func_801218A8"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80121908
 size = 148
 name = "func_80121908"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8012199C
 size = 236
 name = "func_8012199C"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80121A88
 size = 140
 name = "func_80121A88"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80121B14
@@ -6967,7 +6973,7 @@ sources = ["call"]
 addr = 0x80121B70
 size = 272
 name = "func_80121B70"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80121C80
@@ -6985,13 +6991,13 @@ sources = ["call"]
 addr = 0x80121D2C
 size = 180
 name = "func_80121D2C"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80121DE0
 size = 244
 name = "func_80121DE0"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80121ED4
@@ -7015,13 +7021,13 @@ sources = ["prologue"]
 addr = 0x801222D0
 size = 536
 name = "func_801222D0"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x801224E8
 size = 188
 name = "func_801224E8"
-sources = ["call", "pointer", "prologue"]
+sources = ["call", "pointer"]
 
 [[function]]
 addr = 0x801225AC
@@ -7051,7 +7057,7 @@ sources = ["call"]
 addr = 0x80122818
 size = 348
 name = "func_80122818"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80122974
@@ -7063,7 +7069,7 @@ sources = ["pointer", "prologue"]
 addr = 0x801229D4
 size = 724
 name = "func_801229D4"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80122CA8
@@ -7111,7 +7117,7 @@ sources = ["call"]
 addr = 0x801235EC
 size = 568
 name = "func_801235EC"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80123824
@@ -7123,7 +7129,7 @@ sources = ["pointer", "prologue"]
 addr = 0x8012387C
 size = 1112
 name = "func_8012387C"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80123CD4
@@ -7135,13 +7141,13 @@ sources = ["call"]
 addr = 0x80123D68
 size = 444
 name = "func_80123D68"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80123F24
 size = 96
 name = "func_80123F24"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x801240E4
@@ -7279,7 +7285,7 @@ sources = ["prologue"]
 addr = 0x80124C68
 size = 508
 name = "func_80124C68"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80124E64
@@ -7315,7 +7321,7 @@ sources = ["call"]
 addr = 0x8012562C
 size = 416
 name = "func_8012562C"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x801257CC
@@ -7327,7 +7333,7 @@ sources = ["pointer", "prologue"]
 addr = 0x80125824
 size = 1680
 name = "func_80125824"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80125EB4
@@ -7339,13 +7345,13 @@ sources = ["call"]
 addr = 0x80125FE4
 size = 504
 name = "func_80125FE4"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x801261DC
 size = 196
 name = "func_801261DC"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x801262A0
@@ -7363,7 +7369,7 @@ sources = ["call", "prologue"]
 addr = 0x80126410
 size = 508
 name = "func_80126410"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8012660C
@@ -7399,7 +7405,7 @@ sources = ["call"]
 addr = 0x80126D98
 size = 452
 name = "func_80126D98"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80126F5C
@@ -7411,7 +7417,7 @@ sources = ["pointer", "prologue"]
 addr = 0x80126FD8
 size = 3116
 name = "func_80126FD8"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80127C04
@@ -7423,13 +7429,13 @@ sources = ["call"]
 addr = 0x80127E4C
 size = 756
 name = "func_80127E4C"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80128140
 size = 336
 name = "func_80128140"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80128290
@@ -7483,7 +7489,7 @@ sources = ["call"]
 addr = 0x80128ADC
 size = 508
 name = "func_80128ADC"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80128CD8
@@ -7495,7 +7501,7 @@ sources = ["pointer", "prologue"]
 addr = 0x80128D6C
 size = 948
 name = "func_80128D6C"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80129120
@@ -7507,25 +7513,25 @@ sources = ["call"]
 addr = 0x8012919C
 size = 428
 name = "func_8012919C"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80129348
 size = 112
 name = "func_80129348"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x801293B8
 size = 536
 name = "func_801293B8"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x801295D0
 size = 188
 name = "func_801295D0"
-sources = ["call", "pointer", "prologue"]
+sources = ["call", "pointer"]
 
 [[function]]
 addr = 0x80129694
@@ -7555,7 +7561,7 @@ sources = ["call"]
 addr = 0x801298C8
 size = 356
 name = "func_801298C8"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80129A2C
@@ -7567,7 +7573,7 @@ sources = ["pointer", "prologue"]
 addr = 0x80129A8C
 size = 436
 name = "func_80129A8C"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80129C40
@@ -7615,7 +7621,7 @@ sources = ["call"]
 addr = 0x8012A818
 size = 440
 name = "func_8012A818"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8012A9D0
@@ -7627,7 +7633,7 @@ sources = ["pointer", "prologue"]
 addr = 0x8012AA28
 size = 2104
 name = "func_8012AA28"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8012B260
@@ -7639,13 +7645,13 @@ sources = ["call"]
 addr = 0x8012B43C
 size = 568
 name = "func_8012B43C"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8012B674
 size = 112
 name = "func_8012B674"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8012B6E4
@@ -7699,7 +7705,7 @@ sources = ["call"]
 addr = 0x8012C2C4
 size = 444
 name = "func_8012C2C4"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8012C480
@@ -7711,7 +7717,7 @@ sources = ["pointer", "prologue"]
 addr = 0x8012C4D8
 size = 2064
 name = "func_8012C4D8"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8012CCE8
@@ -7723,13 +7729,13 @@ sources = ["call"]
 addr = 0x8012CFF4
 size = 440
 name = "func_8012CFF4"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8012D1AC
 size = 416
 name = "func_8012D1AC"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8012D34C
@@ -7753,7 +7759,7 @@ sources = ["prologue"]
 addr = 0x8012D4A0
 size = 824
 name = "func_8012D4A0"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8012D7D8
@@ -7789,7 +7795,7 @@ sources = ["call"]
 addr = 0x8012E528
 size = 720
 name = "func_8012E528"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8012E7F8
@@ -7801,7 +7807,7 @@ sources = ["pointer", "prologue"]
 addr = 0x8012E850
 size = 2768
 name = "func_8012E850"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8012F320
@@ -7813,7 +7819,7 @@ sources = ["call"]
 addr = 0x8012F3C8
 size = 380
 name = "func_8012F3C8"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8012F544
@@ -7825,7 +7831,7 @@ sources = ["prologue"]
 addr = 0x8012F59C
 size = 300
 name = "func_8012F59C"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8012FBF0
@@ -8137,7 +8143,7 @@ sources = ["call"]
 addr = 0x801313E0
 size = 412
 name = "func_801313E0"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8013157C
@@ -8149,7 +8155,7 @@ sources = ["pointer", "prologue"]
 addr = 0x801315D4
 size = 1224
 name = "func_801315D4"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80131A9C
@@ -8161,13 +8167,13 @@ sources = ["call"]
 addr = 0x80131B7C
 size = 560
 name = "func_80131B7C"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80131DAC
 size = 160
 name = "func_80131DAC"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80131E4C
@@ -8221,7 +8227,7 @@ sources = ["call"]
 addr = 0x8013281C
 size = 416
 name = "func_8013281C"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x801329BC
@@ -8233,7 +8239,7 @@ sources = ["pointer", "prologue"]
 addr = 0x80132A14
 size = 1796
 name = "func_80132A14"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80133118
@@ -8245,7 +8251,7 @@ sources = ["call"]
 addr = 0x80133260
 size = 504
 name = "func_80133260"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80133458
@@ -8305,7 +8311,7 @@ sources = ["call"]
 addr = 0x80133D38
 size = 408
 name = "func_80133D38"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80133ED0
@@ -8317,7 +8323,7 @@ sources = ["pointer", "prologue"]
 addr = 0x80133F28
 size = 1272
 name = "func_80133F28"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80134420
@@ -8329,13 +8335,13 @@ sources = ["call"]
 addr = 0x80134580
 size = 500
 name = "func_80134580"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80134774
 size = 168
 name = "func_80134774"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8013481C
@@ -8389,7 +8395,7 @@ sources = ["call"]
 addr = 0x801352F4
 size = 432
 name = "func_801352F4"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x801354A4
@@ -8401,7 +8407,7 @@ sources = ["pointer", "prologue"]
 addr = 0x801354FC
 size = 2716
 name = "func_801354FC"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80135F98
@@ -8413,13 +8419,13 @@ sources = ["call"]
 addr = 0x8013614C
 size = 1248
 name = "func_8013614C"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8013662C
 size = 340
 name = "func_8013662C"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80136780
@@ -8437,7 +8443,7 @@ sources = ["prologue"]
 addr = 0x80136840
 size = 508
 name = "func_80136840"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80136A3C
@@ -8473,7 +8479,7 @@ sources = ["call"]
 addr = 0x80136FDC
 size = 408
 name = "func_80136FDC"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80137174
@@ -8485,7 +8491,7 @@ sources = ["pointer", "prologue"]
 addr = 0x801371CC
 size = 2332
 name = "func_801371CC"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80137AE8
@@ -8497,13 +8503,13 @@ sources = ["call"]
 addr = 0x80137DCC
 size = 548
 name = "func_80137DCC"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80137FF0
 size = 620
 name = "func_80137FF0"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8013825C
@@ -8527,7 +8533,7 @@ sources = ["call"]
 addr = 0x8013844C
 size = 432
 name = "func_8013844C"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x801385FC
@@ -8575,7 +8581,7 @@ sources = ["pointer", "prologue"]
 addr = 0x80138AC4
 size = 624
 name = "func_80138AC4"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x80138D34
@@ -8617,7 +8623,7 @@ sources = ["call"]
 addr = 0x801394F4
 size = 680
 name = "func_801394F4"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8013979C
@@ -8629,7 +8635,7 @@ sources = ["pointer", "prologue"]
 addr = 0x801397F4
 size = 4672
 name = "func_801397F4"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8013AA34
@@ -8641,7 +8647,7 @@ sources = ["call"]
 addr = 0x8013AA88
 size = 204
 name = "func_8013AA88"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8013AB54
@@ -8665,13 +8671,13 @@ sources = ["prologue"]
 addr = 0x8013AC6C
 size = 536
 name = "func_8013AC6C"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8013AE84
 size = 160
 name = "func_8013AE84"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8013AF98
@@ -8689,13 +8695,13 @@ sources = ["call", "prologue"]
 addr = 0x8013B018
 size = 96
 name = "func_8013B018"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8013B078
 size = 36
 name = "func_8013B078"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8013B09C
@@ -8821,7 +8827,7 @@ sources = ["call", "prologue"]
 addr = 0x8013B94C
 size = 120
 name = "func_8013B94C"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8013B9C8
@@ -8863,7 +8869,7 @@ sources = ["call"]
 addr = 0x8013C35C
 size = 440
 name = "func_8013C35C"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8013C514
@@ -8875,7 +8881,7 @@ sources = ["pointer", "prologue"]
 addr = 0x8013C56C
 size = 1384
 name = "func_8013C56C"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8013CAD4
@@ -8887,13 +8893,13 @@ sources = ["call"]
 addr = 0x8013CC3C
 size = 532
 name = "func_8013CC3C"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8013CE50
 size = 160
 name = "func_8013CE50"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8013CEF0
@@ -8911,7 +8917,7 @@ sources = ["prologue"]
 addr = 0x8013CFB0
 size = 732
 name = "func_8013CFB0"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8013D28C
@@ -8947,7 +8953,7 @@ sources = ["call"]
 addr = 0x8013D794
 size = 420
 name = "func_8013D794"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8013D938
@@ -8959,7 +8965,7 @@ sources = ["pointer", "prologue"]
 addr = 0x8013D990
 size = 2952
 name = "func_8013D990"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8013E518
@@ -8971,25 +8977,25 @@ sources = ["call"]
 addr = 0x8013E6CC
 size = 600
 name = "func_8013E6CC"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8013E924
 size = 224
 name = "func_8013E924"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x8013EA08
 size = 536
 name = "func_8013EA08"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8013EC20
 size = 188
 name = "func_8013EC20"
-sources = ["call", "pointer", "prologue"]
+sources = ["call", "pointer"]
 
 [[function]]
 addr = 0x8013ECE4
@@ -9019,7 +9025,7 @@ sources = ["call"]
 addr = 0x8013EF18
 size = 356
 name = "func_8013EF18"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8013F07C
@@ -9031,7 +9037,7 @@ sources = ["pointer", "prologue"]
 addr = 0x8013F0DC
 size = 584
 name = "func_8013F0DC"
-sources = ["pointer", "prologue"]
+sources = ["pointer"]
 
 [[function]]
 addr = 0x8013F324
@@ -10075,7 +10081,7 @@ sources = ["prologue"]
 addr = 0x80149C58
 size = 200
 name = "func_80149C58"
-sources = ["call", "prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80149D20
@@ -10136,6 +10142,12 @@ addr = 0x8014A734
 size = 504
 name = "func_8014A734"
 sources = ["call"]
+
+[[function]]
+addr = 0x8014A930
+size = 40
+name = "func_8014A930"
+sources = ["manual", "pointer"]
 
 [[function]]
 addr = 0x8014A958
@@ -10714,6 +10726,12 @@ name = "func_80151A38"
 sources = ["prologue"]
 
 [[function]]
+addr = 0x80151A70
+size = 20
+name = "func_80151A70"
+sources = ["manual", "pointer"]
+
+[[function]]
 addr = 0x80151A88
 size = 52
 name = "func_80151A88"
@@ -10729,7 +10747,7 @@ sources = ["call"]
 addr = 0x80151B50
 size = 48
 name = "func_80151B50"
-sources = ["prologue"]
+sources = ["call"]
 
 [[function]]
 addr = 0x80151B90
@@ -13403,8 +13421,8 @@ targets = [
 ]
 
 [[unreached]]
-start = 0x800C408C
-end = 0x800C40A4
+start = 0x800C42CC
+end = 0x800C42D8
 
 [[unreached]]
 start = 0x800C49F0
@@ -13425,10 +13443,6 @@ end = 0x800C4F30
 [[unreached]]
 start = 0x800C5090
 end = 0x800C50AC
-
-[[unreached]]
-start = 0x800C6030
-end = 0x800C6070
 
 [[unreached]]
 start = 0x800C6A04
@@ -14164,7 +14178,7 @@ end = 0x8014A470
 
 [[unreached]]
 start = 0x8014A92C
-end = 0x8014A958
+end = 0x8014A930
 
 [[unreached]]
 start = 0x8014C9B4
@@ -14247,7 +14261,7 @@ start = 0x80150DFC
 end = 0x80150E00
 
 [[unreached]]
-start = 0x80151A70
+start = 0x80151A84
 end = 0x80151A88
 
 [[unreached]]

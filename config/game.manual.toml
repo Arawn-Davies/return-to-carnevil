@@ -1,0 +1,25 @@
+# What function discovery cannot find in GAME.EXE by itself. Hand-maintained: every
+# entry needs a reason that cites the note showing it.
+# `python3 -m carnevil_tools functions GAME.EXE -o config/game.functions.toml` reads this
+# file (the output's name with .functions.toml replaced by .manual.toml; or --manual).
+#
+# [[stub_block]]: start, end (exclusive): words the program fills at run time. They are
+#   never decoded; each call or jump target inside becomes a one-slot "stub" function.
+# [[manual]]: addr: a function start the analysis does not reach.
+
+[[stub_block]]
+start = 0x800C408C
+end = 0x800C42CC
+reason = "zero in the file; _start copies the loader's 72-slot jump table (physical 0, 576 bytes) here at boot (docs/analysis/boot-handoff.md, the copy from 0xA0000000; docs/analysis/functions.md, the stub block)"
+
+[[manual]]
+addr = 0x800C6030
+reason = "CPU line-0 (VBLANK) interrupt handler: registered with slot 0x200 and executed thousands of times in MAME run 3 (docs/analysis/boot-handoff.md, registrations and callbacks seen executing)"
+
+[[manual]]
+addr = 0x8014A930
+reason = "executed in MAME run 3, 7 hits; its address is built by a lui pair in code (docs/analysis/boot-handoff.md, callbacks seen executing; docs/analysis/functions.md, refused pointers)"
+
+[[manual]]
+addr = 0x80151A70
+reason = "registered as the exception-code-13 (trap) handler from 0x801519E0 in MAME run 3 (docs/analysis/boot-handoff.md, registrations)"

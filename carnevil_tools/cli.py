@@ -2,6 +2,7 @@
 import argparse
 import os
 import sys
+import tomllib
 
 from carnevil_tools import board, disk, exe, functions, hwcensus, loader, mips
 
@@ -63,12 +64,36 @@ def _hex_list(addrs):
     return " ".join(f"0x{a:08X}" for a in addrs) or "-"
 
 
-def _functions(path, out):
+def default_manual(out):
+    """The manual file `functions` reads when --manual is not given: the output's name with
+    `.functions.toml` replaced by `.manual.toml` (config/game.functions.toml ->
+    config/game.manual.toml), if that file exists; otherwise None."""
+    if not out.endswith(".functions.toml"):
+        return None
+    path = out[:-len(".functions.toml")] + ".manual.toml"
+    return path if os.path.isfile(path) else None
+
+
+def _functions(path, out, manual_path=None):
+    if manual_path is None:
+        manual_path = default_manual(out)
+    manual, stubs = [], []
+    if manual_path:
+        if not os.path.isfile(manual_path):
+            print(f"error: {manual_path} is not a file", file=sys.stderr)
+            return 1
+        try:
+            manual, stubs = functions.read_manual(manual_path)
+        except (ValueError, KeyError, tomllib.TOMLDecodeError) as exc:
+            print(f"error: {manual_path}: {exc}", file=sys.stderr)
+            return 1
     image, status = _load(path)
     if image is None:
         return status
-    res, notes = functions.discover(image, image.load_addr)
+    res, notes = functions.discover(image, image.load_addr, manual, stubs)
     functions.write_toml(res, out)
+    print(f"manual input {manual_path or '-'}: {len(manual)} starts, "
+          f"{len(stubs)} stub blocks")
     span = res.text_end - res.text_start
     by_source = {s: sum(s in f.sources for f in res.functions) for s in functions.SOURCES}
     islands = [f.addr for f in res.functions if f.addr >= res.text_end]
@@ -246,6 +271,9 @@ def main(argv=None):
     funcs = sub.add_parser("functions", help="discover the functions of an EXE image")
     funcs.add_argument("exe")
     funcs.add_argument("-o", "--out", required=True, metavar="TOML")
+    funcs.add_argument("--manual", metavar="TOML",
+                       help="hand-maintained starts and stub blocks (default: the output's "
+                            "name with .functions.toml replaced by .manual.toml, if present)")
     disasm = sub.add_parser("disasm", help="decode words of a raw file to the terminal")
     disasm.add_argument("file")
     disasm.add_argument("--base", required=True, type=lambda s: int(s, 0), metavar="ADDR",
@@ -273,7 +301,7 @@ def main(argv=None):
     if args.command == "census":
         return _census(args.exe)
     if args.command == "functions":
-        return _functions(args.exe, args.out)
+        return _functions(args.exe, args.out, args.manual)
     source = args.raw if args.command == "split" else args.partition
     if not os.path.isfile(source):
         return _missing(source)

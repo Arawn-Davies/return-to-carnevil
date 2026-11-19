@@ -39,12 +39,14 @@ Decodes every word of the image as a MIPS instruction and prints how many times 
 ## functions
 
 ```
-python3 -m carnevil_tools functions <GAME.EXE> -o <output.toml>
+python3 -m carnevil_tools functions <GAME.EXE> -o <output.toml> [--manual <manual.toml>]
 ```
 
-Finds the functions in the game: it follows the code from the entry point through every call and branch, resolves jump tables, picks up functions that are only referenced through pointers, and reports the ranges it could not reach. The output file lists the code range, each function (address, size, name, how it was found), each jump table and the unreached ranges. This file is what the recompiler will read.
+Finds the functions in the game: it follows the code from the entry point through every call and branch, resolves jump tables, picks up functions that are only referenced through pointers, and reports the ranges it could not reach. The output file starts with `format = 1` and the SHA-256 of the EXE it was made from, then lists the code range, the stub blocks, each function (address, size, name, how it was found), each jump table and the unreached ranges. This file is what the recompiler will read; reading a file without `format = 1` is refused.
 
-The copy produced from the supported revision is committed as `config/game.functions.toml`.
+What the analysis cannot find by itself comes from a hand-maintained manual file: `[[manual]]` entries (`addr`, `reason`) are extra function starts, and `[[stub_block]]` entries (`start`, `end` exclusive, `reason`) are ranges the program fills at run time. Stub-block words are never decoded; each call or jump target inside one becomes an 8-byte function with the source `stub`. Without `--manual`, the command reads the file named like the output with `.functions.toml` replaced by `.manual.toml`, if it exists: `-o config/game.functions.toml` reads `config/game.manual.toml`. Any other output name gets no manual input.
+
+The copy produced from the supported revision, with `config/game.manual.toml`, is committed as `config/game.functions.toml`; a game-data test checks that it is still what the code produces.
 
 ## disasm
 
