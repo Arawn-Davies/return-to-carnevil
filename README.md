@@ -47,3 +47,7 @@ Tests that need game files skip when they are not there, so the suite passes on 
 - The disk format was learned from [xclusivor/CarnEvil-Research](https://github.com/xclusivor/CarnEvil-Research),
   itself based on daemon1's tools from the XenTaX forums. See `docs/analysis/disk-format.md`.
 - MAME's `seattle` driver is the hardware reference.
+
+## Licence
+
+MIT, see `LICENSE`. It covers the code and notes in this repository, not the game.
