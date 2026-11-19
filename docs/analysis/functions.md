@@ -14,11 +14,11 @@ the targets), the interpreted functions and the unreached ranges. Counts and
 addresses only. A game-data test checks that the committed file equals a fresh
 analysis.
 
-The numbers below are from the run with the full manual file of M1 Task 5. The
+The numbers below are from the run with the full manual file of M1. The
 16 manual jump tables made 488 bytes of case blocks reached code; the counts
 that moved are given with their earlier value ("was ...").
 
-Re-run in Task 5b on the chain-extracted GAME.EXE (SHA-256 f9455ce8...d3a6,
+Re-run on the chain-extracted GAME.EXE (SHA-256 f9455ce8...d3a6,
 `disk-format.md`): `config/game.functions.toml` was byte-for-byte unchanged
 from the run on the earlier, contiguously extracted file (no function added or
 removed). The corrected bytes (0x801A3FF8 to 0x801A4224) are data, past the
@@ -110,7 +110,7 @@ slot (8 bytes, a `j` and its delay slot once filled) with the single source
 `stub`, and the block's words are neither reached code nor unreached ranges.
 `boot_state.toml` maps each stub to its loader slot (stub = 0x800C408C +
 slot). The recompiler must not translate this block from the file: its
-contents come from the boot ROM (Task 5).
+contents come from the boot ROM.
 
 The three words after the block, 0x800C42CC to 0x800C42D8 (the first is the
 bytes "spri"), are unreached. Before the block was declared, the descent read
@@ -146,7 +146,7 @@ committed before the stub block and the manual starts were added):
   is now withdrawn as well, like one that reached code runs into.
 
 Against that run, the 16 `[[jump_table]]` and 2 `[[interpreted]]` entries of
-M1 Task 5 changed this:
+M1 changed this:
 
 - Reached: the 9 unreached ranges holding the case blocks of the 16 jumps
   (488 bytes) are code now: 0x8012DCB0 to 0x8012DD50, 0x8015017C to

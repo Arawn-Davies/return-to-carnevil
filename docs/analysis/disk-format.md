@@ -108,7 +108,7 @@ and their contiguous reading was wrong:
   differ).
 
 The three files total 1,049,212 bytes. The contiguous extraction of `GAME.EXE` had SHA-256
-`47aea64a...da9e`; that value was pinned until Task 5b and is wrong.
+`47aea64a...da9e`; that value was pinned before the extractor followed the block chain, and is wrong.
 
 ## Validation done by our reader
 

@@ -4,7 +4,7 @@ Produced by `python3 -m carnevil_tools census GAME.EXE` (decoder: `carnevil_tool
 
 ## Scope
 
-The census covers the whole loaded image, 0x800C4000 to 0x801A4224, which is 229,513 words. It does not separate code from data, so every word is decoded as an instruction. Data words that happen to be valid encodings inflate some counts. The clearest case is `movf` (3,007): a word whose value is 1 decodes as `movf zero,zero,cc0`. The same applies to `cache`, the trap instructions, `bc0*` and `wait`. Task 4 narrows the count to the code section.
+The census covers the whole loaded image, 0x800C4000 to 0x801A4224, which is 229,513 words. It does not separate code from data, so every word is decoded as an instruction. Data words that happen to be valid encodings inflate some counts. The clearest case is `movf` (3,007): a word whose value is 1 decodes as `movf zero,zero,cc0`. The same applies to `cache`, the trap instructions, `bc0*` and `wait`. Function discovery ([functions](functions.md)) narrows the count to reached code.
 
 0xFFFFFFFF decodes as `sd` (opcode 0x3F), not as an unknown word.
 
@@ -51,7 +51,7 @@ function.
 - bc0fl 8
 - bc0tl 6
 
-`eret` and `tlbr`/`tlbwi`/`tlbwr`/`tlbp` do not occur. The COP0 moves and `wait` counts are low and may be partly data. Task 5 and Task 6 decide which are real.
+`eret` and `tlbr`/`tlbwi`/`tlbwr`/`tlbp` do not occur. The COP0 moves and `wait` counts are low and may be partly data. Function discovery and the hardware analysis ([hardware-usage](hardware-usage.md)) decide which are real.
 
 ## Unknown words
 
@@ -59,7 +59,7 @@ function.
 
 First 20 addresses: 0x800C81B4, 0x800CBB6C, 0x800D6EEC, 0x800DB144, 0x800E7184, 0x800EC53C, 0x800F1D84, 0x80110B04, 0x80110B60, 0x80110B64, 0x80110B8C, 0x80110B9C, 0x80110BAC, 0x80110BB4, 0x80110BB8, 0x80110BE8, 0x80110C08, 0x80110C0C, 0x80110C34, 0x80110C44.
 
-Most of these are expected to be data. The isolated ones low in the image (0x800C81B4 to 0x800F1D84) are the ones to check when Task 4 fixes the code boundary.
+Most of these are expected to be data. The isolated ones low in the image (0x800C81B4 to 0x800F1D84) are the ones to check once function discovery fixes the code boundary.
 
 ## Mnemonic counts (all 229,513 words)
 

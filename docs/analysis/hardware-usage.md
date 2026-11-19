@@ -30,7 +30,7 @@ in the MAME runs below; each section says which. "Read" means read from the code
   file; only facts (ranges, offsets, names) were taken, no code.
 - `GAME.EXE` (SHA-256 `f9455ce8...d3a6`) with `config/game.functions.toml`; `boot.u32`
   (SHA-256 `05346e09...c4a6`): the loader image is ROM bytes 0xF20 to 0x16B60 at 0x80000000.
-- The MAME run 3 NVRAM of Task 5 (`mame/nvram-carnevil/` on the share), and three new MAME
+- The MAME run 3 NVRAM (`mame/nvram-carnevil/` on the share), and three new MAME
   runs with memory taps for this task: the Voodoo run ("Dynamic check: Voodoo accesses"), and
   the hardware run and the split run ("Dynamic check: the other hardware").
 
@@ -347,7 +347,7 @@ during gameplay, which was not run.
   TIMER_CONTROL and TIMER1 in the second MAME run were made by loader code.
 - Correction to `boot-handoff.md`: the loader calls a CPU-line handler with a0 = the Cause IP
   bit (0x100 << n), not (Cause, frame); a1 is not set for it (0x80005100, read). GT64010 and
-  exception handlers are as described there. (Corrected in that page in Task 7.)
+  exception handlers are as described there. (Corrected in that page since.)
 
 ## Dynamic check: Voodoo accesses (measured in MAME)
 

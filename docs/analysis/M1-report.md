@@ -42,8 +42,8 @@ Every fact below carries its basis, as in the [M0 report](M0-report.md):
   armed in MAME, 156 were hit in 90 emulated seconds of attract mode, 152 were captured
   (`tools/mame/funcreplay.lua`, 960 s wall). 127 replay with MAME's results; 25 are impure at
   run time (MAME, test).
-- **Tests**: 201 at the start of M1, 301 now with game data and the MAME captures; 295 with 26
-  skipped without them (test).
+- **Tests**: 201 at the start of M1; 309 now, all run with game data and the MAME captures;
+  without them 303 run, 27 of them skipped (a skipped `setUpClass` counts as one) (test).
 
 ## What was checked against MAME, and how strong it is
 
@@ -97,7 +97,8 @@ MAME took two IP2 interrupts on the way, in `_start`'s clear loop. A write watch
 0x800C4000-0x807FFFFF that fired only for code below `GAME.EXE` logged no write, so the
 handlers did not touch the compared range (MAME, `firstcall.lua`).
 
-How strong: one path, with 7.2 MB of RAM compared. It covers `_start` (the BSS clear, the
+How strong: one path, with 0x73BE98 bytes of RAM compared (7,585,432 bytes: 7.6 MB, 7.2
+MiB). It covers `_start` (the BSS clear, the
 copy of the slot table) and its first two calls (0x80143EB8, and 0x801412D0 down to
 0x80145318). The first loader call comes before `main` starts, so `main` itself is not covered
 by this check (static: no direct call path leads from `main` to 0x80145318).
@@ -117,7 +118,9 @@ all 8 MB with MAME's after-state.
   now from the captures and the functions file).
 - **25 are impure at run time**: they reach hardware through pointers held in memory or passed
   as arguments, which the static census cannot see. 21 touch Voodoo registers, 3 Voodoo
-  texture memory and 1 the CMOS (0x801458C0, the CRC loop M0 found). `replay` stops at the
+  texture memory and 1 the CMOS (0x801458C0, the CRC loop M0 found), counted by the region of
+  the first bus access; "New facts" below counts by kind of routine (22, 2 and 1), and the one
+  that moves is 0x80163864, a Glide routine whose first access is to texture memory. `replay` stops at the
   first bus access; the test accepts a capture as impure only when that address is a known
   hardware region and `replay --interp` (every call in the interpreter) makes the identical
   access, with the same written value, from the same registers and the same RAM (a 64-bit hash
@@ -189,7 +192,7 @@ wrong.
   check where the interpreter runs on inline into another function's start that the C calls (a
   branch to it, running off the end, a jump to a start the interpreter's lookup does not
   know), as `recomp.h` documents. An interrupt is only ever delayed to the next check point.
-- **Stub thunks from the start.** The function emitter (Task 4, not Task 5) emits each loader
+- **Stub thunks from the start.** The function emitter itself, not the whole-image step, emits each loader
   slot as a thunk calling `rt_loader`, so the interpreter reaches the loader through the same
   lookup and the two modes can be compared on loader calls.
 - **A conditional branch into the stub block is a recompile error** instead of a loader call:
@@ -203,8 +206,8 @@ wrong.
   than `ra` in a function's reached code, its targets must lie inside that function, a table
   for a `jr` the analysis resolves itself is refused, and a missing or unknown key names the
   entry. The plan only required a `reason`.
-- **The unresolved-`jr` count test reads `functions.md`**, not `recompiler.md`: the test came
-  in Task 5 and this note in Task 7, and the count is an output of the analysis, which
+- **The unresolved-`jr` count test reads `functions.md`**, not `recompiler.md`: the test was
+  written before this note, and the count is an output of the analysis, which
   `functions.md` documents ("Unresolved indirect jumps (0)").
 - **Purity has a run-time half.** The plan's rule was static only. The static census cannot
   see hardware reached through pointers, so 25 captured functions touched the Voodoo or the
@@ -252,7 +255,8 @@ wrong.
 
 ## What M2 needs from here
 
-- **The runtime entry points** of `recomp.h`:
+- **The runtime entry points** of `recomp.h`, each specified there in a comment block (what
+  it is called with, what it must leave, what it may call):
   - `bus_read` and `bus_write`: the Voodoo (registers, frame buffer, texture memory, through
     kseg0 and kseg1), the gun, the sound FIFO, the CMOS reads, 0x17F00000, and IOASIC
     SOUNDSTAT (M0 report, "Hardware"). kuseg RAM is already handled before the bus.
@@ -285,8 +289,9 @@ These are options with a recommendation each, not decisions already taken.
 What it is (read, unless marked):
 
 - `main` calls the scheduler 0x80151BC0 once (0x800C4740). It loops forever: each pass does
-  some per-frame work, including up to two `ioctl` calls on fd 5 (commands 0x7403 and 0x7407,
-  the `timer:` set of the M0 report), then walks the task list (head at 0x801A3110, current task
+  some work that is probably per frame (inferred), including up to two `ioctl` calls on fd 5
+  (commands 0x7403 and 0x7407, which are probably the `timer:` set of the M0 report;
+  inferred), then walks the task list (head at 0x801A3110, current task
   at 0x801A3118). A task record holds the next task (+0), its saved stack pointer (+8), a
   halfword sleep counter (+0xC), an argument (+0x10) and its function (+0x24). For each task
   whose counter is positive the scheduler decrements it, and when it reaches 0 resumes the
@@ -295,7 +300,8 @@ What it is (read, unless marked):
   saved `s0`-`s7`, `fp`, `ra` and `f20`-`f31` from the task's stack, swaps `sp` and `k1`, and
   returns into the task with `jr ra` (0x80151E88).
 - 0x80151AC0 is the yield, called from 70 `jal` sites in 32 functions (static). It ORs its
-  argument (the number of passes to sleep) into the current task's counter, swaps `sp` and
+  argument (read as the number of scheduler passes to sleep; inferred) into the current task's
+  counter, swaps `sp` and
   `k1` (so `sp` is the scheduler's stack again), saves the task's callee-saved registers just
   below the task's stack pointer, stores that stack pointer at +8 and jumps to 0x80151E90, the
   scheduler's restore path, which reloads the scheduler's registers and moves to the next
@@ -376,6 +382,29 @@ stack's top at creation), and whether `k1` ever differs from the scheduler's `sp
 interrupt is taken; once in attract mode and once with scripted coin and start inputs. That
 gives the number of tasks, the yield rate and the stack sizes the design needs.
 
+**A reviewer's alternative way to build (a)** (not a decision): keep the yield, the exit and
+the scheduler recompiled, and turn only the three guest transfers between them into host
+switches. The `j 0x80151E90` at 0x80151B48 (in the yield) and at 0x80151B78 (in the exit)
+become a switch to the scheduler's host context; the `jr ra` at 0x80151E88 (the resume, with
+the third `xor` in its delay slot) becomes a switch to the task's host context, created on the
+first resume with `rt_call(0x8014A930)` (read). The scheduler's context then carries on at
+0x80151E90, which is the instruction after that `jr ra` and its slot, so the yield's guest
+saves and the scheduler's guest loads all run as recompiled code on the shared `cpu_t`, and
+nothing hand-written has to reproduce guest effects. It needs a new kind of manual entry
+(a transfer that is a host switch). The considerations it brings, whichever way (a) is built:
+
+- the host FP control is per context (glibc `swapcontext` saves and restores MXCSR; each
+  thread under (b) has its own FPCR or MXCSR), so every switch must be followed by
+  `rt_set_fcsr(c, rt_get_fcsr(c))`, or a `ctc1` in one task is silently undone in another;
+- `rt_interrupt` runs on whichever context is current, so interrupt handlers must not yield;
+- the yield's guest saves land below the task's `sp` without moving it, so no stand-in and no
+  interrupt path may use the guest stack below `sp`;
+- each task's host stack must cover the deepest recompiled call chain on it plus the nesting
+  `rt_jump` and the interpreter add;
+- `k1`: the port's exception path is native and the C compiler never allocates `k0` or `k1`,
+  so `k1` survives interrupts by construction, and the open question above about the loader's
+  dispatcher does not arise in the port.
+
 ### 2. Other risks
 
 - **Host stack depth.** Guest call depth is host call depth: every recompiled call is a C
@@ -393,6 +422,13 @@ gives the number of tasks, the yield rate and the stack sizes the design needs.
 - **kuseg.** The mapping covers 0x00040000 to 8 MB. Any other kuseg address goes to the bus,
   where the board would take a TLB exception. Where the game's kuseg pointers come from is not
   traced, and a loader service that changes the TLB at run time would not be noticed.
+- **No guest PC at a bus access.** The generated code passes `bus_read` and `bus_write` no
+  guest PC, so the Voodoo bring-up cannot tell which instruction made an access; an emitter
+  debug mode that stores the PC before each memory operation would.
+- **Interpreted loops grow the host stack.** In the interpreter, a `j` or `jr` to a registered
+  function start (its own entry included) is a tail call through `rt_call`, so an interpreted
+  loop that jumps back to such a start nests one host frame per pass; generated code uses a
+  `goto` there.
 - **The 25 hardware-touching functions** are the first users of the Voodoo and CMOS models.
   Their captures are ready-made tests: once the bus models exist, the same captures can be
   replayed and must then match MAME too, not just the interpreter.

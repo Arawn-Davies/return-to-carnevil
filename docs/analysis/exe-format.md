@@ -52,7 +52,7 @@ The same algorithm covers the game's per-file table `FILESYS.CHK`
 
 ### Ruled out first
 
-Before the loader was read (Task 2), these were checked against the image bytes
+Before the loader was read, these were checked against the image bytes
 (everything after the 8-byte header) and did not match. The GAME values below
 were computed from the contiguously extracted file, whose last 556 bytes were
 wrong (`disk-format.md`), so they are not the values of the correct file; DIAG

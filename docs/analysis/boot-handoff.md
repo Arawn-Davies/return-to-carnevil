@@ -120,11 +120,11 @@ loader. Checked:
   (confirmed). The CRC of the load-address word plus the 918,052 image bytes in the RAM dump
   is also 0x2CAE3F54. The CRC of the extracted file is not (see the next section).
 
-`exe-format.md` records this (updated in Task 5b).
+`exe-format.md` records this (updated since).
 
 ## Finding: the last block of the extracted GAME.EXE is wrong
 
-**Fixed by Task 5b.** `carnevil_tools/disk.py` now follows each file's block chain
+**Fixed.** `carnevil_tools/disk.py` now follows each file's block chain
 (`disk-format.md`). The corrected GAME.EXE has SHA-256
 `f9455ce801d2e5c26a7b6e00eff88efa573deb7ab15fa29f9c90100623bfd3a6`; its header checksum
 matches (0x2CAE3F54) and its bytes from offset 8 equal the RAM image at 0x800C4000 in full.
@@ -299,7 +299,7 @@ input), with breakpoints on the 10 probable callbacks and 16 unresolved indirect
 
 Not hit means not reached in that run, not unreachable.
 
-## kuseg is mapped onto RAM (confirmed, M1 task 6)
+## kuseg is mapped onto RAM (confirmed in M1)
 
 The loader's routine at 0x80004160 sets Wired 0, PageMask 256 KB, and writes TLB entries 0-15
 mapping virtual 0x00000000-0x007FFFFF onto the same physical addresses (cacheable, dirty,
@@ -310,7 +310,7 @@ through kuseg pointers (0x002375C0-0x002378D0 from 0x8015E79C-0x80167CF0, and
 0x00317760-0x0031F430 from 0x800D1750-0x80100558), and the stores land in RAM at the same
 physical addresses. The runtime treats kuseg 0x00040000-0x007FFFFF as RAM (`mem_is_ram`).
 
-## The first loader call (confirmed, M1 task 6)
+## The first loader call (confirmed in M1)
 
 GAME.EXE's first call into the loader is slot 0x038 (one of the unconfirmed file-system calls
 above), from 0x80145348 in the function 0x80145318, which `_start`'s second call (0x801412D0)
@@ -379,7 +379,7 @@ Hit Writeback Invalidate, Hit Writeback) in its memory-fill and flush routines a
    0x801725CC) is overwritten by GAME.EXE's load and its BSS clear. Anything DIAG.EXE changes
    outside RAM (the NVRAM, the disk) was not traced and is outside this question. Sure: high
    for RAM; DIAG.EXE's own hand-off to GAME.EXE is static only.
-7. **The extracted file can be used in full.** Since Task 5b the extractor follows the block
+7. **The extracted file can be used in full.** The extractor now follows the block
    chain, and the extracted GAME.EXE equals the loaded image in all 918,052 image bytes (see
    the finding above). Sure: high (byte comparison and header checksum).
 
