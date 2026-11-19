@@ -22,6 +22,9 @@ FAT_OFFSET = 67 * SECTOR  # chain table: u16 link of block b at FAT_OFFSET + 2 *
 FAT_END = PART_BASE + FIRST_BLOCK * BLOCK  # the table fills the space up to block 3
 NAME_LEN = 12
 ENTRY = struct.Struct("<iii")  # length in words, unused, data block
+DIR_ENTRY = NAME_LEN + ENTRY.size  # 24 bytes
+DIR_SLOTS = 170  # entries in a directory block (bytes 0 to 4079)
+DIR_LINK = 4092  # u32: the next directory block, 0 at the last one
 MAX_DIR_BLOCKS = 4096
 MAX_ENTRIES = 1_000_000
 COPY_CHUNK = 1 << 20
@@ -217,7 +220,11 @@ def _read_blocks(f, entry, blocks):
 
 
 def _read_directory(f):
-    """(entries, partition size) from the directory chain starting at block 3."""
+    """(entries, partition size) from the directory chain starting at block 3.
+
+    Each directory block holds 170 entries; an entry whose first name word is zero is
+    free (unlink leaves it so) and is skipped. The u32 at byte 4092 links to the next
+    directory block; 0 ends the directory."""
     entries = []
     seen_blocks = set()
     f.seek(0, os.SEEK_END)
@@ -227,28 +234,30 @@ def _read_directory(f):
         if block in seen_blocks or len(seen_blocks) >= MAX_DIR_BLOCKS:
             raise DiskFormatError("directory chain loops or is too long")
         seen_blocks.add(block)
-        if block < 0:
-            raise DiskFormatError("negative directory block")
         f.seek(PART_BASE + block * BLOCK)
-        while True:
-            name = _decode_name(_read_exact(f, NAME_LEN, "directory entry"))
-            length, _unused, data_block = ENTRY.unpack(_read_exact(f, ENTRY.size, "directory entry"))
+        data = _read_exact(f, BLOCK, f"directory block {block}")
+        for slot in range(DIR_SLOTS):
+            raw = data[slot * DIR_ENTRY:(slot + 1) * DIR_ENTRY]
+            if raw[:4] == b"\x00\x00\x00\x00":
+                continue
+            name = _decode_name(raw[:NAME_LEN])
             if name == "":
-                if length == 0:
-                    return entries, part_size
-                # Blank name: the length field links to the next directory block.
-                # A link past the end of the partition ends the listing (the
-                # real image terminates its last directory this way).
-                if PART_BASE + length * BLOCK >= part_size:
-                    return entries, part_size
-                block = length
-                break
+                raise DiskFormatError(
+                    f"directory block {block} slot {slot} has a blank name but is not free")
+            length, _unused, data_block = ENTRY.unpack_from(raw, NAME_LEN)
             if length < 0 or data_block < 0:
                 raise DiskFormatError(f"entry {name!r} has negative length or block")
             # Where the data lies is checked block by block when the chain is followed.
             entries.append(FileEntry(name, PART_BASE + data_block * BLOCK, length * 4))
             if len(entries) > MAX_ENTRIES:
                 raise DiskFormatError("too many directory entries")
+        (link,) = struct.unpack_from("<I", data, DIR_LINK)
+        if link == 0:
+            return entries, part_size
+        if link < FIRST_BLOCK or PART_BASE + (link + 1) * BLOCK > part_size:
+            raise DiskFormatError(
+                f"directory block {block} links to block {link}, outside the partition")
+        block = link
 
 
 def _safe_name(name):

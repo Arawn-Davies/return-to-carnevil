@@ -27,9 +27,9 @@ python3 -m carnevil_tools verify work/parts/part0
 python3 -m carnevil_tools extract work/parts/part0 -o work/part0_files
 ```
 
-`verify` reads every file of partition 0 in memory and checks it against the game's own table `FILESYS.CHK`. On a good image it prints `1339 of 1504 listed files match`, `165 listed files are not on the partition` (the table lists more than this partition holds) and `17 files on the partition are not listed (not checked)`, and no mismatch. `GAME.EXE` and `DIAG.EXE` are among the 17: they are checked instead by the EXE gate (SHA-256 and header checksum, below) when `census` or `functions` first loads them.
+`verify` reads every file of partition 0 in memory and checks it against the game's own table `FILESYS.CHK`. On a good image it prints `1504 of 1504 listed files match`, `0 listed files are not on the partition` and `19 files on the partition are not listed (not checked)`, and no mismatch. `GAME.EXE` and `DIAG.EXE` are among the 19: they are checked instead by the EXE gate (SHA-256 and header checksum, below) when `census` or `functions` first loads them.
 
-The disk has 17 partitions. Partition 0 holds the 1,356 files the game runs from, including `GAME.EXE` (the game), `DIAG.EXE` (the operator diagnostics), textures (`.WMS`), models (`.ZM`), animations (`.ZA`) and sound banks (`.BNK`).
+The disk has 17 partitions. Partition 0 holds the 1,523 files the game runs from, including `GAME.EXE` (the game), `DIAG.EXE` (the operator diagnostics), textures (`.WMS`), models (`.ZM`), animations (`.ZA`) and sound banks (`.BNK`).
 
 ## 3. Tell the tools where the folder is
 

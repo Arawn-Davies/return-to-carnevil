@@ -23,7 +23,8 @@ against the disk. Our implementation is `carnevil_tools/disk.py`.
 
 Only the first `0x10 + 12*N` bytes are needed to read the table. Partition `i` is the byte
 range `[start*512, (start+size)*512)`. Partition 0 is 193,000 sectors = 98,816,000 bytes and
-holds the game files (1,356 of them).
+holds the game files (1,523 of them). The other 16 partitions have no home-block magic and
+hold no file system of this kind (measured: `list_files` refuses each of part1 to part16).
 
 ## Partition file system
 
@@ -66,7 +67,13 @@ block numbers:
 
 - 0: end of the chain (every file on part0 ends with 0);
 - 1: free (the usage routine at 0x8000972C counts every entry other than 1 as used, and the
-  allocator at 0x80007D40 takes the first entry equal to 1; 5,504 entries on part0).
+  allocator at 0x80007D40 takes the first entry equal to 1 at or after a search hint, sets it
+  to 0 and moves the hint past it; the mount and unlink set the hint to 3; read. 5,504 entries
+  on part0).
+
+On part0 every entry other than 1 belongs to a file's chain or is a directory block, whose
+entry is 0 (measured: the 18,591 blocks of the 1,523 files and the 9 directory blocks account
+for all 18,600 used entries).
 
 The loader's seek routine (0x80008F90) walks the chain one entry per 4096 bytes of file
 offset and stops with an error at a link below 3; the read routine (0x80009040) takes the
@@ -75,22 +82,49 @@ next block the same way. The file size, from the directory, bounds the read. A f
 
 ### Directory
 
-The root directory is block 3. A directory is a run of 24-byte entries:
+The root directory is block 3. A directory block holds 170 entries of 24 bytes (bytes 0 to
+4079), then 12 unused bytes (zero on part0), then at byte 4092 a u32 link to the next
+directory block (read: the lookup at 0x80008094 scans 0xAA entries per block and then loads
+the word at byte 0xFFC of the block). Entry:
 
 ```
 +0   12 bytes  name, NUL padded, with each 4-byte group stored byte-reversed
                 (bytes 3,2,1,0, 7,6,5,4, 11,10,9,8); truncate at the first NUL
 +12  int32     length of the file in 32-bit words (bytes = length * 4)
-+16  int32     unknown (ignored)
-+20  int32     first data block of the file
++16  u32       date and time: high half the DOS date, low half the DOS time (measured:
+                `BTOP.ZM` has 0x254E7BEE, 14 October 1998 15:31:28; some files hold 0)
++20  int32     first data block of the file (the loader reads its low half, read)
 ```
 
-Entries are read sequentially. An entry with a blank name is not a file: its length field is
-the block number of the next directory block, and reading continues there. In the real image
-these link entries appear at offset 4080 of each directory block (the last 24-byte slot);
-their other two fields are garbage. The chain ends at a blank entry whose length is 0, or,
-as observed on part0, whose link points past the end of the partition. Names are at most
-12 bytes, so there are no subdirectories; files are flat.
+- **Free entry.** An entry whose first name word is zero is free. The loader's unlink
+  (0x8000884C) zeroes that word and frees the chain from the entry's first block, leaving the
+  rest of the entry as it was (read). Its find-or-create routine (0x80008198) takes the
+  first entry, in scan order, that is either free or holds the name; for a name it already
+  holds it frees the old chain and reuses the entry (read). A free entry is not the end of
+  the directory: the scan goes on past it.
+- **End.** A link of 0 ends the directory. The lookup treats 0 as "back to block 3", since
+  it scans circularly from the block of its last hit until it returns to where it started
+  (read, 0x80008094: `movz` of 3 when the link is 0). When find-or-create reaches a link of 0
+  with no free entry seen, it allocates a block (0x80007D40), stores its number in the link
+  word, zeroes the new block and continues there (read, 0x80008298 to 0x80008308).
+- Names are at most 12 bytes, so there are no subdirectories; files are flat.
+
+On part0 the directory is 9 blocks: 3, 5541, 7453, 8691, 9957, 11188, 12473, 14313, 16909.
+The first seven are full; block 14313 holds a free entry at slot 166 and block 16909 one at
+slot 164 (both deleted files whose first name word is zero) and five never-used, all-zero
+slots, 165 to 169 (measured).
+
+**Correction (2026-11-19).** M0's reader and this document read the directory as a run of
+entries in which any blank name was a link (its length field the next block), ending at a
+blank entry of length 0 or at a link past the end of the partition. That misread the free
+entry at block 14313, slot 166 (first name word zero, length 0x20000 words) as a link past
+the end, and stopped there: it listed 1,356 files and missed 167. Shown by the entries after
+it: `GLASS.WMS`, `NOBL1X1.WMS` and `NOBL1X2.WMS` in slots 167 to 169 have valid chains that
+share no block with any other file and match `FILESYS.CHK` in size and checksum, and block
+14313's link word at byte 4092 leads to a ninth directory block, 16909. With the rules above
+the reader lists 1,523 files, and all 1,504 files `FILESYS.CHK` lists are present and match.
+The rules were then confirmed in the loader's code (the addresses above). The extracted
+folder made by M0 lacks the 167 files and needs regenerating.
 
 ### File data
 
@@ -98,7 +132,7 @@ File data is the file's blocks in chain order, truncated to `length * 4` bytes.
 
 **Correction.** Our first extractor, like the public research scripts it followed, read
 `length * 4` contiguous bytes from the first data block. That is right only when a file's
-blocks are adjacent. On part0, 1,353 of the 1,356 files have adjacent blocks; three do not,
+blocks are adjacent. On part0, 1,520 of the 1,523 files have adjacent blocks; three do not,
 and their contiguous reading was wrong:
 
 - `GAME.EXE`: 224 adjacent blocks from 16127, then block 18828 for the last 556 bytes
@@ -113,7 +147,8 @@ The three files total 1,049,212 bytes. The contiguous extraction of `GAME.EXE` h
 ## Validation done by our reader
 
 - raw header magic, plausible partition count, every partition inside the image;
-- the directory chain must not revisit a block;
+- the directory chain must not revisit a block, and each link must name a block inside the
+  partition; an entry whose first name word is not zero but whose name is blank is refused;
 - every file's block chain is followed before anything is written: a link that revisits a
   block, a block outside the partition, or a chain that ends (link below 3) before the file's
   size is covered raises `DiskFormatError`;
@@ -143,14 +178,17 @@ the EXE header checksum, see `exe-format.md`); zlib CRC-32 does not match.
 `python3 -m carnevil_tools verify <partition>` reads every file in memory by following the
 chains and compares it with the table. Result on part0:
 
-- 1,504 files listed; 1,339 are on the partition and all 1,339 match (size and checksum);
-  0 mismatches;
-- 165 listed files are not on the partition;
-- 17 files on the partition are not listed: `ADJUST.FMT`, `AUDITS.FMT`, `CREDITS.RAW`,
-  `CREDITSB.RAW`, `DIAG.EXE`, `FILESYS.CHK`, `GAME.EXE`, `HSTD01.WMS` to `HSTD10.WMS`.
+- 1,504 files listed; all 1,504 are on the partition and all match (size and checksum);
+  0 mismatches; none missing;
+- 19 files on the partition are not listed: `ADJUST.FMT`, `AUDITS.FMT`, `CREDITS.RAW`,
+  `CREDITSB.RAW`, `DIAG.EXE`, `FILESYS.CHK`, `GAME.EXE`, `GAMEINF.REV`, `HSTD01.WMS` to
+  `HSTD10.WMS`, `J.PRC`.
+
+Before the directory correction above, M0 reported 1,339 matches, 165 listed files missing
+and 17 unlisted; the 165 and `GAMEINF.REV` and `J.PRC` are the 167 files it had missed.
 
 None of the three non-adjacent files is listed, so this check does not itself exercise the
-chain fix (the contiguous reading also matched all 1,339); it confirms that the listed files,
+chain fix; it confirms that the listed files,
 all with adjacent blocks, are read correctly. GAME.EXE and DIAG.EXE are covered by their
 header checksums instead, and GAME.EXE by the RAM image the loader produced in MAME
 (`tests/test_disk.py`, `test_game_exe_matches_loader`). The two high-score tables are covered
@@ -158,7 +196,7 @@ only by the chain itself.
 
 ## Verified values (part0)
 
-- 1,356 files
+- 1,523 files in 9 directory blocks, 2 free (deleted) entries and 5 never-used slots
 - `GAME.EXE` SHA-256 `f9455ce801d2e5c26a7b6e00eff88efa573deb7ab15fa29f9c90100623bfd3a6`
 - `DIAG.EXE` SHA-256 `38b2810864c85d6971cedc3a6b0e507c8c6d593e4d7c355c880f91dbcaaaa2b9`
   (unchanged: its blocks are adjacent)

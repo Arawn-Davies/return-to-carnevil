@@ -48,7 +48,7 @@ The [M0 report](analysis/M0-report.md) and the [M1 report](analysis/M1-report.md
 
 About the disk:
 
-- The hard disk image has 17 partitions. Partition 0 holds the 1,356 files the game runs from.
+- The hard disk image has 17 partitions. Partition 0 holds the 1,523 files the game runs from.
 - Each file is a chain of 4 KB blocks. Most files' blocks are adjacent, but three are not, `GAME.EXE` among them, so reading files as one contiguous run (as the public research scripts do) gets those three wrong.
 - The format details are in [analysis/disk-format.md](analysis/disk-format.md).
 

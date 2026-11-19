@@ -36,9 +36,11 @@ def build_partition(files, fat_overrides=None):
     """Build a synthetic partition using the documented layout.
 
     `files` is [(name, bytes)] or [(name, bytes, [block, ...])]. Directory is
-    block 3; without a block list a file gets the next free contiguous blocks
-    from block 4. The chain table links each file's blocks in order and ends
-    the chain with 0. `fat_overrides` ({block: link}) is applied last.
+    block 3 (at most 170 entries; the rest of its slots are zero, so free, and
+    its link word at byte 4092 is 0); without a block list a file gets the next
+    free contiguous blocks from block 4. The chain table links each file's
+    blocks in order and ends the chain with 0. `fat_overrides` ({block: link})
+    is applied last.
     """
     entries = b""
     placed = []
@@ -57,7 +59,7 @@ def build_partition(files, fat_overrides=None):
         used.update(blocks)
         entries += _encode_name(name) + struct.pack("<iii", len(padded) // 4, 0, blocks[0])
         placed.append((blocks, padded))
-    entries += _encode_name("") + struct.pack("<iii", 0, 0, 0)  # terminator
+    assert len(entries) <= 170 * 24
     image = bytearray(BASE + (max(used) + 1) * BLOCK)
     struct.pack_into("<I", image, 2 * 512, HOME_MAGIC)
     image[BASE + 3 * BLOCK:BASE + 3 * BLOCK + len(entries)] = entries
@@ -248,17 +250,56 @@ class SyntheticPartitionTests(unittest.TestCase):
         with self.assertRaises(disk.DiskFormatError):
             disk.verify_files(part)
 
-    def test_directory_loop_raises(self):
-        # A blank-named entry pointing at its own block must not loop forever.
-        entries = _encode_name("") + struct.pack("<iii", 3, 0, 0)
-        image = bytearray(BASE + 4 * BLOCK)
-        struct.pack_into("<I", image, 2 * 512, HOME_MAGIC)
-        image[BASE + 3 * BLOCK:BASE + 3 * BLOCK + len(entries)] = entries
-        part = self.path("loop")
+    def write_image(self, image, name):
+        part = self.path(name)
         with open(part, "wb") as f:
             f.write(image)
-        with self.assertRaises(disk.DiskFormatError):
-            disk.list_files(part)
+        return part
+
+    def test_directory_loop_raises(self):
+        # A directory block linking to itself must not loop forever.
+        image = bytearray(build_partition([("A.BIN", b"AAAA")]))
+        struct.pack_into("<I", image, BASE + 3 * BLOCK + 4092, 3)
+        with self.assertRaisesRegex(disk.DiskFormatError, "loops"):
+            disk.list_files(self.write_image(image, "loop"))
+
+    def test_free_entry_is_skipped(self):
+        # unlink zeroes an entry's first name word; the entries after it are still files
+        # (part0's last two directory blocks hold such entries).
+        image = bytearray(build_partition([("A.BIN", b"AAAA"), ("GONE.DAT", b"GGGG"),
+                                           ("C.BIN", b"CCCC")]))
+        image[BASE + 3 * BLOCK + 24:BASE + 3 * BLOCK + 28] = b"\0\0\0\0"
+        names = [e.name for e in disk.list_files(self.write_image(image, "free"))]
+        self.assertEqual(names, ["A.BIN", "C.BIN"])
+
+    def test_directory_continues_through_the_link_word(self):
+        # The u32 at byte 4092 names the next directory block; slots left zero are free.
+        image = bytearray(build_partition([("A.BIN", b"AAAA")]))
+        image += bytes(2 * BLOCK)  # block 5: the second directory block; block 6: B.BIN
+        struct.pack_into("<I", image, BASE + 3 * BLOCK + 4092, 5)
+        second = BASE + 5 * BLOCK
+        image[second + 48:second + 72] = _encode_name("B.BIN") + struct.pack("<iii", 1, 0, 6)
+        image[BASE + 6 * BLOCK:BASE + 6 * BLOCK + 4] = b"BBBB"
+        part = self.write_image(image, "two")
+        entries = disk.list_files(part)
+        self.assertEqual([e.name for e in entries], ["A.BIN", "B.BIN"])
+        disk.extract_files(part, self.path("out"))
+        with open(self.path("out", "B.BIN"), "rb") as f:
+            self.assertEqual(f.read(), b"BBBB")
+
+    def test_directory_link_outside_the_partition_raises(self):
+        image = bytearray(build_partition([("A.BIN", b"AAAA")]))
+        for link in (1, 5000):
+            with self.subTest(link=link):
+                struct.pack_into("<I", image, BASE + 3 * BLOCK + 4092, link)
+                with self.assertRaisesRegex(disk.DiskFormatError, "outside the partition"):
+                    disk.list_files(self.write_image(image, "link%d" % link))
+
+    def test_blank_name_that_is_not_free_raises(self):
+        image = bytearray(build_partition([("A.BIN", b"AAAA")]))
+        image[BASE + 3 * BLOCK:BASE + 3 * BLOCK + 4] = b"X\0\0\0"  # first character NUL
+        with self.assertRaisesRegex(disk.DiskFormatError, "blank name"):
+            disk.list_files(self.write_image(image, "blank"))
 
     def test_foreign_partition_refused(self):
         image = bytearray(build_partition([("A.BIN", b"AAAA")]))
@@ -477,7 +518,10 @@ class GameDataTests(unittest.TestCase):
     @requires_file("parts", "part0")
     def test_part0_matches_reference(self):
         part0 = work_path("parts", "part0")
-        self.assertEqual(len(disk.list_files(part0)), 1356)
+        names = {e.name for e in disk.list_files(part0)}
+        self.assertEqual(len(names), 1523)
+        # The first three entries after the free one in block 14313, slot 166.
+        self.assertLessEqual({"GLASS.WMS", "NOBL1X1.WMS", "NOBL1X2.WMS"}, names)
         with tempfile.TemporaryDirectory() as out:
             disk.extract_files(part0, out)
             self.assertEqual(sha256(os.path.join(out, "GAME.EXE")), GAME_EXE_SHA256)
@@ -502,11 +546,11 @@ class GameDataTests(unittest.TestCase):
     def test_part0_matches_checksum_table(self):
         result = disk.verify_files(work_path("parts", "part0"))
         self.assertEqual(result.listed, 1504)
-        self.assertEqual(len(result.matched), 1339)
+        self.assertEqual(len(result.matched), 1504)
         self.assertEqual(result.mismatched, [])
-        self.assertEqual(len(result.missing), 165)
-        # 17 files are not in the table; GAME.EXE and DIAG.EXE are checked by the EXE gate.
-        self.assertEqual(len(result.unlisted), 17)
+        self.assertEqual(result.missing, [])
+        # 19 files are not in the table; GAME.EXE and DIAG.EXE are checked by the EXE gate.
+        self.assertEqual(len(result.unlisted), 19)
         self.assertIn("GAME.EXE", result.unlisted)
         self.assertIn("DIAG.EXE", result.unlisted)
 
