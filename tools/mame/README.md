@@ -267,3 +267,75 @@ into an empty folder.
 The taps are removed and reinstalled every 30 frames, because the GT64010 remaps the CPU
 address space when its windows are written, and an access between a remap and the next
 reinstall is lost (`hardware-usage.md`).
+
+## M2 measurements
+
+Run in the Linux container like the others, each run in a folder of its own with a blank NVRAM. The
+share holds the outputs under `mame/m2-measure/`.
+
+**`tasksw.lua`** (M2 measurement 1, `docs/analysis/task-switch.md`): the cooperative task
+switch. From GAME.EXE's entry it logs, through `printf` actions on breakpoints and watchpoints,
+every yield (0x80151AC0), task exit (0x80151B50), scheduler resume (0x80151D4C), scheduler pass
+(before and after its wait, 0x80151C04 and 0x80151C84, and the end of its task walk), the two
+`timer:` ioctl calls of the scheduler, every task creation (0x80148FA4, 0x80149200) with its
+return, every task kill and record free, every exception entry and eret, and every write to
+0x801A3110-0x801A311B (task list head, free list, current task) and to 0x801A2FE8 (the vblank
+count). At each creation's return and at each record free it stops, and Lua copies the new
+stack or compares the freed one with its copy (the deepest word written). The script's header
+lists every line and field. `$CARNEVIL_TASKSW_SECONDS` sets the emulated seconds after the
+entry (150); `$CARNEVIL_PLAY` = 1 adds the scripted coin, start and trigger inputs of
+`PLAY_STEPS` (MAME fields `:SYSTEM` "Coin 1" and "1 Player Start", `:FAKE` "P1 Trigger") and
+snapshots into `snap/`; every input and snapshot is logged. From 75 s after the entry it
+presses start every 3 s and inserts two coins every 10 s, to take the "Continue?" offers.
+Watchpoints need `-nodrc`. Run A (attract, 150 s) took 1,283 s of wall time (12% speed, beside
+two other runs on the Linux container's 4 cores; `wall.txt` in each run folder) and wrote 8.2 MB of
+`debug.log`; run B (play, 230 s) took 2,150 s (11%) and wrote 14.4 MB. Run B1, an earlier play
+run of 110 s whose schedule stopped at the triggers (no continues: one life, about 15 s of
+play), took 1,043 s; it is kept and reported too.
+
+```
+cd <scratch>/tasksw-A && timeout 7200 mame carnevil -rompath <roms> -nodrc -debug \
+  -debugger none -debuglog -video none -sound none -nothrottle -cfg_directory cfg \
+  -nvram_directory nvram -snapshot_directory snap -diff_directory diff \
+  -autoboot_script <repo>/tools/mame/tasksw.lua
+cd <scratch>/tasksw-B && CARNEVIL_PLAY=1 CARNEVIL_TASKSW_SECONDS=230 timeout 7200 mame carnevil \
+  <the same options>
+cd <repo> && python3 tools/mame/tasksw_report.py <scratch>/tasksw-A/debug.log
+cd <repo> && python3 tools/mame/tasksw_report.py <scratch>/tasksw-B/debug.log --play-frame F
+```
+
+`tasksw_report.py` prints the numbers of `task-switch.md` (tasks alive, task functions,
+yields per frame and per call site, stacks, scheduler passes, exceptions and `k1`, writes to
+the task list). `--play-frame` adds per-frame figures from that frame on (run B: the frame of
+the first gameplay snapshot). Outputs on the share: `mame/m2-measure/tasksw-A/`, `tasksw-B/`
+and `tasksw-B1/` (`debug.log`, `report.txt`, `wall.txt`, `mame.out`, the play runs'
+snapshots in `snap/`, named in order; the `TS SNAP` lines give their times).
+
+**`loadercalls.lua`** (M2 measurement 2, `docs/analysis/loader-calls.md`): every call GAME.EXE
+makes into the 72 slots of the stub block. The first `$CARNEVIL_LOADER_FIRST` calls (400) are
+handled from Lua: arguments, the string at a0 when there is one, the bytes of a write to fd
+0-2, and v0/v1 at the return (a one-off breakpoint at ra, conditioned on the call's sp); they
+go to `loader-calls-first.txt` in `$CARNEVIL_MAME_OUT`. After them every call is a `LC` line
+in `debug.log` (a `printf` action), except the opens, file-system calls and writes, which
+stay in Lua and give `LS` lines at their return. A write watchpoint on physical 0x16000028
+(IOASIC UARTOUT) logs every console byte from power-on. `$CARNEVIL_LOADER_SECONDS` (150) is
+the run length after the entry. In `debug.log` the debugger's `printf` drops the backslash
+of the `\xNN` escapes in `buf`, and Lua's lines have `?` for every `"` and `%`;
+`loader-calls-first.txt` has them intact. Run A took 1,510 s of wall time (10% speed); its
+`debug.log` is 670 MB, almost all of it the sound-data download between 10 and 20 emulated
+seconds (5.9 million ioctl calls).
+
+```
+cd <scratch>/loader-A && CARNEVIL_MAME_OUT=. timeout 7200 mame carnevil -rompath <roms> -nodrc \
+  -debug -debugger none -debuglog -video none -sound none -nothrottle -cfg_directory cfg \
+  -nvram_directory nvram -snapshot_directory snap -diff_directory diff \
+  -autoboot_script <repo>/tools/mame/loadercalls.lua
+cd <repo> && python3 tools/mame/loadercalls_report.py <scratch>/loader-A \
+  --console <share>/mame/m2-measure/loader-A/console.txt
+```
+
+`loadercalls_report.py` prints the per-slot counts for the whole run, the ioctl (fd,
+command) counts and hottest call sites, the opens with their paths and results, and the
+console output as lines with the frame and emulated time of each line's first byte. Outputs
+on the share: `mame/m2-measure/loader-A/` (`loader-calls-first.txt`, `report.txt`,
+`console.txt`, `debug.log.gz`, 35 MB).
