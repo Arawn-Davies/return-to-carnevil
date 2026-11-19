@@ -1,0 +1,11 @@
+# Game data, extracted files and generated code never go in this repo
+/data/
+/work/
+/generated/
+*.chd
+*.raw
+*.EXE
+*.exe
+*.u32
+*.u95
+*.u96
