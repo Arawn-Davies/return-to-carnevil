@@ -188,6 +188,46 @@ Algorithm (the order matters):
 - [ ] **Step 5: Decide and record** in `boot-handoff.md`: which external calls the runtime replaces with native stand-ins and which run under the interpreter; whether skipping `DIAG.EXE` loses any state `GAME.EXE` reads.
 - [ ] **Step 6: Commit** `git commit -m "analysis: boot hand-off and boot state"`.
 
+### Task 5b: Extractor follows block chains; EXE checksum; re-pin hashes
+
+Inserted by the controller after Task 5 found a load-bearing defect in Task 1's output.
+
+**The defect.** `carnevil_tools/disk.py` reads a file as `size` contiguous bytes from its first block. The file system on the disk chains a file's blocks; the boot ROM's loader follows the chain. For `GAME.EXE` the two disagree in the last 4 KB block: 315 bytes (113 words) differ within file offsets 917,504–918,060 (load addresses `0x801A3FF8`–`0x801A4224`, data only; the text is unaffected). The SHA-256 pinned so far for `GAME.EXE` (`47aea64a3e5d15c15f28b3907294e706f078a4e9a47c422f551f420d9ba7da9e`) is the hash of the wrong bytes. Other files on the disk may be affected too. See the extractor section of `docs/analysis/boot-handoff.md`.
+
+**Two independent oracles for a correct `GAME.EXE`:**
+- Header word 0 is the POSIX `cksum` CRC of the file's bytes from offset 4 to the end (`0x2CAE3F54` for `GAME.EXE`, `0x5799F785` for `DIAG.EXE`; the currently extracted `DIAG.EXE` already satisfies it, the currently extracted `GAME.EXE` does not).
+- MAME's RAM at the moment the game starts: `/Volumes/archive/reincarnevilation/work/mame/dumps/ram-at-game-entry.bin` (8 MB, physical address 0 at file offset 0). The image the loader placed at `0x800C4000` (file offset `0xC4000`, length = `GAME.EXE` size − 8) must equal the extracted file's bytes from offset 8.
+
+**Files:**
+- Modify: `carnevil_tools/disk.py`, `tests/test_disk.py`, `carnevil_tools/exe.py`, `tests/test_exe.py`, `carnevil_tools/cli.py`, `docs/analysis/disk-format.md`, `docs/analysis/exe-format.md`, `docs/analysis/boot-handoff.md` (extractor section only: mark it fixed and give the new hash), `docs/analysis/functions.md`, `config/game.functions.toml`, `README.md`, `docs/getting-started.md`, `docs/superpowers/plans/2026-11-19-carnevil-recomp.md` and `docs/superpowers/specs/2026-11-19-carnevil-recomp-design.md` (the pinned hash lines only)
+
+**Interfaces:**
+- Unchanged signatures: `disk.read_partition_table`, `disk.split_partitions`, `disk.list_files(partition_path) -> list[FileEntry]`, `disk.extract_files(partition_path, out_dir) -> list[str]`, `disk.DiskFormatError`. `FileEntry` keeps `name`, `offset` (byte offset of the file's first block) and `size`; add a field only if a test needs it.
+- Produces:
+  - `exe.posix_cksum(data: bytes) -> int` (the POSIX `cksum` algorithm: CRC-32 polynomial `0x04C11DB7`, MSB first, initial value 0, the length appended as its minimal little-endian byte string, final complement)
+  - `exe.ChecksumError(ValueError)`; `exe.load_exe` raises it when header word 0 differs from `posix_cksum(file_bytes[4:])`, after the SHA-256 gate and with both values in the message; `load_exe(path, expect_sha256=None)` still verifies the checksum
+  - `exe.GAME_EXE_SHA256` and `exe.DIAG_EXE_SHA256` re-pinned to the hashes of correctly extracted files
+  - CLI: `python3 -m carnevil_tools verify <partition> ` (see Step 6)
+
+- [ ] **Step 1: Learn the chain.** Work out from the boot ROM's loader (`boot.u32` at `0xBFC00000`; the loader body is ROM `0xBFC00F20`–`0xBFC16B60`, running at `0x80000000`; `python3 -m carnevil_tools disasm` prints to the terminal) and from the disk itself how a file's blocks are chained and how the end of a chain is marked. Rewrite `docs/analysis/disk-format.md` to describe it, and say there that the earlier contiguous reading (shared with the public research scripts) was wrong for files whose blocks are not adjacent.
+- [ ] **Step 2: Write the failing tests** in `tests/test_disk.py`
+  - `test_noncontiguous_file_follows_chain`: a synthetic partition (extend the existing builder) with a three-block file whose blocks are stored out of order and interleaved with another file's; `extract_files` returns the bytes in chain order.
+  - `test_chain_loop_raises` and `test_chain_link_out_of_range_raises`: `DiskFormatError`, output directory left empty.
+  - `test_chain_shorter_than_size_raises`: a chain that ends before `size` bytes are covered raises `DiskFormatError`.
+  - `test_game_exe_matches_loader` (`@requires_file("parts", "part0")` and `@requires_file("mame", "dumps", "ram-at-game-entry.bin")`): extract `part0` to a temp dir; `GAME.EXE`'s bytes from offset 8 equal the dump's bytes at `0xC4000` for the same length.
+  - Update `test_part0_matches_reference`: still 1,356 entries; `GAME.EXE` and `DIAG.EXE` assert their **full** new SHA-256 values.
+- [ ] **Step 3: Write the failing tests** in `tests/test_exe.py`
+  - `test_posix_cksum_check_value`: `posix_cksum(b"123456789") == 0x377A6011`; `posix_cksum(b"") == 0xFFFFFFFF`.
+  - `test_bad_header_checksum_refused`: a synthetic EXE with a wrong word 0 raises `ChecksumError` naming both values; with the right word 0 it loads.
+  - Existing synthetic tests build their header word 0 with `posix_cksum`.
+  - `test_game_exe_layout` and `test_diag_exe_loads` keep their layout assertions (`load_addr`, `end_addr()`), and `test_diag_exe_loads` also asserts `load_addr == 0x80100000` and `end_addr() == 0x801725CC`.
+- [ ] **Step 4: Run the tests to see them fail, then implement** the chain following in `disk.py` and the checksum in `exe.py`.
+- [ ] **Step 5: Re-extract and re-pin.** Extract `parts/part0` to `/Volumes/archive/reincarnevilation/work/part0_files_chain/` (a new folder). Confirm `GAME.EXE` there satisfies both oracles and `DIAG.EXE` satisfies the checksum. Then, on the share, rename the old folder `part0_files` to `part0_files_contiguous_wrong` and `part0_files_chain` to `part0_files` (renames only; delete nothing). Pin the new SHA-256 values in `exe.py`, and replace every occurrence of the old `GAME.EXE` hash in the repo (`git grep 47aea64a`) and of the old `DIAG.EXE` hash if it changed (`git grep 38b28108`). Report how many of the 1,356 files changed between the two extractions (count and total bytes; names of the first ten).
+- [ ] **Step 6: Whole-disk check.** `FILESYS.CHK` (in `part0_files`) is the game's own table of per-file checksums: records of `0x126` bytes, with the file name near offset `0x1E`, the size as a little-endian u32 at `0x1B` and a checksum as a little-endian u32 at `0x123` (from the public research notes; verify the layout rather than trusting it). Find out whether that checksum is `posix_cksum` of the file (try it first, then zlib CRC-32) and, if identified, add `python3 -m carnevil_tools verify <partition>` that extracts in memory and reports how many listed files match, listing the mismatches. Record the result in `docs/analysis/disk-format.md`. If the algorithm cannot be identified with those two candidates, say so there and skip the command (and the CLI entry) rather than guessing.
+- [ ] **Step 7: Regenerate the analysis.** `python3 -m carnevil_tools functions <GAME.EXE> -o config/game.functions.toml`; run the whole suite. The text is unchanged, so the function list should change only through data-section pointers in the corrected last block: report exactly what changed (functions added or removed, by address), and update the numbers in `docs/analysis/functions.md` and the census there if any moved.
+- [ ] **Step 8: Update `docs/analysis/exe-format.md`:** header word 0 is the POSIX `cksum` of the file from offset 4 (replace the "not identified" section, keep the list of what was ruled out), with the two EXEs' values; and mark the extractor section of `docs/analysis/boot-handoff.md` as fixed by this task, with the corrected hash.
+- [ ] **Step 9: Commit** `git commit -m "tools: follow block chains when extracting; verify EXE header checksum; re-pin hashes"`.
+
 ### Task 6: Hardware usage census
 
 **Files:**
