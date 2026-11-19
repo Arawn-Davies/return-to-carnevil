@@ -4,7 +4,7 @@
 
 CarnEvil runs on Midway's Seattle arcade board: a 150 MHz MIPS R5000, a 3dfx Voodoo 1 and a DCS sound board. MAME emulates all of it faithfully, but faithfully is expensive. It interprets or JIT-compiles every MIPS instruction as the game runs, and it draws every Voodoo pixel on the CPU. On a slow processor such as the PlayStation 4's 1.6 GHz Jaguar, that is not enough for full speed.
 
-This project takes a different route. The aim is a native program that plays CarnEvil at full speed on modest hardware, starting with PS4 Linux.
+This project takes a different route. The aim is a native program that plays CarnEvil at full speed on modest hardware. The PS4 running Linux is the machine it is aimed at; the first builds are for macOS and then Linux.
 
 ## Static recompilation
 

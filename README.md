@@ -2,8 +2,9 @@
 
 A native port of CarnEvil (Midway, 1998, Seattle arcade hardware) by static recompilation:
 the game's own MIPS code is translated to C ahead of time and linked against a runtime that
-stands in for the arcade board. The first target is PlayStation 4 Linux, where emulation is
-too slow for full speed.
+stands in for the arcade board. Builds come in this order: macOS, then Linux (including WSL2),
+then PlayStation 4 Linux, the machine the project exists for, where emulation is too slow for
+full speed.
 
 ## Status
 
