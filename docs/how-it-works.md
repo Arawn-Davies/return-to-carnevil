@@ -21,16 +21,16 @@ The translated C is not a decompilation. It is not meant to be read: every line 
 
 ## What the translated code needs around it
 
-The game's code expects an arcade board. It writes to hardware registers to draw triangles, reads a disk controller to load files, and talks to a sound board. A **runtime** stands in for all of that:
+The game's code expects an arcade board. It writes to hardware registers to draw triangles and talks to a sound board. For files, the disk, settings and most devices it calls a loader that the boot ROM leaves in memory, and that loader also handles the interrupts. A **runtime** stands in for all of that:
 
 - **Memory:** 8 MB of RAM laid out the way the game expects.
 - **Graphics:** the game's writes to the Voodoo 1's registers are turned into OpenGL draw calls, so the GPU does the rendering.
-- **Disk:** an IDE controller backed by the raw disk image, so the game's own file system code keeps working unchanged.
+- **The loader's services:** files, the disk, settings and device control. Whether the port replaces these services with native code, or runs the loader itself on top of an emulated disk controller and system controller, is still to be decided; the [M0 report](analysis/M0-report.md) sets out the options.
 - **Inputs:** the light guns, coin and start buttons, fed from a mouse or a game controller.
 - **Sound:** the DCS board has its own processor (an ADSP-2115) running its own program. That part is still emulated, on a separate thread. It is cheap.
-- **Everything else on the board:** the system controller (timers, interrupts), battery-backed settings, and the security chip if the game checks it.
+- **Everything else on the board:** interrupts, the battery-backed settings (which the game reads directly), and three values from the security chip, which the game asks the loader for instead of checking the chip itself.
 
-A small MIPS interpreter is kept as a safety net for any code that was not translated ahead of time, such as routines in the boot ROM. Whatever it has to run is logged, so it can be added to the translated set.
+A small MIPS interpreter is kept as a safety net for any code that was not translated ahead of time, such as the boot ROM's loader if the port ends up running it. Whatever it has to run is logged, so it can be added to the translated set.
 
 ## Two phases
 

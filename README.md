@@ -6,7 +6,8 @@ stands in for the arcade board. Builds come in this order: macOS, then Linux (in
 then PlayStation 4 Linux, the machine the project exists for, where emulation is too slow for
 full speed.
 
-Status: early. Milestone M0 (extraction and analysis tooling) is in progress. See
+Status: early. The analysis of milestone M0 (extraction and analysis tooling) is complete
+and summarised in the [M0 report](docs/analysis/M0-report.md); nothing is playable yet. See
 `docs/superpowers/specs/` for the design and `docs/superpowers/plans/` for the plan.
 
 ## BYOCHD: bring your own CHD

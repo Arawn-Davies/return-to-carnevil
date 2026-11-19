@@ -13,8 +13,9 @@ with both:
 (`carnevil_tools/hwcensus.py`). Addresses below are physical unless written as 0x8.../0xA...;
 register names are MAME's. No instruction listings.
 
-"Measured" means counted by the census over reached code. "Read" means read from the code by
-hand (with the `disasm` command), and says where. "Inferred" is labelled as such.
+"Measured" means counted, either statically by the census over reached code or dynamically
+in the MAME runs below; each section says which. "Read" means read from the code by hand
+(with the `disasm` command), and says where. "Inferred" is labelled as such.
 
 ## Sources
 
@@ -29,8 +30,9 @@ hand (with the `disasm` command), and says where. "Inferred" is labelled as such
   file; only facts (ranges, offsets, names) were taken, no code.
 - `GAME.EXE` (SHA-256 `f9455ce8...d3a6`) with `config/game.functions.toml`; `boot.u32`
   (SHA-256 `05346e09...c4a6`): the loader image is ROM bytes 0xF20 to 0x16B60 at 0x80000000.
-- The MAME run 3 NVRAM of Task 5 (`mame/nvram-carnevil/` on the share), and one new MAME run
-  with memory taps on the Voodoo for this task ("Dynamic check: Voodoo accesses").
+- The MAME run 3 NVRAM of Task 5 (`mame/nvram-carnevil/` on the share), and three new MAME
+  runs with memory taps for this task: the Voodoo run ("Dynamic check: Voodoo accesses"), and
+  the hardware run and the split run ("Dynamic check: the other hardware").
 
 ## Method
 
@@ -101,8 +103,8 @@ union over a register's functions; jumps through the handler tables are not foll
 ## GAME.EXE
 
 Measured statically over 2,091 functions with `GAME_RETURNS` applied, with
-`hwcensus.hardware_accesses`; then checked dynamically by two MAME runs (sections
-"Dynamic check" below). Which regions GAME.EXE's own code touches is settled by the second
+`hwcensus.hardware_accesses`; then checked dynamically by the three MAME runs (sections
+"Dynamic check" below). Which regions GAME.EXE's own code touches is settled by the hardware
 run (attract mode only), not by the census: the census cannot see the CMOS reads below.
 
 **Voodoo registers** (0x08000000), static: 14 sites, 6 registers, all through constant bases.
@@ -342,7 +344,7 @@ during gameplay, which was not run.
   TIMER_CONTROL and TIMER1 in the second MAME run were made by loader code.
 - Correction to `boot-handoff.md`: the loader calls a CPU-line handler with a0 = the Cause IP
   bit (0x100 << n), not (Cause, frame); a1 is not set for it (0x80005100, read). GT64010 and
-  exception handlers are as described there. (Not edited in that page by this task.)
+  exception handlers are as described there. (Corrected in that page in Task 7.)
 
 ## Dynamic check: Voodoo accesses (measured in MAME)
 
@@ -471,7 +473,12 @@ physical 0x0A000000 to 0x0C000FFF (PCI I/O, so IDE, plus the GT64010) and 0x1000
 0x17FFFFFF (all four chip selects: sound FIFO, CS2, IOASIC, CMOS, gun, CS3 control
 registers).
 - Each access is attributed by the CPU's CURPC, which is precise under the interpreter
-  (`-nodrc`; in this build it reads one instruction after the access). The groups are
+  (`-nodrc`). In this build it is the next PC to run: for most accesses the instruction after
+  the access, but for an access in a branch delay slot the branch target. So an access in the
+  delay slot of a transfer between groups (a `jal` into the stub block or the loader, a
+  `jr ra` back to the game) is counted in the group of the target, and per-PC lists name the
+  target, not the access. The CMOS reads counted for GAME.EXE are not such a case: their PC,
+  0x801458DC, follows the `lbu` at 0x801458D8 in the CRC loop (read). The groups are
   GAME.EXE (0x800C4000 to 0x801A4224, the stub block excluded), the stub block
   (0x800C408C to 0x800C42CB), the loader (0x80000000 to 0x80015C40) and other.
 - 90.0 emulated seconds, 4,892 frames, average speed 28%. The first access by GAME.EXE code
@@ -583,7 +590,9 @@ dereferenced there.
    and exception handlers through the loader's frame layout. The loader's default IP2 path
    (cause register, watchdog, LEDs) is the runtime's own business. Sure: high.
 4. **Watchdog and LEDs** are written only by the loader, from paths the game reaches
-   (interrupt paths, `wdog:`); the runtime can treat them as no-ops. Sure: high.
+   (interrupt paths, `wdog:`); the runtime can treat them as no-ops. Basis: measured (no
+   watchdog or LED access by GAME.EXE code in the hardware run, static and dynamic) and read
+   (the loader paths named above); that no-ops are enough is inferred. Sure: high.
 5. **IDE, GT64010 DMA/PCI, SCSI and update ROM** matter only if loader code is run under an
    interpreter; with native stand-ins for the slots they need not be emulated. Sure: high.
 
@@ -603,4 +612,6 @@ dereferenced there.
 - What SOUNDSTAT writes from GAME.EXE do on the board, and what 0x17F00000 controls.
 - The meanings of the `ioasic:`, `timer:` and `sysctrl:` ioctl numbers.
 - The fd numbers of the standard descriptors (from the open order, not traced).
-- Which CMOS bytes are read, and whether a played game writes beyond 0x76B.
+- Which CMOS bytes a played game reads or writes. In attract mode the reads (1,160 offsets by
+  the game, 1,648 by the loader) and the writes (1,792 offsets) are measured, all within 0x000
+  to 0x76B; gameplay (audits) may go beyond.

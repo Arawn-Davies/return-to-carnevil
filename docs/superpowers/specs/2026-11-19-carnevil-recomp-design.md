@@ -33,7 +33,7 @@ The way there: translate the game's own MIPS code (`GAME.EXE`) to C once, ahead 
 - Extraction follows the layout of the xclusivor/CarnEvil-Research scripts: CHD -> raw -> 17 partitions -> part0 has 1,356 files (the scripts read each file's blocks as contiguous, which is wrong for the 3 files whose blocks are not adjacent, `GAME.EXE` among them; our extractor follows the block chain, see `docs/analysis/disk-format.md`), including `GAME.EXE` (918,060 bytes) and `DIAG.EXE` (468,436 bytes), DCS `.BIN`/`.BNK`, `WMS` textures, `ZM`/`ZA` models. Work tree: `/share/reincarnevilation/work/` (the Linux container `/mnt/reincarnevilation/work/`).
 - `GAME.EXE` is a flat little-endian MIPS IV binary (no ELF/COFF header at offset 0). ~2,322 `jr ra`, ~1,862 `addiu sp,sp,-n` prologues, 1,317 distinct `jal` targets: on the order of 2,000 functions. Data references cluster at 0x8017xxxx–0x8023xxxx (KSEG0).
 - Built with GCC; statically links the 3dfx Glide library ("Portions Copyright (c) 1996 by 3DFx Interactive"), IDT MIPS runtime and DJ Delorie's libc. Debug strings exist (`graphics_init()`, `main_init_sound`, `grab_save_screen()`).
-- Boot chain (per the research repo): boot ROM -> DIAG.EXE -> boot ROM -> GAME.EXE.
+- Boot chain (confirmed in MAME in M0; the research repo's boot ROM -> DIAG.EXE -> boot ROM -> GAME.EXE was wrong): boot ROM reset stub -> POST program -> the ROM's loader (copied to RAM, stays resident) -> GAME.EXE. DIAG.EXE runs only with the Test switch on. See `docs/analysis/boot-handoff.md`.
 - Hardware (MAME `seattle.cpp`): IDT R5000 @150 MHz little-endian, 8 MB RAM, Galileo GT64010 (PCI, DMA, timers, interrupt controller), 3dfx Voodoo 1 (2 MB FB, 1 TMU 4 MB), Midway IOASIC (inputs, DCS comms, UART), IDE disk, DCS2 audio on an ADSP-2115.
 
 ## Approaches considered
@@ -115,3 +115,19 @@ C/C++17, SDL2 for window/input/audio, OpenGL 3.3 core for rendering (radeonsi on
 - Exact fork strategy for N64Recomp (vendored fork vs patches).
 - Internal structure of the runtime, shader design for the Voodoo combine units, texture cache policy.
 - Test harness layout.
+
+## Corrections from M0 (2026-11-19)
+
+The design above is kept as written; these are the assumptions M0 showed wrong or incomplete. Each is explained, with its evidence, in `docs/analysis/M0-report.md` ("What M0 changed in the design").
+
+- Boot chain: reset stub, POST, loader, GAME.EXE; DIAG.EXE only with the Test switch (fixed in place above).
+- Disk access: GAME.EXE does none itself; it calls 29 services of the boot ROM's RAM-resident loader.
+- "The game's own file system code" (section 4, IDE): there is none in GAME.EXE; how the port supplies the loader's services is an open decision for M2.
+- Extraction: files are block-chained; the first pinned GAME.EXE hash was of a mis-extracted file (re-pinned as `f9455ce8…d3a6`).
+- Function count: 2,091 entries, 29 of them loader slots, so 2,062 game functions; plus 16 unresolved indirect jumps and 10 probable callbacks.
+- MIPS IV list (section 3): reached code uses no indexed FP loads/stores and no `pref`, and FP condition codes 0 to 2 only; FR = 0.
+- CMOS: the game reads it directly at 0xB6100000; writes go through the loader.
+- Security PIC: not checked by the game; three loader-held words suffice.
+- Exception vectors and interrupt delivery (section 3): the vectors and dispatcher are the loader's; GAME.EXE only registers handlers.
+- Code outside GAME.EXE: the game calls the RAM copy of the loader, not the ROM (except the reset vector).
+- MAME baseline fps on the PS4 (M0): still to be recorded.

@@ -299,7 +299,9 @@ class GameExe(unittest.TestCase):
         for name in ("voodoo", "voodoo_lfb", "voodoo_texture", "ioasic", "carnevil_gun",
                      "asic_reset"):
             self.assertIn(name, self.regions)
-        # The game reaches the GT64010, IDE, CMOS and PIC only through the loader.
+        # The census sees no GT64010, IDE, CMOS or PIC access by the game: it reaches those
+        # through the loader, except CMOS reads, which it makes itself through an address the
+        # census cannot follow (seen in MAME; hardware-usage.md).
         for name in ("gt64010", "pci_io", "ide", "ide_cs1", "ide_bmdma", "cmos",
                      "cmos_protect"):
             self.assertNotIn(name, self.regions)

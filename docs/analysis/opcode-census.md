@@ -32,6 +32,12 @@ The census covers the whole loaded image, 0x800C4000 to 0x801A4224, which is 229
 - recip.s 1
 - FP condition code other than 0 on c.cond.fmt, bc1* or movf/movt (any form): 134 uses
 
+These are whole-image counts. The `movf`, `movt`, `movz` and `movn` counts and the 134 uses of
+an FP condition code other than 0 are inflated by data words that decode as these
+instructions. The census of
+reached code in `functions.md` is the list to use: there, `movz` 82, `movn` 33, `movf` 5,
+`movt` 2, and 4 uses of a condition code other than 0, all in one function.
+
 ## COP0 instructions present (count)
 
 - cache 1131

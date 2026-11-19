@@ -11,14 +11,16 @@ CarnEvil (1998) runs on Midway's Seattle board, which it shares with games such 
 - **Disk:** an IDE hard disk of about 4.3 GB, holding the game's programs and all of its data.
 - **I/O:** Midway's IOASIC handles the guns, buttons and coin inputs, a serial port the game prints debug messages to, and the link to the sound board.
 - **Sound:** a DCS2 sound board, built around an Analog Devices ADSP-2115 signal processor with its own small boot ROM. The game uploads the sound system's program and sample banks from the hard disk.
-- **Boot ROM:** 512 KB. It is a generic Midway loader: it starts the diagnostics program from the disk, then the game.
+- **Boot ROM:** 512 KB. It holds a small start-up routine and two programs that run from RAM: the power-on tests and a generic Midway loader, which has the disk driver, the file system, the device drivers and the exception handling.
 - **Settings:** battery-backed memory for operator settings, audits and gun calibration, and a security chip (a PIC) identifying the game.
 
 ## How the game starts
 
-1. The boot ROM runs from reset and loads `DIAG.EXE` from the disk. The diagnostics check the hardware and the files' checksums.
-2. Control returns to the boot ROM, which loads `GAME.EXE` and jumps to it.
-3. `GAME.EXE` sets its stack at the top of RAM, clears its uninitialised data, and starts the game.
+1. The boot ROM's start-up routine runs from reset, sets up memory and runs the power-on tests.
+2. It then copies the loader into RAM. The loader starts `GAME.EXE` from the disk. Only when the Test switch is on does it start the diagnostics program `DIAG.EXE` instead, which can start the game in turn.
+3. `GAME.EXE` sets its stack at the top of RAM, clears its uninitialised data, copies the loader's jump table into a block of its own, and starts the game.
+
+The loader stays in RAM while the game runs. The game calls it for files, the disk, the settings memory, PCI set-up and device control, and the loader handles all interrupts and exceptions, calling the handlers the game registers with it. [analysis/boot-handoff.md](analysis/boot-handoff.md) has the details.
 
 Both programs are flat MIPS images with an 8-byte header. `GAME.EXE` loads at `0x800C4000` and `DIAG.EXE` at `0x80100000`.
 
@@ -27,10 +29,10 @@ Both programs are flat MIPS images with an 8-byte header. `GAME.EXE` loads at `0
 - **Processor:** not emulated. The game's code is translated to C ahead of time. A small interpreter covers anything that was not translated.
 - **Memory:** a plain 8 MB block, with the processor's address aliases mapped onto it.
 - **Voodoo 1:** in the first phase, register writes are turned into OpenGL draws, with a shader standing in for the Voodoo's colour and alpha combining. In the second phase the game's Glide routines are replaced directly.
-- **GT64010:** timers, interrupts, PCI configuration and DMA are implemented as far as the game uses them.
-- **Disk:** an IDE controller backed by the raw disk image, read-only, with the game's writes (audits, settings) going to a separate overlay file.
+- **The loader's services, and the hardware behind them:** the game reaches the disk, the GT64010 (timers, interrupts, PCI configuration, DMA), most of the IOASIC and the settings writes through the boot ROM's loader, not by itself. How the port supplies those services is an open design decision: native replacements for the services, or the loader itself run on top of emulated IDE, GT64010 and IOASIC. The [M0 report](analysis/M0-report.md) sets out the options.
 - **IOASIC:** inputs come from a mouse or game controller; the serial port goes to the terminal, which is very useful for debugging.
 - **Sound:** the ADSP-2115 is emulated on its own thread, running the same program the real board runs.
-- **Settings and security chip:** settings live in their own file. Whether the security chip needs to be implemented depends on whether the game checks it, which is one of the things the analysis milestone answers.
+- **Settings:** settings live in their own file. The game reads the settings memory directly and writes it through the loader, so the port has to provide both.
+- **Security chip:** the game never talks to it. It asks the loader for three values the loader read from the chip at start-up, so the port only has to supply those.
 
-The port skips the diagnostics program and goes straight to the game. Part of the analysis is working out what state the diagnostics and the boot ROM leave behind that the game relies on.
+The port skips the boot ROM and the diagnostics program and goes straight to the game. The diagnostics do not run on a normal boot, so the game cannot depend on them; what the boot ROM leaves behind is in [analysis/boot-handoff.md](analysis/boot-handoff.md).

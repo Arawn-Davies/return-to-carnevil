@@ -86,7 +86,8 @@ initialises its drivers. Its boot selection (0x8000F0F8 onwards) then:
 3. if the Test Switch is on: prints `Booting diag.exe` and loads and runs `diag.exe` at
    0x80100000;
 4. prints `Booting game.exe` and loads and runs `game.exe`;
-5. if that returns, prints `Debug Mode` and executes `break 0x402` (enter the debug monitor).
+5. if that returns, prints `Debug Mode` and executes `break 0x402` (20-bit code, see
+   "Exceptions and interrupts" for the notation), which enters the debug monitor.
 
 ### Load and run an EXE (0x8000E930, slot 0x198)
 
@@ -118,7 +119,7 @@ loader. Checked:
   (confirmed). The CRC of the load-address word plus the 918,052 image bytes in the RAM dump
   is also 0x2CAE3F54. The CRC of the extracted file is not (see the next section).
 
-`exe-format.md` still says header word 0 is unidentified; it should be updated to this.
+`exe-format.md` records this (updated in Task 5b).
 
 ## Finding: the last block of the extracted GAME.EXE is wrong
 
@@ -246,11 +247,14 @@ exception stack at 0x800C1400 and calls 0x80005244 (Cause, frame):
   returns non-zero or is missing, the loader's default for the code (table 0x80014760). The
   default for floating-point exceptions (code 15) walks the saved FCSR cause bits and calls the
   handler for each from the table at 0x80014648 (slot 0x1E8), with the frame in a0.
-- **break** instructions, in the debug monitor (0x80004410), by their 20-bit code: 0x1C00 is
-  GCC's `break 7` (divide by zero) and calls the hook set by slot 0x1F0; 0x1800 is `break 6`
-  (overflow), hook of slot 0x1F8; codes 0x400 to 0x40A are monitor services. GAME.EXE uses
-  two: 0x409 (the stub at 0x801A355C, called 18 times) installs a handler in the exception
-  table and clears that code's bit in the monitor mask; 0x407 (at 0x801447BC, 0x80144814,
+- **break** instructions, in the debug monitor (0x80004410), by their 20-bit code (instruction
+  bits 6 to 25). On this page `break 7` and `break 6` are GCC's 10-bit form (the code in bits
+  16 to 25, words 0x0007000D and 0x0006000D); every hexadecimal code from 0x400 up is the
+  20-bit form. 20-bit 0x1C00 is `break 7` (divide by zero) and calls the hook set by slot
+  0x1F0; 20-bit 0x1800 is `break 6` (overflow), hook of slot 0x1F8; 20-bit codes 0x400 to
+  0x40A are monitor services. GAME.EXE uses two: 0x409 (word 0x0001024D, the stub at
+  0x801A355C, called 18 times) installs a handler in the exception table and clears that
+  code's bit in the monitor mask; 0x407 (word 0x000101CD, at 0x801447BC, 0x80144814,
   0x801448B4, 0x80151AD0) steps over itself and stops in the monitor (an assert).
 
 GAME.EXE registers its routines in `main` and 0x800C4D58. Confirmed: run 3 logged exactly
@@ -267,8 +271,10 @@ these registrations after the entry (the order within each item is the static ca
 - later, at run time, code 13 (trap) twice from 0x801519E0: 0x80151A70, another of the
   "probable callbacks" of `functions.md`.
 
-Interrupt and exception handlers are called with (Cause, frame), FPU handlers with the frame
-in a0, and they use the loader's frame layout: the FPU handler 0x80150860 reads Cause at
+CPU interrupt-line handlers are called with a0 = the Cause IP bit of their line (0x100 << n);
+a1 is not set for them (0x80005100, read; `hardware-usage.md`). GT64010 cause handlers and
+exception handlers are called with (Cause, frame), FPU handlers with the frame in a0, and they
+use the loader's frame layout: the FPU handler 0x80150860 reads Cause at
 frame + 0x180 and EPC at frame + 0x110, and writes saved FPRs from frame + 0x218 (it emulates
 the instruction that trapped and advances EPC).
 
@@ -319,8 +325,9 @@ Hit Writeback Invalidate, Hit Writeback) in its memory-fill and flush routines a
    is the fallback, not the plan. Sure: medium.
 3. **Exceptions and interrupts: native dispatch with the loader's ABI.** GAME.EXE never handles
    Cause or EPC itself and has no `eret`; it installs handlers through the slots and break
-   0x409 and expects to be called with (Cause, frame) on a frame laid out as the loader's
-   (EPC at +0x110, FPRs at +0x218). The runtime must keep that frame layout for the FPU
+   0x409 and expects to be called as the loader calls it: CPU-line handlers with a0 = the
+   Cause IP bit, the others with (Cause, frame) on a frame laid out as the loader's (EPC at
+   +0x110, FPRs at +0x218). The runtime must keep that frame layout for the FPU
    emulation handler at 0x80150860, or replace that handler. Sure: high for the registration
    path (static, registrations seen in run 3); medium for the frame offsets beyond EPC and the
    FPRs.
@@ -330,9 +337,11 @@ Hit Writeback Invalidate, Hit Writeback) in its memory-fill and flush routines a
    routines. If any slot is run under the interpreter instead, the loader image
    (0x80000000 to 0x80015C40, from ROM 0xBFC00F20) and its live BSS state must be loaded too.
    Sure: high (static scan of reached code for constant addresses below 0x800C4000, MAME dump).
-5. **Start state:** sp, Status, FCSR and the cleared BSS are all set by `_start` before use, so
-   the values in `boot_state.toml` matter only for the first instructions; gp is unused.
-   Sure: high. The loader leaves IE set with IP2 unmasked, so on the board an early IP2
+5. **Start state:** sp, FCSR and the cleared BSS are set by `_start` before use, so their
+   values in `boot_state.toml` matter only for the first instructions; gp is unused. Status is
+   not set by `_start`: GAME.EXE's reached code has no `mtc0`, so it runs with the loader's
+   Status (0x30010401, FR clear) apart from what loader services change. Sure: high (read,
+   `_start` 0x800C4000 to 0x800C4088; static census of reached code in `functions.md`). The loader leaves IE set with IP2 unmasked, so on the board an early IP2
    interrupt would reach the loader's default handler; the runtime should simply not deliver
    interrupts until `main` has registered its handlers. Sure: medium (a design choice, not an
    observation).
@@ -343,9 +352,9 @@ Hit Writeback Invalidate, Hit Writeback) in its memory-fill and flush routines a
    0x801725CC) is overwritten by GAME.EXE's load and its BSS clear. Anything DIAG.EXE changes
    outside RAM (the NVRAM, the disk) was not traced and is outside this question. Sure: high
    for RAM; DIAG.EXE's own hand-off to GAME.EXE is static only.
-7. **Use the loaded image, not the extracted file, for the last 556 bytes** until the
-   extractor follows the block chain (see the finding above). Sure: high (byte comparison and
-   checksum).
+7. **The extracted file can be used in full.** Since Task 5b the extractor follows the block
+   chain, and the extracted GAME.EXE equals the loaded image in all 918,052 image bytes (see
+   the finding above). Sure: high (byte comparison and header checksum).
 
 ## Not confirmed
 
