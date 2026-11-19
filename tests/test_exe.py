@@ -57,6 +57,7 @@ class ExeTests(unittest.TestCase):
         message = str(ctx.exception)
         self.assertIn("0x%08X" % wrong, message)
         self.assertIn("0x%08X" % right, message)
+        self.assertIn("got sha256 " + hashlib.sha256(self._synthetic(wrong)).hexdigest(), message)
         image = exe.load_exe(self._write(good), expect_sha256=None)
         self.assertEqual(image.header_word0, right)
 
@@ -69,7 +70,9 @@ class ExeTests(unittest.TestCase):
         self.assertIn("mis-extracted", message)
         self.assertIn("0x%08X" % wrong, message)
         self.assertIn("0x%08X" % right, message)
-        self.assertIn(exe.GAME_EXE_SHA256, message)
+        # Both hashes: the file's own and the supported revision's.
+        self.assertIn("got sha256 " + hashlib.sha256(self._synthetic(wrong)).hexdigest(), message)
+        self.assertIn("supported revision has sha256 " + exe.GAME_EXE_SHA256, message)
 
     @requires_file("part0_files_contiguous_wrong", "GAME.EXE")
     def test_contiguous_extraction_reported_as_mis_extracted(self):
@@ -86,6 +89,12 @@ class ExeTests(unittest.TestCase):
         message = str(ctx.exception)
         self.assertIn(exe.GAME_EXE_SHA256, message)
         self.assertIn(hashlib.sha256(self._synthetic()).hexdigest(), message)
+
+    def test_expected_hash_is_compared_case_insensitively(self):
+        data = self._synthetic()
+        digest = hashlib.sha256(data).hexdigest()
+        image = exe.load_exe(self._write(data), expect_sha256=digest.upper())
+        self.assertEqual(image.sha256, digest)
 
     def test_synthetic_header(self):
         path = self._write(self._synthetic())

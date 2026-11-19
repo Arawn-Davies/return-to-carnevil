@@ -1,10 +1,13 @@
+import errno
 import hashlib
 import os
+import stat
 import struct
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from carnevil_tools import disk, exe
 from tests.gamedata import requires_file, work_path
@@ -18,6 +21,7 @@ DIAG_EXE_SHA256 = "38b2810864c85d6971cedc3a6b0e507c8c6d593e4d7c355c880f91dbcaaaa
 BASE = 70656  # partition data base, see docs/analysis/disk-format.md
 BLOCK = 4096
 FAT = 67 * 512  # block-chain table: u16 entry for block b at FAT + 2 * (b - 3)
+HOME_MAGIC = 0x34011280  # first word of the home block, sector 2
 
 
 def _encode_name(name):
@@ -55,6 +59,7 @@ def build_partition(files, fat_overrides=None):
         placed.append((blocks, padded))
     entries += _encode_name("") + struct.pack("<iii", 0, 0, 0)  # terminator
     image = bytearray(BASE + (max(used) + 1) * BLOCK)
+    struct.pack_into("<I", image, 2 * 512, HOME_MAGIC)
     image[BASE + 3 * BLOCK:BASE + 3 * BLOCK + len(entries)] = entries
     links = {}
     for blocks, padded in placed:
@@ -231,12 +236,94 @@ class SyntheticPartitionTests(unittest.TestCase):
         # A blank-named entry pointing at its own block must not loop forever.
         entries = _encode_name("") + struct.pack("<iii", 3, 0, 0)
         image = bytearray(BASE + 4 * BLOCK)
+        struct.pack_into("<I", image, 2 * 512, HOME_MAGIC)
         image[BASE + 3 * BLOCK:BASE + 3 * BLOCK + len(entries)] = entries
         part = self.path("loop")
         with open(part, "wb") as f:
             f.write(image)
         with self.assertRaises(disk.DiskFormatError):
             disk.list_files(part)
+
+    def test_foreign_partition_refused(self):
+        image = bytearray(build_partition([("A.BIN", b"AAAA")]))
+        image[2 * 512:2 * 512 + 4] = b"\0\0\0\0"
+        part = self.path("foreign")
+        with open(part, "wb") as f:
+            f.write(image)
+        with self.assertRaisesRegex(disk.DiskFormatError, "not a CarnEvil partition"):
+            disk.list_files(part)
+
+    def test_block_shared_by_two_files_raises(self):
+        self.assert_refused([("A.BIN", os.urandom(2 * BLOCK), [4, 5]),
+                             ("B.BIN", os.urandom(2 * BLOCK), [6, 5])], {})
+
+    def test_names_differing_only_in_case_are_duplicates(self):
+        part = self.write_partition([("A.BIN", b"AAAA"), ("a.bin", b"BBBB")])
+        out = self.path("out")
+        with self.assertRaisesRegex(disk.DiskFormatError, "duplicate"):
+            disk.extract_files(part, out)
+        self.assertFalse(os.path.exists(out))
+
+    def test_verify_rejects_duplicate_names(self):
+        table = build_checksum_table([("A.BIN", 4, 0), ("C.BIN", 4, 0)])
+        part = self.write_partition([("A.BIN", b"AAAA"), ("A.BIN", b"BBBB"),
+                                     ("FILESYS.CHK", table)])
+        with self.assertRaisesRegex(disk.DiskFormatError, "duplicate"):
+            disk.verify_files(part)
+
+    def test_only_a_dotdot_component_is_unsafe(self):
+        part = self.write_partition([("A..B", b"ABAB")])
+        out = self.path("out")
+        disk.extract_files(part, out)
+        self.assertEqual(os.listdir(out), ["A..B"])
+        for name in ("..", "a/../b", "..\\x"):
+            with self.subTest(name=name):
+                part = self.write_partition([(name, b"EVIL")], name="bad")
+                with self.assertRaises(disk.DiskFormatError):
+                    disk.extract_files(part, self.path("out2"))
+
+    def _failing_open(self):
+        """open() whose binary-write files fail after their first 2 bytes (ENOSPC)."""
+        real_open = open
+
+        class Full:
+            def __init__(self, f):
+                self.f = f
+
+            def write(self, data):
+                self.f.write(data[:2])
+                raise OSError(errno.ENOSPC, "No space left on device")
+
+            def close(self):
+                self.f.close()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                self.f.close()
+                return False
+
+        def fake(path, mode="r", *args, **kwargs):
+            f = real_open(path, mode, *args, **kwargs)
+            return Full(f) if mode == "wb" else f
+        return mock.patch("carnevil_tools.disk.open", fake, create=True)
+
+    def test_interrupted_extract_leaves_no_file(self):
+        part = self.write_partition([("ONE.BIN", b"12345678")])
+        out = self.path("out")
+        with self._failing_open(), self.assertRaises(OSError):
+            disk.extract_files(part, out)
+        self.assertEqual(os.listdir(out), [])
+
+    def test_interrupted_split_leaves_no_file(self):
+        raw = self.path("img.raw")
+        with open(raw, "wb") as f:
+            f.write(build_raw([2, 3]))
+        out = self.path("parts")
+        with self._failing_open(), self.assertRaises(OSError):
+            disk.split_partitions(raw, out)
+        self.assertEqual(os.listdir(out), [])
 
     def test_partition_table_synthetic(self):
         raw = self.path("img.raw")
@@ -290,6 +377,38 @@ class CliTests(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("/Volumes/archive/reincarnevilation/work", r.stdout + r.stderr)
         self.assertIn("CARNEVIL_WORK", r.stdout + r.stderr)
+
+    def test_cli_unwritable_output_is_an_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            part = os.path.join(tmp, "part0")
+            with open(part, "wb") as f:
+                f.write(build_partition([("X.BIN", b"1234")]))
+            out = os.path.join(tmp, "locked")
+            os.mkdir(out)
+            os.chmod(out, stat.S_IRUSR | stat.S_IXUSR)
+            try:
+                r = self.run_cli("extract", part, "-o", out)
+            finally:
+                os.chmod(out, stat.S_IRWXU)
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertIn("error:", r.stderr)
+            self.assertNotIn("Traceback", r.stderr)
+            self.assertEqual(os.listdir(out), [])
+
+    def test_cli_directory_is_not_a_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self.run_cli("extract", tmp, "-o", os.path.join(tmp, "out"))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("is not a file", r.stderr)
+
+    def test_cli_split_counts_partitions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = os.path.join(tmp, "img.raw")
+            with open(raw, "wb") as f:
+                f.write(build_raw([2, 3]))
+            r = self.run_cli("split", raw, "-o", os.path.join(tmp, "parts"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("wrote 2 partitions to", r.stdout)
 
     def test_cli_extract_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmp:

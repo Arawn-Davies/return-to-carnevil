@@ -2,7 +2,6 @@
 import argparse
 import os
 import sys
-import tomllib
 
 from carnevil_tools import board, disk, exe, functions, hwcensus, loader, mips
 
@@ -10,6 +9,9 @@ DEFAULT_WORK = "/Volumes/archive/reincarnevilation/work"
 
 
 def _missing(path):
+    if os.path.isdir(path):
+        print(f"error: {path} is not a file", file=sys.stderr)
+        return 2
     work = os.environ.get("CARNEVIL_WORK", DEFAULT_WORK)
     print(
         f"error: {path} not found.\n"
@@ -26,7 +28,7 @@ def _load(path):
         return None, _missing(path)
     try:
         return exe.load_exe(path), None
-    except (exe.UnknownRevisionError, ValueError) as exc:
+    except (exe.UnknownRevisionError, ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return None, 1
 
@@ -84,14 +86,18 @@ def _functions(path, out, manual_path=None):
             return 1
         try:
             manual, stubs = functions.read_manual(manual_path)
-        except (ValueError, KeyError, tomllib.TOMLDecodeError) as exc:
+        except (ValueError, KeyError, OSError) as exc:  # TOMLDecodeError is a ValueError
             print(f"error: {manual_path}: {exc}", file=sys.stderr)
             return 1
     image, status = _load(path)
     if image is None:
         return status
     res, notes = functions.discover(image, image.load_addr, manual, stubs)
-    functions.write_toml(res, out)
+    try:
+        functions.write_toml(res, out)
+    except OSError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     print(f"manual input {manual_path or '-'}: {len(manual)} starts, "
           f"{len(stubs)} stub blocks")
     span = res.text_end - res.text_start
@@ -132,8 +138,12 @@ def _disasm(path, base, start, count):
     """Decode `count` words of a raw little-endian file mapped at `base`, from `start`."""
     if not os.path.isfile(path):
         return _missing(path)
-    with open(path, "rb") as f:
-        raw = f.read()
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except OSError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     end = base + len(raw) - len(raw) % 4
     if start % 4 or not base <= start < end:
         print(f"error: start 0x{start:08X} is not a word inside 0x{base:08X}-0x{end:08X}",
@@ -194,7 +204,7 @@ def _hwcensus(path, rom, ioctl=False):
             return _missing(rom)
         try:
             image = loader.loader_image(rom)
-        except exe.UnknownRevisionError as exc:
+        except (exe.UnknownRevisionError, OSError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
         analysis, _notes = loader.analyse_loader(image)
@@ -207,7 +217,11 @@ def _hwcensus(path, rom, ioctl=False):
     image, status = _load(path)
     if image is None:
         return status
-    analysis = functions.read_toml(GAME_FUNCTIONS)
+    try:
+        analysis = functions.read_toml(GAME_FUNCTIONS)
+    except (ValueError, KeyError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     print(f"{os.path.basename(path)} 0x{image.load_addr:08X}-0x{image.end_addr():08X}, "
           f"{len(analysis.functions)} functions (config/game.functions.toml)")
     _print_hwcensus(hwcensus.hardware_accesses(image, analysis, hwcensus.GAME_RETURNS))
@@ -245,7 +259,7 @@ def _verify(partition):
         return _missing(partition)
     try:
         result = disk.verify_files(partition)
-    except disk.DiskFormatError as exc:
+    except (disk.DiskFormatError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     print(f"{len(result.matched)} of {result.listed} listed files match")
@@ -253,6 +267,13 @@ def _verify(partition):
     for name in result.mismatched:
         print(f"mismatch: {name}")
     return 1 if result.mismatched else 0
+
+
+def _positive_int(text):
+    value = int(text)
+    if value <= 0:
+        raise argparse.ArgumentTypeError(f"{text} is not a positive number")
+    return value
 
 
 def main(argv=None):
@@ -279,7 +300,7 @@ def main(argv=None):
     disasm.add_argument("--base", required=True, type=lambda s: int(s, 0), metavar="ADDR",
                         help="address of the file's first byte")
     disasm.add_argument("--start", required=True, type=lambda s: int(s, 0), metavar="ADDR")
-    disasm.add_argument("--count", required=True, type=int, metavar="N")
+    disasm.add_argument("--count", required=True, type=_positive_int, metavar="N")
     hwc = sub.add_parser("hwcensus", help="hardware registers the code of an image touches")
     hwc.add_argument("exe", nargs="?", help="GAME.EXE (uses config/game.functions.toml)")
     hwc.add_argument("--loader", metavar="BOOT_U32",
@@ -310,8 +331,9 @@ def main(argv=None):
             paths = disk.split_partitions(args.raw, args.out)
         else:
             paths = disk.extract_files(args.partition, args.out)
-    except disk.DiskFormatError as exc:
+    except (disk.DiskFormatError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    print(f"wrote {len(paths)} files to {args.out}")
+    what = "partitions" if args.command == "split" else "files"
+    print(f"wrote {len(paths)} {what} to {args.out}")
     return 0

@@ -10,6 +10,8 @@ from carnevil_tools.cksum import posix_cksum
 
 SECTOR = 512
 RAW_MAGIC = b"TRAP"
+HOME_BLOCK = 2 * SECTOR  # byte offset of a partition's home block
+HOME_MAGIC = 0x34011280  # its first word, checked by the loader's mount routine
 MAX_PARTITIONS = 256
 
 PART_BASE = 70656  # byte offset of "block 0" inside a partition
@@ -81,6 +83,31 @@ def read_partition_table(raw_path):
     return parts
 
 
+class _Output:
+    """Write dest through dest + ".partial", renamed into place only when the write
+    completes; on any exception the partial file is removed and dest is untouched."""
+
+    def __init__(self, dest):
+        self.dest, self.partial = dest, dest + ".partial"
+
+    def __enter__(self):
+        self.f = open(self.partial, "wb")
+        return self.f
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            self.f.close()
+        finally:
+            if exc_type is None:
+                os.replace(self.partial, self.dest)
+            else:
+                try:
+                    os.remove(self.partial)
+                except OSError:
+                    pass
+        return False
+
+
 def split_partitions(raw_path, out_dir):
     """Copy each partition to out_dir/part<N>; return the paths."""
     parts = read_partition_table(raw_path)
@@ -91,7 +118,7 @@ def split_partitions(raw_path, out_dir):
             dest = os.path.join(out_dir, f"part{part.index}")
             src.seek(part.offset)
             remaining = part.size
-            with open(dest, "wb") as dst:
+            with _Output(dest) as dst:
                 while remaining:
                     chunk = src.read(min(COPY_CHUNK, remaining))
                     if not chunk:
@@ -118,12 +145,29 @@ def list_files(partition_path):
 
 
 def _scan(partition_path):
-    """[(FileEntry, [block, ...])] for every file; raises DiskFormatError on a bad chain."""
+    """[(FileEntry, [block, ...])] for every file; raises DiskFormatError on a bad chain,
+    a block two files share, or a partition without the home-block magic."""
     with open(partition_path, "rb") as f:
+        f.seek(HOME_BLOCK)
+        home = f.read(4)
+        if len(home) != 4 or struct.unpack("<I", home)[0] != HOME_MAGIC:
+            raise DiskFormatError(
+                f"not a CarnEvil partition (no home-block magic 0x{HOME_MAGIC:08X} at byte "
+                f"{HOME_BLOCK})")
         entries, part_size = _read_directory(f)
         f.seek(FAT_OFFSET)
         fat = f.read(max(0, min(part_size, FAT_END) - FAT_OFFSET))
-    return [(entry, _chain(entry, fat, part_size)) for entry in entries]
+    owner = {}  # block -> index of the file holding it
+    out = []
+    for i, entry in enumerate(entries):
+        blocks = _chain(entry, fat, part_size)
+        for block in blocks:
+            k = owner.setdefault(block, i)
+            if k != i:
+                raise DiskFormatError(
+                    f"block {block} belongs to both {entries[k].name!r} and {entry.name!r}")
+        out.append((entry, blocks))
+    return out
 
 
 def _chain(entry, fat, part_size):
@@ -203,7 +247,9 @@ def _read_directory(f):
 
 
 def _safe_name(name):
-    if ".." in name:
+    """The name with path separators replaced by "_"; a name with a ".." component, or
+    one that is empty or "." after the replacement, is refused."""
+    if ".." in name.replace("\\", "/").split("/"):
         raise DiskFormatError(f"unsafe file name {name!r}")
     safe = name.replace("/", "_").replace("\\", "_")
     if safe in ("", ".") or "\x00" in safe:
@@ -222,9 +268,9 @@ def extract_files(partition_path, out_dir):
     used = set()
     for entry, _blocks in scanned:
         safe = _safe_name(entry.name)
-        if safe in used:
+        if safe.casefold() in used:  # macOS and Windows file systems ignore case
             raise DiskFormatError(f"duplicate file name {safe!r}")
-        used.add(safe)
+        used.add(safe.casefold())
         targets.append(safe)
     os.makedirs(out_dir, exist_ok=True)
     paths = []
@@ -232,7 +278,7 @@ def extract_files(partition_path, out_dir):
         for (entry, blocks), safe in zip(scanned, targets):
             dest = os.path.join(out_dir, safe)
             data = _read_blocks(src, entry, blocks)
-            with open(dest, "wb") as dst:
+            with _Output(dest) as dst:
                 dst.write(data)
             paths.append(dest)
     return paths
@@ -250,7 +296,11 @@ def verify_files(partition_path):
     """Check every file listed in the partition's FILESYS.CHK against its recorded size
     and POSIX cksum, reading the files in memory by following their block chains."""
     scanned = _scan(partition_path)
-    by_name = {entry.name: (entry, blocks) for entry, blocks in scanned}
+    by_name = {}
+    for entry, blocks in scanned:
+        if entry.name in by_name:
+            raise DiskFormatError(f"duplicate file name {entry.name!r}")
+        by_name[entry.name] = (entry, blocks)
     with open(partition_path, "rb") as src:
         if CHECKSUM_TABLE not in by_name:
             raise DiskFormatError(f"no {CHECKSUM_TABLE} on the partition")

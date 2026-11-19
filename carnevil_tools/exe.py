@@ -55,6 +55,8 @@ def load_exe(path, expect_sha256=GAME_EXE_SHA256):
     with open(path, "rb") as f:
         raw = f.read()
     digest = hashlib.sha256(raw).hexdigest()
+    if expect_sha256 is not None:
+        expect_sha256 = expect_sha256.lower()
     pinned = expect_sha256 is None or digest == expect_sha256
     if len(raw) < HEADER.size:
         if not pinned:
@@ -67,9 +69,9 @@ def load_exe(path, expect_sha256=GAME_EXE_SHA256):
     if word0 != computed:
         message = ("EXE header checksum 0x%08X does not match the file's checksum 0x%08X: "
                    "the file is damaged or was mis-extracted (for example by a tool that "
-                   "reads files as contiguous blocks)" % (word0, computed))
+                   "reads files as contiguous blocks); got sha256 %s" % (word0, computed, digest))
         if not pinned:
-            message += "; the supported revision has sha256 %s" % expect_sha256
+            message += ", the supported revision has sha256 %s" % expect_sha256
         raise ChecksumError(message)
     if not pinned:
         raise UnknownRevisionError(

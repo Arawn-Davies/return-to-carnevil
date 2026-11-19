@@ -7,7 +7,7 @@ Right now the project is at the analysis stage: you can extract the game's files
 - Python 3.12 or newer. The tools use the standard library only: nothing to install.
 - `chdman` (it ships with MAME) to unpack the CHD.
 - Your own `carnevil.chd`.
-- About 6 GB of free disk space for the unpacked image and extracted files.
+- About 8 GB of free disk space: the raw image (4.3 GB), the 17 partitions (3.2 GB) and the extracted files (0.07 GB). After splitting, only `work/parts/part0` is needed, so the raw image and the other 16 partitions can be deleted.
 
 ## 1. Unpack your CHD
 
@@ -60,7 +60,7 @@ One revision of the game is supported for now, identified by the SHA-256 of `GAM
 f9455ce801d2e5c26a7b6e00eff88efa573deb7ab15fa29f9c90100623bfd3a6
 ```
 
-Loading a different `GAME.EXE` stops with one of two messages: an intact file of another revision gets "unknown EXE revision" with the expected hash and yours; a damaged or mis-extracted file (its header checksum fails, for example after extracting with a tool that reads files as contiguous blocks) gets a checksum error that also names the expected hash. Other revisions can be added later; each needs its own analysis output.
+Loading a different `GAME.EXE` stops with one of two messages: an intact file of another revision gets "unknown EXE revision" with the expected hash and yours; a damaged or mis-extracted file (its header checksum fails, for example after extracting with a tool that reads files as contiguous blocks) gets a checksum error that names the expected hash and yours. Other revisions can be added later; each needs its own analysis output.
 
 ## Keeping game files out of git
 

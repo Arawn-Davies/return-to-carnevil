@@ -11,3 +11,14 @@
 *.u96
 /.superpowers/
 __pycache__/
+# Game files under any name or folder (a user may extract outside /work/)
+*.zip
+*.bin
+*.BIN
+*.WMS
+*.ZM
+*.ZA
+*.BNK
+part[0-9]*
+nvram/
+/mame/

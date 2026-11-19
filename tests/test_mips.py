@@ -664,6 +664,15 @@ class DisasmCli(unittest.TestCase):
             self.assertEqual(out, "")
             self.assertIn("error:", err)
 
+    def test_count_must_be_positive(self):
+        path = self._raw([0, 0])
+        for count in ("0", "-1"):
+            with self.subTest(count=count), self.assertRaises(SystemExit) as ctx:
+                with redirect_stderr(io.StringIO()):
+                    cli.main(["disasm", path, "--base", "0xBFC00000", "--start",
+                              "0xBFC00000", "--count", count])
+            self.assertEqual(ctx.exception.code, 2)
+
     def test_missing_file(self):
         rc, _, err = self._run("/nonexistent/boot.u32", "--base", "0", "--start", "0",
                                "--count", "1")
