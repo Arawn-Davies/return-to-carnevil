@@ -298,3 +298,7 @@ def statement(insn, addr):
     if emit is None or (insn.mnemonic == "ctc1" and insn.rd != 31):
         raise UnsupportedInstruction(addr, insn.mnemonic)
     return emit(insn)
+
+
+# Every census mnemonic `statement` emits; with CONTROL, the whole census.
+STRAIGHT = frozenset(_STRAIGHT)
