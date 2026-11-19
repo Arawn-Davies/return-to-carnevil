@@ -14,9 +14,10 @@
  * counts only) and exits 1 on any. An rt_loader, rt_break, rt_interrupt or interpreter entry
  * during the call is printed and is a difference too.
  *
- * The first bus access ends the run instead: the program prints "bus read|write ADDR size N"
- * and the state at that moment (common.h, print_state: before the access takes effect) and
- * exits 3. Whether ADDR is hardware (the function is impure at run time) or a wrong address
+ * The first bus access ends the run instead: the program prints "bus read ADDR size N" or
+ * "bus write ADDR size N value V", the state at that moment (common.h, print_state: before
+ * the access takes effect) and "ram fnv1a64 H", a 64-bit FNV-1a hash of the 8 MB of RAM then,
+ * and exits 3. Whether ADDR is hardware (the function is impure at run time) or a wrong address
  * is for the caller to decide (test_against_mame classifies it with carnevil_tools.board).
  *
  * --interp: the same, but every call, the function's own included, runs in the reference
@@ -35,6 +36,15 @@
 
 static unsigned long events; /* runtime calls a pure function must not make */
 static int interp_only;
+static const uint8_t *run_ram; /* the RAM of the run, for the hash at the first bus access */
+
+static uint64_t fnv1a64(const uint8_t *p, size_t n)
+{
+    uint64_t h = 0xCBF29CE484222325ull;
+    for (size_t i = 0; i < n; i++)
+        h = (h ^ p[i]) * 0x100000001B3ull;
+    return h;
+}
 
 void (*rt_log_unrecompiled)(uint32_t addr) = 0;
 
@@ -52,23 +62,27 @@ void rt_jump(uint8_t *ram, cpu_t *c, uint32_t addr)
     rt_call(ram, c, addr);
 }
 
-static _Noreturn void first_bus_access(const cpu_t *c, const char *dir, uint32_t addr, int size)
+static _Noreturn void first_bus_access(const cpu_t *c, const char *dir, uint32_t addr, int size,
+                                       const uint32_t *value)
 {
-    printf("bus %s 0x%08" PRIX32 " size %d\n", dir, addr, size);
+    printf("bus %s 0x%08" PRIX32 " size %d", dir, addr, size);
+    if (value)
+        printf(" value 0x%08" PRIX32, *value);
+    printf("\n");
     print_state(stdout, c);
+    printf("ram fnv1a64 %016" PRIX64 "\n", fnv1a64(run_ram, RAM_SIZE));
     fflush(stdout);
     exit(EXIT_BUS);
 }
 
 uint32_t bus_read(cpu_t *c, uint32_t addr, int size)
 {
-    first_bus_access(c, "read", addr, size);
+    first_bus_access(c, "read", addr, size, NULL);
 }
 
 void bus_write(cpu_t *c, uint32_t addr, int size, uint32_t value)
 {
-    (void)value;
-    first_bus_access(c, "write", addr, size);
+    first_bus_access(c, "write", addr, size, &value);
 }
 
 void rt_loader(uint8_t *ram, cpu_t *c, uint32_t slot)
@@ -312,6 +326,7 @@ int main(int argc, char **argv)
     c.lo = cap.before.lo;
     memcpy(c.fpr, cap.before.fpr, sizeof c.fpr);
     rt_set_fcsr(&c, cap.before.fcsr);
+    run_ram = ram;
     if (interp_only) {
         interp_run(ram, &c, cap.addr);
     } else {

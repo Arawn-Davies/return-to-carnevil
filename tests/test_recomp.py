@@ -530,7 +530,8 @@ class FunctionTest(RecompTestCase):
     def test_kuseg_ram_mapping(self):
         """The loader's TLB maps kuseg 0x00040000-0x007FFFFF onto RAM at the same physical
         address (MAME: GAME.EXE stores through such addresses, task 6); the first 256 KB of
-        kuseg and kuseg from 8 MB up are not RAM and go to the bus."""
+        kuseg and kuseg from 8 MB up are not RAM and go to the bus, as does an access that
+        straddles either edge. Every edge in both modes."""
         p = Asm()
         p(A("lui", rt=T0, imm=0x0020))           # 0x00200000: kuseg view of the scratch page
         p(A("sw", rt=A0, rs=T0, imm=0x10))
@@ -538,12 +539,20 @@ class FunctionTest(RecompTestCase):
         p(A("lw", rt=V0, rs=T1, imm=0x10))       # the same word through kseg0
         p(A("sh", rt=A1, rs=T1, imm=0x20))
         p(A("lhu", rt=V1, rs=T0, imm=0x20))      # and back through kuseg
-        p(A("lui", rt=T2, imm=0x0003))
-        p(A("sw", rt=A0, rs=T2, imm=-4))         # 0x0002FFFC: unmapped
-        p(A("lui", rt=T3, imm=0x0080))
-        p(A("lw", rt=A2, rs=T3, imm=0))          # 0x00800000: past RAM
-        p(A("lui", rt=T4, imm=0x0004))
-        p(A("lw", rt=A3, rs=T4, imm=0))          # 0x00040000: the first mapped word
+        p(A("lui", rt=T2, imm=0x0004))           # 0x00040000, the first mapped byte
+        p(A("sw", rt=A0, rs=T2, imm=-4))         # 0x0003FFFC: the last unmapped word, bus
+        p(A("sb", rt=A0, rs=T2, imm=-1))         # 0x0003FFFF: the last unmapped byte, bus
+        p(A("lw", rt=A2, rs=T2, imm=-2))         # 0x0003FFFE size 4: straddles, bus
+        p(A("sw", rt=A1, rs=T2, imm=0))          # 0x00040000: the first mapped word, RAM
+        p(A("lui", rt=T3, imm=0x8004))
+        p(A("lw", rt=A3, rs=T3, imm=0))          # read back through kseg0
+        p(A("lui", rt=T4, imm=0x0080))           # 0x00800000, the first byte past RAM
+        p(A("sw", rt=A1, rs=T4, imm=-4))         # 0x007FFFFC: the last mapped word, RAM
+        p(A("sb", rt=A0, rs=T4, imm=-1))         # 0x007FFFFF: the last mapped byte, RAM
+        p(A("lui", rt=T5, imm=0x8080))
+        p(A("lw", rt=S0, rs=T5, imm=-4))         # 0x807FFFFC: both stores, through kseg0
+        p(A("lw", rt=T9, rs=T4, imm=-2))         # 0x007FFFFE size 4: straddles, bus
+        p(A("lw", rt=T1, rs=T4, imm=0))          # 0x00800000: past RAM, bus
         p(JR_RA, 0)
         prog = Program(p)
 
@@ -557,10 +566,15 @@ class FunctionTest(RecompTestCase):
             self.assertEqual(state.r[V0], a0)
             self.assertEqual(state.r[V1], a1 & 0xFFFF)
             self.assertEqual(state.mem.get(vectors.SCRATCH + 0x10), a0)
-            self.assertEqual(state.calls, [("bus_write", 0x0002FFFC, 4, a0),
+            self.assertEqual(state.r[A3], a1)
+            self.assertEqual(state.r[S0], (a1 & 0x00FFFFFF) | (a0 & 0xFF) << 24)
+            self.assertEqual(state.calls, [("bus_write", 0x0003FFFC, 4, a0),
+                                           ("bus_write", 0x0003FFFF, 1, a0 & 0xFF),
+                                           ("bus_read", 0x0003FFFE, 4),
+                                           ("bus_read", 0x007FFFFE, 4),
                                            ("bus_read", 0x00800000, 4)])
-            self.assertEqual(state.r[A2], charness.BUS_READ_VALUE)
-            self.assertEqual(state.r[A3], 0)
+            for reg in (A2, T9, T1):
+                self.assertEqual(state.r[reg], charness.BUS_READ_VALUE)
 
     def test_break_passes_code_and_address(self):
         self.assertEqual(A("break", code=0x1C00), 0x0007000D)

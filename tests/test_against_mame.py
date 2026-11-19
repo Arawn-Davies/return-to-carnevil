@@ -12,6 +12,7 @@ Two checks, documented in tools/mame/README.md:
 
 The programs are built once for the module from a fresh recompile in a temporary folder.
 """
+import json
 import os
 import re
 import shutil
@@ -41,6 +42,13 @@ REGISTERS = ("zero at v0 v1 a0 a1 a2 a3 t0 t1 t2 t3 t4 t5 t6 t7 s0 s1 s2 s3 s4 s
              "k0 k1 gp sp fp ra").split()
 
 _build = {}
+
+
+def requires_capture(rel, how):
+    """Skip unless a MAME capture under the work directory exists, saying how to make it."""
+    return unittest.skipUnless(work_path(*rel) is not None,
+                               f"MAME capture not found: $CARNEVIL_WORK/{'/'.join(rel)}; "
+                               f"produce it with {how}")
 
 
 def programs():
@@ -164,7 +172,7 @@ class PureFunctionListTest(unittest.TestCase):
 # --- the smoke run -------------------------------------------------------------------------
 
 @requires_file("part0_files", "GAME.EXE")
-@requires_file(*ENTRY_RAM)
+@requires_capture(ENTRY_RAM, "tools/mame/handoff.lua (tools/mame/README.md, handoff.lua)")
 class SmokeTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -198,7 +206,8 @@ class SmokeTest(unittest.TestCase):
         for i, name in ((4, "a0"), (5, "a1"), (6, "a2"), (7, "a3"), (31, "ra"), (29, "sp")):
             self.assertEqual(got["r"][i], want[name], name)
 
-    @requires_file(*FIRST_CALL_RAM)
+    @requires_capture(FIRST_CALL_RAM, "tools/mame/firstcall.lua, then copy its RAM to "
+                      "mame/dumps/ (tools/mame/README.md, firstcall.lua)")
     def test_ram_at_first_loader_call_matches_mame(self):
         self.assertEqual(self.res.returncode, 0, self.res.stderr[-4000:])
         lo = GAME_ENTRY
@@ -214,9 +223,99 @@ class SmokeTest(unittest.TestCase):
             n = sum(want[i] != got[i] for i in range(a, b))
             self.fail(f"RAM differs from MAME's in 0x{lo:08X}-0x{hi:08X}: {n} bytes, the first "
                       f"at 0x{RAM_BASE + first:08X}")
+        # reported, not asserted: the loader's exception handlers write outside the range
+        outside = differing_ranges(want, got, 0, a) + differing_ranges(want, got, b, RAM_SIZE)
+        print(f"\nRAM outside 0x{lo:08X}-0x{hi:08X} differing from MAME's: "
+              + (", ".join(f"0x{RAM_BASE + x:08X}-0x{RAM_BASE + y - 1:08X} ({n} bytes)"
+                           for x, y, n in outside) or "none"), file=sys.stderr)
+
+
+def differing_ranges(want, got, lo, hi, gap=4096):
+    """(start, end, bytes) of the ranges of [lo, hi) where want and got differ, merged across
+    fewer than gap equal bytes."""
+    out, i = [], lo
+    while i < hi:
+        j = min(i + 4096, hi)
+        if want[i:j] != got[i:j]:
+            for k in range(i, j):
+                if want[k] != got[k]:
+                    if out and k - out[-1][1] < gap:
+                        out[-1] = [out[-1][0], k + 1, out[-1][2] + 1]
+                    else:
+                        out.append([k, k + 1, 1])
+        i = j
+    return [tuple(r) for r in out]
 
 
 # --- function replay -----------------------------------------------------------------------
+
+FAKE_REPLAY = """\
+import json, os, sys
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "spec.json")) as f:
+    spec = json.load(f)
+code, out = spec["interp" if "--interp" in sys.argv else "recomp"]
+sys.stdout.write(out)
+sys.exit(code)
+"""
+
+
+def bus_stop(access, r4="00000004", ram="0123456789ABCDEF"):
+    """What replay prints when it stops at its first bus access."""
+    return (f"bus {access}\nr " + " ".join(["00000000"] * 4 + [r4] + ["00000000"] * 27)
+            + "\nhi 00000000\nlo 00000000\nfpr " + " ".join(["00000000"] * 32)
+            + f"\nfcsr 01000000\nram fnv1a64 {ram}\n")
+
+
+class ClassifyReplayTest(unittest.TestCase):
+    """classify_replay's verdicts, with a stand-in for the replay program (no game data and no
+    C compiler needed): only a first bus access to a hardware region that the interpreter makes
+    identically excuses a capture."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.fake = os.path.join(self.tmp, "replay")
+        with open(self.fake, "w", encoding="utf-8") as f:
+            f.write(f"#!{sys.executable}\n" + FAKE_REPLAY)
+        os.chmod(self.fake, 0o755)
+
+    def verdict(self, recomp, interp=None):
+        with open(os.path.join(self.tmp, "spec.json"), "w", encoding="utf-8") as f:
+            json.dump({"recomp": recomp, "interp": interp or recomp}, f)
+        return classify_replay(self.fake, self.tmp)
+
+    def test_clean(self):
+        self.assertEqual(self.verdict([0, "800C6A64: same as MAME\n"]), ("clean", None))
+
+    def test_difference_fails(self):
+        self.assertEqual(self.verdict([1, "a0: MAME 1, replay 2\n"])[0], "failure")
+
+    def test_hardware_access_made_alike_by_both_modes_is_impure(self):
+        out = bus_stop("write 0xA800021C size 4 value 0x00000001")
+        self.assertEqual(self.verdict([EXIT_BUS, out]),
+                         ("impure", ("write 0xA800021C size 4", "voodoo")))
+
+    def test_non_hardware_addresses_fail(self):
+        for addr in ("0x00237000",     # kuseg: RAM, never the bus
+                     "0x80900000",     # kseg0 past RAM: no region
+                     "0x80100000",     # RAM through kseg0
+                     "0xA0200000"):    # RAM through kseg1
+            verdict, detail = self.verdict([EXIT_BUS, bus_stop(f"read {addr} size 4")])
+            self.assertEqual(verdict, "failure", addr)
+            self.assertIn("no hardware region", detail, addr)
+
+    def test_interpreter_disagreement_fails(self):
+        out = bus_stop("read 0xA8000000 size 4")
+        for other in (bus_stop("read 0xA8000000 size 4", r4="00000005"),  # a register
+                      bus_stop("read 0xA8000000 size 4", ram="FEDCBA9876543210"),  # RAM
+                      bus_stop("read 0xA8000004 size 4"),  # the address
+                      bus_stop("write 0xA8000000 size 4 value 0x00000000"),  # the direction
+                      bus_stop("read 0xA8000000 size 2")):  # the size
+            verdict, detail = self.verdict([EXIT_BUS, out], [EXIT_BUS, other])
+            self.assertEqual(verdict, "failure", other.splitlines()[0])
+            self.assertIn("interpreter", detail)
+        self.assertEqual(self.verdict([EXIT_BUS, out], [0, "same as MAME\n"])[0], "failure")
+
 
 def capture_dirs():
     base = work_path(*CAPTURES)
@@ -306,7 +405,8 @@ def classify_replay(replay, d):
     if res.returncode != EXIT_BUS:
         return "failure", f"exit {res.returncode}\n{res.stdout[-1500:]}{res.stderr[-1500:]}"
     first = res.stdout.splitlines()[0]
-    m = re.fullmatch(r"bus (read|write) 0x([0-9A-F]{8}) size (\d)", first)
+    m = re.fullmatch(r"bus (read|write) 0x([0-9A-F]{8}) size (\d)(?: value 0x[0-9A-F]{8})?",
+                     first)
     if not m:
         return "failure", f"unreadable replay output: {first!r}"
     addr = int(m.group(2), 16)

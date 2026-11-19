@@ -185,8 +185,11 @@ only) holds:
 through pointers it cannot see. `replay` stops at its first bus access (exit 3, printing the
 access and the state there); `test_against_mame` counts the capture impure at run time when
 that address is a hardware region of `carnevil_tools.board` and `replay --interp` (every call
-in the interpreter) makes the same first access from the same state, and a failure otherwise.
-In the run of 2026-11-19, 127 of the 152 captures replay clean and 25 are impure at run time.
+in the interpreter) makes the same first access, with the same written value, from the same
+registers and RAM (replay prints an FNV-1a 64-bit hash of the 8 MB), and a failure otherwise.
+In the run of 2026-11-19, 127 of the 152 captures replay clean: those 127 functions match
+MAME. The other 25 are impure at run time; they show only that the recompiled C and the
+interpreter agree up to the first hardware access, not that they match MAME.
 
 How MAME exposes the state the script uses (MAME 0.276, `src/devices/cpu/mips/mips3.cpp`):
 the general registers are the 64-bit state entries `zero`, `at`, ... `ra` (ABI names; `R<n>`
