@@ -3,6 +3,7 @@ import io
 import os
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from unittest import mock
 
 from carnevil_tools import board, cli, exe, functions, hwcensus, loader
 from tests.gamedata import requires_file, work_path
@@ -18,7 +19,7 @@ FUNCTIONS = os.path.join(REPO, "config", "game.functions.toml")
 BOOT_STATE = os.path.join(REPO, "config", "boot_state.toml")
 
 BASE = 0x80100000
-ZERO, AT, V0, V1, A0, A1, T0, T1, S0, RA = 0, 1, 2, 3, 4, 5, 8, 9, 16, 31
+ZERO, AT, V0, V1, A0, A1, T0, T1, S0, SP, RA = 0, 1, 2, 3, 4, 5, 8, 9, 16, 29, 31
 
 
 def _i(op, rs, rt, imm):
@@ -236,6 +237,86 @@ class Pairs(unittest.TestCase):
         self.assertEqual(addrs, {0xB6000010, 0xB6000014})
 
 
+def _program(*functions_words):
+    """An image of consecutive functions, each a list of words or of callables taking the
+    list of function starts; one analysis function per list."""
+    starts, at = [], BASE
+    for words in functions_words:
+        starts.append(at)
+        at += 4 * len(words)
+    data = b"".join((w(starts) if callable(w) else w).to_bytes(4, "little")
+                    for words in functions_words for w in words)
+    image = exe.ExeImage(0, BASE, data, "")
+    funcs = [functions.Function(s, 4 * len(w), "f%d" % i, {"call"})
+             for i, (s, w) in enumerate(zip(starts, functions_words))]
+    return image, functions.Analysis(BASE, BASE + len(data), funcs, [], []), starts
+
+
+def _call(k):
+    return lambda starts: jal(starts[k])
+
+
+class Meet(unittest.TestCase):
+    def test_hardware_addresses_in_one_region_widen_once(self):
+        a, b = {T0: 0xB6000008}, {T0: 0xB6000004}
+        self.assertEqual(hwcensus._meet(a, b), {T0: hwcensus.Idx(0xB6000004)})
+        widened = {T0: hwcensus.Idx(0xB6000004)}
+        self.assertEqual(hwcensus._meet(widened, {T0: 0xB600000C}), widened)
+        self.assertEqual(hwcensus._meet(widened, {T0: 0xB6000000}), {})  # not again lower
+
+    def test_table_met_with_its_base(self):
+        self.assertEqual(hwcensus._meet({T0: hwcensus.Idx(0xA8000000)}, {T0: 0xA8000000}),
+                         {T0: hwcensus.Idx(0xA8000000)})
+
+    def test_different_regions_or_values_drop_the_register(self):
+        self.assertEqual(hwcensus._meet({T0: 0xB6000000}, {T0: 0xA8000000}), {})
+        self.assertEqual(hwcensus._meet({T0: 5}, {T0: 6}), {})
+
+    def test_null_tolerant_join(self):
+        # A hardware base or loaded pointer on one path and null on the other keeps the base.
+        self.assertEqual(hwcensus._meet({T0: 0}, {T0: 0xA8000000}), {T0: 0xA8000000})
+        ptr = hwcensus.Ptr((0x80200000,), 0, False)
+        self.assertEqual(hwcensus._meet({T0: ptr}, {T0: 0}), {T0: ptr})
+        self.assertEqual(hwcensus._meet({T0: 0}, {T0: 0x80001000}), {})  # RAM: not a base
+
+    def test_pointer_offsets_widen(self):
+        a = {T0: hwcensus.Ptr((0x80200000,), 8, False)}
+        b = {T0: hwcensus.Ptr((0x80200000,), 4, False)}
+        self.assertEqual(hwcensus._meet(a, b), {T0: hwcensus.Ptr((0x80200000,), 4, True)})
+
+
+class Summaries(unittest.TestCase):
+    def test_argument_seeded_only_when_every_caller_agrees(self):
+        image, analysis, starts = _program(
+            [lui(A0, 0xB600), _call(2), NOP, lui(A0, 0xB600), _call(2), NOP, JR_RA, NOP],
+            [lui(A0, 0xA800), _call(3), NOP, lui(A0, 0xB600), _call(3), NOP, JR_RA, NOP],
+            [sw(ZERO, 0x10, A0), JR_RA, NOP],
+            [sw(ZERO, 0x14, A0), JR_RA, NOP])
+        c = hwcensus.propagate(image, analysis)
+        self.assertEqual(c.seeds, {starts[2]: {A0: 0xB6000000}})
+        self.assertEqual({a.addr for a in c.accesses}, {0xB6000010})
+        self.assertTrue(c.converged)
+
+    def test_return_value_when_every_return_agrees(self):
+        image, analysis, starts = _program(
+            [_call(1), NOP, sw(ZERO, 0x20, V0), _call(2), NOP, sw(ZERO, 0x24, V0), JR_RA, NOP],
+            [beq(A0, ZERO, 2), lui(V0, 0xB600), JR_RA, NOP, JR_RA, NOP],
+            [beq(A0, ZERO, 3), lui(V0, 0xB600), JR_RA, NOP, lui(V0, 0xA800), JR_RA, NOP])
+        c = hwcensus.propagate(image, analysis)
+        self.assertEqual(c.returns, {starts[1]: 0xB6000000})
+        self.assertEqual({a.addr for a in c.accesses}, {0xB6000020})
+
+    def test_convergence_is_reported(self):
+        # The seed reaches the third function only in the second round.
+        image, analysis, starts = _program(
+            [lui(A0, 0xB600), _call(1), NOP, JR_RA, NOP],
+            [addiu(SP, SP, -8), _call(2), NOP, addiu(SP, SP, 8), JR_RA, NOP],
+            [sw(ZERO, 0x10, A0), JR_RA, NOP])
+        self.assertTrue(hwcensus.propagate(image, analysis).converged)
+        with mock.patch.object(hwcensus, "SUMMARY_ROUNDS", 2):
+            self.assertFalse(hwcensus.propagate(image, analysis).converged)
+
+
 def _strict(census):
     """Constants at or above physical 0x08000000 that classify as unknown, by kind."""
     used, other = set(), set()
@@ -277,6 +358,9 @@ class GameExe(unittest.TestCase):
         used, other = _strict(self.census)
         self.assertEqual(used, set(), "unclassified addresses dereferenced")
         self.assertEqual(sorted(other), hwcensus.NOT_ADDRESSES["GAME.EXE"])
+
+    def test_summaries_converge(self):
+        self.assertTrue(self.census.converged)
 
     def test_holders_under_the_sound_rule(self):
         known, _rams = hwcensus.holders(self.census)
@@ -382,6 +466,22 @@ class Cli(unittest.TestCase):
         self.assertIn("voodoo:", out)
         self.assertIn("swapbufferCMD", out)
         self.assertNotIn("gt64010:", out)
+
+    @requires_boot_rom
+    def test_loader_reach_per_slot(self):
+        rc, out, _err = self._run("--loader", BOOT_ROM, "--reach")
+        self.assertEqual(rc, 0)
+        lines = out.splitlines()
+        self.assertIn("  slot 0x1D8 game -> 0x80012718: 5 functions, 0 with indirect calls; -",
+                      lines)
+        self.assertIn("  slot 0x1C0 game -> 0x80009CBC: 46 functions, 3 with indirect calls; "
+                      "asic_reset ide ide_bmdma ide_cs1 ioasic status_leds", lines)
+        self.assertEqual(sum(line.startswith("  slot 0x") for line in lines), 72)
+
+    def test_reach_needs_the_loader(self):
+        rc, _out, err = self._run("/nonexistent/GAME.EXE", "--reach")
+        self.assertEqual(rc, 2)
+        self.assertIn("--reach", err)
 
     @requires_boot_rom
     def test_loader_summary(self):

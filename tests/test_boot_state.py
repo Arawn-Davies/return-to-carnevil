@@ -16,7 +16,7 @@ ENTRY = 0x800C4000
 STUB_START, STUB_END = 0x800C408C, 0x800C42CC  # the stub block, end exclusive
 RAM_START, RAM_END = 0x80000000, 0x80800000
 SOURCES = {"boot_rom_copy", "diag_leftover", "loader_data", "unknown"}
-REGIONS = {"boot_rom", "low_ram", "stub_block", "other"}
+REGIONS = {"boot_rom", "stub_block", "other"}
 
 
 class BootState(unittest.TestCase):

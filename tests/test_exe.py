@@ -115,6 +115,14 @@ class ExeTests(unittest.TestCase):
             with self.assertRaises(IndexError, msg=hex(addr)):
                 image.word(addr)
 
+    def test_word_straddling_the_end(self):
+        # An image whose length is not a multiple of 4: the last, partial word is outside.
+        image = exe.ExeImage(0, 0x80010000, bytes(range(6)), "")
+        self.assertEqual(image.word(0x80010000), 0x03020100)
+        self.assertTrue(image.contains(0x80010005))
+        with self.assertRaises(IndexError):
+            image.word(0x80010004)
+
     def test_truncated_file(self):
         path = self._write(b"\x00\x01\x02")
         with self.assertRaises(ValueError):

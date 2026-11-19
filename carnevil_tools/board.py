@@ -175,7 +175,7 @@ def register_name(addr):
             name += " (byte-swizzled)"
         return name
     if r.name == "gt64010":
-        return _GT64010.get(off & ~3, "reg_0x%03X" % off)
+        return _GT64010.get(off, "reg_0x%03X" % off)  # unaligned: no register name
     if r.name == "ioasic":
         return IOASIC_REGS[IOASIC_SHUFFLE[off // 4]]
     if r.name in ("ide", "ide2"):

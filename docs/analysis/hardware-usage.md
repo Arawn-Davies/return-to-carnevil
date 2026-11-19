@@ -90,15 +90,18 @@ behind more than two loads, pointers into tables whose index is not constant (ta
 reached only that way is missing below; "Not confirmed" lists where that is known to matter.
 
 **Loader reachability.** The loader was analysed with function discovery from its entry, the
-72 slot targets, the four exception vectors and the 36 routines of its device-driver table at
-0x80013530 (13 drivers, each 7 routine slots followed by a name: open, close, read, write,
-init, unused, ioctl; unused slots point at a shared return-0 routine). The names are wdog,
-led, ioasic, sysctrl, pic, timer, tty, sound, cmos, mdiag, disk, file and scsi. Each register's functions are labelled with what reaches them by direct calls and
-tail jumps: `game` (the 29 slots GAME.EXE calls), `vector` (the exception vectors, which run
-while the game runs), `slot` (the other 39 slots), `boot` (the loader's own start-up, which
-has run before GAME.EXE), and `driver:<name>`. The file slots call drivers through the table,
-so `driver:` labels stand for "reached when the game uses that device". Limits: labels are the
+72 slot targets, the four exception vectors and the 36 routines of its device-driver table
+at 0x80013530 (13 drivers, each 7 routine slots followed by a name: open, close, read,
+write, init, unused, ioctl; unused slots point at a shared return-0 routine). The names are
+wdog, led, ioasic, sysctrl, pic, timer, tty, sound, cmos, mdiag, disk, file and scsi. Each
+register's functions are labelled with what reaches them by direct calls and tail jumps:
+`game` (the 29 slots GAME.EXE calls), `vector` (the exception vectors, which run while the
+game runs), `slot` (the other 39 slots), `boot` (the loader's own start-up, which has run
+before GAME.EXE), and `driver:<name>`. The file slots call drivers through the table, so
+`driver:` labels stand for "reached when the game uses that device". Limits: labels are the
 union over a register's functions; jumps through the handler tables are not followed.
+`hwcensus --loader <boot.u32> --reach` prints, per slot, how many loader functions it
+reaches, how many of those make an indirect call, and the hardware regions among them.
 
 ## GAME.EXE
 
@@ -173,7 +176,7 @@ functions. Bus-master DMA 0x0A000F00: read 3, write 7, 0x0A000F04 write 1 (0x800
 0x800124F4, 0x800128F8).
 
 **GT64010** (0x0C000000): 126 sites, 15 registers (the CLI shows a sixteenth address,
-0xC17, which is an artefact; see below).
+0xC17, as `reg_0xC17`: an artefact; see below).
 - DMA0 to DMA3 control 0x840 to 0x84C: read 3, write 3 each (0x8000D970, 0x8000E930 load and
   run, 0x8000EC04): stop the DMA channels before a new program runs.
 - TIMER0 to TIMER3 count 0x850 to 0x85C (written 0x4C4B40, 0x17D7840, 0xFFFFFF) and
@@ -219,7 +222,7 @@ byte written).
 - VBLANK clear 0x17700000: write 8 (default handler 0x80005368, slot 0x200, DMA stop paths).
 - status LEDs 0x17900000: read 7, write 19 (0, 2, 3, 7), 12 functions; ASIC reset 0x17F00000:
   read 4, write 4 (`ioasic:` init 0x800069DC, `sysctrl:` init 0x8000F998); no-op register
-  0x17800000: write 0.
+  0x17800000: one write, of the value 0 (`sysctrl:` init 0x8000F998).
 - update ROM 0x1FD00000 and 0x1FD00008: read, `mdiag:` driver.
 
 **PCI memory above the Voodoo** (0x09000000 to 0x0900004F): 24 sites, all but one through the
@@ -599,7 +602,7 @@ dereferenced there.
 
 ## Not confirmed
 
-- **Everything the two MAME runs measured covers boot and attract mode only.** A region or
+- **Everything the three MAME runs measured covers boot and attract mode only.** A region or
   register GAME.EXE touches only during gameplay would be missing, both from "by GAME.EXE's
   own code" and from the static negatives, which the CMOS reads show can be incomplete.
 - **Voodoo registers used only during gameplay.** The dynamic check covered boot and attract

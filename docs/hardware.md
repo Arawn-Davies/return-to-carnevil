@@ -20,7 +20,7 @@ CarnEvil (1998) runs on Midway's Seattle board, which it shares with games such 
 2. It then copies the loader into RAM. The loader starts `GAME.EXE` from the disk. Only when the Test switch is on does it start the diagnostics program `DIAG.EXE` instead, which can start the game in turn.
 3. `GAME.EXE` sets its stack at the top of RAM, clears its uninitialised data, copies the loader's jump table into a block of its own, and starts the game.
 
-The loader stays in RAM while the game runs. The game calls it for files, the disk, the settings memory, PCI set-up and device control, and the loader handles all interrupts and exceptions, calling the handlers the game registers with it. [analysis/boot-handoff.md](analysis/boot-handoff.md) has the details.
+The loader stays in RAM while the game runs. The game calls it for files, the disk, settings writes, PCI set-up and device control, and the loader handles all interrupts and exceptions, calling the handlers the game registers with it. [analysis/boot-handoff.md](analysis/boot-handoff.md) has the details.
 
 Both programs are flat MIPS images with an 8-byte header. `GAME.EXE` loads at `0x800C4000` and `DIAG.EXE` at `0x80100000`.
 

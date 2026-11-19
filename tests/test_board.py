@@ -33,6 +33,9 @@ class Classify(unittest.TestCase):
         # CarnEvil's IOASIC address order once unlocked: bus word 5 is the PIC output port.
         self.assertEqual(board.register_name(0xB6000014), "PICOUT")
         self.assertEqual(board.register_name(0xB6100010), "cmos+0x10")
+        # An unaligned GT64010 address is not named after the register it falls in.
+        self.assertEqual(board.register_name(0xAC000C14), "PCI_CS_3_BOOT")
+        self.assertEqual(board.register_name(0xAC000C17), "reg_0xC17")
 
     def test_hwcensus_keeps_the_planned_names(self):
         # The plan promises hwcensus.REGIONS and hwcensus.classify.

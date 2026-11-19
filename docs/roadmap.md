@@ -55,7 +55,7 @@ About the executables:
 About the boot:
 
 - A normal boot runs the boot ROM's start-up code, its power-on tests, then its loader, which starts `GAME.EXE`. The diagnostics program `DIAG.EXE` runs only when the Test switch is on.
-- The loader stays in memory while the game runs. The game uses it for files, the disk, the settings memory, PCI set-up, interrupts and exceptions.
+- The loader stays in memory while the game runs. The game uses it for files, the disk, settings writes, PCI set-up, interrupts and exceptions.
 
 About the code:
 

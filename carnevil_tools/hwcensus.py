@@ -123,6 +123,7 @@ class Census:
     seeds: dict = field(default_factory=dict)     # function -> {arg register: value}
     returns: dict = field(default_factory=dict)   # function or call target -> v0 value
     initial: dict = field(default_factory=dict)   # path (A,) -> the image's word at A
+    converged: bool = True  # the summaries reached a fixpoint within SUMMARY_ROUNDS
 
 
 _LOADS = {"lb": 1, "lbu": 1, "lh": 2, "lhu": 2, "lw": 4, "lwu": 4, "lwl": 4, "lwr": 4,
@@ -399,7 +400,9 @@ def _summaries(image, analysis, tables, returns):
     A function gets an argument register at entry when every direct call and tail jump to
     it passes the same hardware constant or memory pointer in that register, and its
     address is never taken (no "pointer" source), so no unseen caller exists. A function
-    gets a return value when every `jr ra` returns the same such value in v0, or null."""
+    gets a return value when every `jr ra` returns the same such value in v0, or null.
+    Returns (seeds, returns, converged); converged is False when SUMMARY_ROUNDS ran out
+    before a fixpoint, and the last round's summaries are returned."""
     funcs = list(functions.reached_words(analysis).items())
     starts = {f.addr for f in analysis.functions}
     taken = {f.addr for f in analysis.functions if "pointer" in f.sources}
@@ -439,9 +442,9 @@ def _summaries(image, analysis, tables, returns):
             if value is not None:
                 new_rets[start] = value
         if new_seeds == seeds and new_rets == rets:
-            break
+            return seeds, rets, True
         seeds, rets = new_seeds, new_rets
-    return seeds, rets
+    return seeds, rets, False
 
 
 def propagate(image, analysis, returns=None, interprocedural=True):
@@ -451,8 +454,8 @@ def propagate(image, analysis, returns=None, interprocedural=True):
     `_summaries` are used too."""
     tables = {t.jr_addr: t for t in analysis.jump_tables}
     returns = dict(returns or {})
-    seeds, rets = (_summaries(image, analysis, tables, returns) if interprocedural
-                   else ({}, returns))
+    seeds, rets, converged = (_summaries(image, analysis, tables, returns) if interprocedural
+                              else ({}, returns, True))
     out = _Collect()
     for start, words in functions.reached_words(analysis).items():
         if start not in words:
@@ -471,7 +474,7 @@ def propagate(image, analysis, returns=None, interprocedural=True):
     words |= {s.value.path[0] for s in stores if isinstance(s.value, Ptr)}
     initial = {(a,): image.word(a) for a in words if a % 4 == 0 and image.contains(a)}
     return Census([out.accesses[k] for k in sorted(out.accesses)], out.formed, indirect,
-                  stores, seeds, rets, initial)
+                  stores, seeds, rets, initial, converged)
 
 
 def _single(values, accept):
@@ -513,9 +516,11 @@ def holders(c):
     """(holders, ram_pointers). holders: memory path -> the hardware base it holds, when
     every store this census sees into the path, and the image's initial word there, is the
     same non-RAM KSEG0/KSEG1 constant (or constant + register, or null), directly or by
-    copying a word loaded from another holder. Any store into the path the census cannot
-    value (UNKNOWN: a register it does not know, a partial-word store, an FPU store) or a
-    copy from a location that is not a holder disqualifies the path. A path through a
+    copying a word loaded from another holder. Any store at the path's own address that the
+    census cannot value (UNKNOWN: a register it does not know, a store narrower than a word,
+    an FPU store) or a copy from a location that is not a holder disqualifies the path. Only
+    stores at exactly that address count: a byte or halfword store at A+1 to A+3, an
+    swl/swr, or an sd at A-4 that overlaps the word is not seen. A path through a
     pointer to a RAM structure is taken as the structure's own address (`ram_pointers`).
     Stores through bases the census does not know cannot be seen at all and are not
     accounted for."""
@@ -580,8 +585,10 @@ def constant_addresses(image, analysis):
     each value an `addiu`/`ori` (or other constant arithmetic) builds on a `lui`, each
     effective address of a load/store/cache through such a constant base (constant +
     register counts at its constant part), and each such constant used as a jump target.
-    Only KSEG0/KSEG1 values are returned: no value at or above 0x80000000 can be built
-    without a `lui`, so these are the lui-formed ones; small integers are left out.
+    Only KSEG0/KSEG1 values are returned, so small integers are left out. Most are an
+    `addiu`/`ori` on a `lui`, but `or`, `addi` and `addu` on other constants form some too:
+    on GAME.EXE four keys have only such sites (0x801E0000, 0xA00C408C, 0xA00C42C8,
+    0xA00C42CC).
 
     Not included: addresses reached through bases held in memory, passed between
     functions, or returned by loader services. These are not constants in the code.
@@ -625,7 +632,7 @@ def call_arguments(image, analysis, targets, returns=None):
     """The known argument registers at each direct call to one of `targets`, after the
     delay slot, with the census's interprocedural summaries applied."""
     tables = {t.jr_addr: t for t in analysis.jump_tables}
-    seeds, rets = _summaries(image, analysis, tables, dict(returns or {}))
+    seeds, rets, _converged = _summaries(image, analysis, tables, dict(returns or {}))
     targets = set(targets)
     out = []
     for start, words in functions.reached_words(analysis).items():

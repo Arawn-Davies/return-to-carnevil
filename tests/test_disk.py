@@ -136,10 +136,8 @@ class SyntheticPartitionTests(unittest.TestCase):
             [("../evil", b"EVIL"), ("a/b", b"ABAB"), ("ok.bin", b"OKOK")]
         )
         out = self.path("sandbox", "out")
-        try:
+        with self.assertRaises(disk.DiskFormatError):
             disk.extract_files(part, out)
-        except disk.DiskFormatError:
-            pass
         for root, _dirs, names in os.walk(self.tmp.name):
             for n in names:
                 full = os.path.join(root, n)
@@ -200,6 +198,23 @@ class SyntheticPartitionTests(unittest.TestCase):
 
     def test_chain_shorter_than_size_raises(self):
         self.assert_refused([("A.BIN", os.urandom(3 * BLOCK), [4, 5, 6])], {5: 0})
+
+    def test_free_link_mid_chain_raises(self):
+        # Link 1 marks a free block; it cannot continue a file.
+        self.assert_refused([("A.BIN", os.urandom(3 * BLOCK), [4, 5, 6])], {5: 1})
+
+    def test_first_block_below_the_data_area_raises(self):
+        # Blocks 0 to 2 hold the home block and the chain table, never file data.
+        for first in (0, 1, 2):
+            with self.subTest(first=first):
+                image = bytearray(build_partition([("A.BIN", b"AAAA")]))
+                entry = BASE + 3 * BLOCK
+                struct.pack_into("<i", image, entry + 12 + 8, first)
+                part = self.path("low%d" % first)
+                with open(part, "wb") as f:
+                    f.write(image)
+                with self.assertRaisesRegex(disk.DiskFormatError, "not a data block"):
+                    disk.list_files(part)
 
     def test_verify_against_checksum_table(self):
         a, b = os.urandom(5000), os.urandom(300)

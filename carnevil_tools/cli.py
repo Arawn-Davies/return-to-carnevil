@@ -198,7 +198,23 @@ def _print_hwcensus(accesses, reach=None):
             print(line)
 
 
-def _hwcensus(path, rom, ioctl=False):
+def _print_reach(image, analysis, accesses, game_slots):
+    """Per service slot: the loader functions it reaches by direct calls and tail jumps,
+    how many of them make an indirect call, and the hardware regions they access."""
+    edges, indirect = loader.call_graph(image, analysis)
+    by_function = {}
+    for a in accesses:
+        by_function.setdefault(a.function, set()).add(board.classify(a.addr))
+    print("\nper slot (direct calls and tail jumps):")
+    for slot, target in sorted(loader.slot_targets(image).items()):
+        reached = loader.closure(edges, [target])
+        regions = sorted(set().union(*(by_function.get(f, set()) for f in reached)))
+        who = "game" if slot in game_slots else "    "
+        print(f"  slot 0x{slot:03X} {who} -> 0x{target:08X}: {len(reached)} functions, "
+              f"{len(reached & indirect)} with indirect calls; {' '.join(regions) or '-'}")
+
+
+def _hwcensus(path, rom, ioctl=False, reach=False):
     if rom is not None:
         if not os.path.isfile(rom):
             return _missing(rom)
@@ -209,10 +225,15 @@ def _hwcensus(path, rom, ioctl=False):
             return 1
         analysis, _notes = loader.analyse_loader(image)
         game_slots = loader.game_slots(BOOT_STATE)
-        reach = loader.loader_reach(image, analysis, game_slots)
+        labels = loader.loader_reach(image, analysis, game_slots)
         print(f"loader 0x{image.load_addr:08X}-0x{image.end_addr():08X}, "
               f"{len(analysis.functions)} functions; {len(game_slots)} slots called by GAME.EXE")
-        _print_hwcensus(hwcensus.all_accesses(hwcensus.propagate(image, analysis)), reach)
+        accesses = hwcensus.all_accesses(hwcensus.propagate(image, analysis))
+        _print_hwcensus(accesses, labels)
+        if reach:
+            hardware = [a for a in accesses if board.is_kseg01(a.addr)
+                        and board.classify(a.addr) not in ("ram", "unknown")]
+            _print_reach(image, analysis, hardware, set(game_slots))
         return 0
     image, status = _load(path)
     if image is None:
@@ -308,6 +329,9 @@ def main(argv=None):
                      help="census the boot ROM's resident loader instead")
     hwc.add_argument("--ioctl", action="store_true",
                      help="also list the EXE's ioctl calls into the loader (slot 0x0C8)")
+    hwc.add_argument("--reach", action="store_true",
+                     help="with --loader: per service slot, the loader functions it reaches "
+                          "and the hardware regions among them")
     args = parser.parse_args(argv)
 
     if args.command == "hwcensus":
@@ -315,7 +339,9 @@ def main(argv=None):
             parser.error("hwcensus takes an EXE or --loader <boot.u32>, not both")
         if args.ioctl and args.loader is not None:
             parser.error("--ioctl applies to an EXE, not to --loader")
-        return _hwcensus(args.exe, args.loader, args.ioctl)
+        if args.reach and args.loader is None:
+            parser.error("--reach applies to --loader")
+        return _hwcensus(args.exe, args.loader, args.ioctl, args.reach)
     if args.command == "disasm":
         return _disasm(args.file, args.base, args.start, args.count)
     if args.command == "verify":

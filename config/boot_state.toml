@@ -14,7 +14,8 @@ fcr31 = 0x01000400   # FS (flush to zero) and the divide-by-zero enable; _start 
 ra = 0x8000EBE8      # in the loader's load-and-run routine, after its jalr to the EXE
 
 # Every non-zero range of RAM below the image at entry. Ranges of non-zero words were merged
-# when fewer than 256 zero bytes separate them.
+# when fewer than 256 zero bytes separate them, except the boot_rom_copy entries, which are
+# whole copies of the ROM's bytes and include their zero runs.
 
 [[ram_preload]]
 addr = 0x80000000

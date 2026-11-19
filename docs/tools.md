@@ -60,13 +60,13 @@ Decodes `n` words of any file, starting at address `start`, and prints them to t
 
 ```
 python3 -m carnevil_tools hwcensus <GAME.EXE> [--ioctl]
-python3 -m carnevil_tools hwcensus --loader <boot.u32>
+python3 -m carnevil_tools hwcensus --loader <boot.u32> [--reach]
 ```
 
 Lists the hardware registers the code touches, grouped by region (Voodoo, frame buffer, texture memory, IOASIC, CMOS, gun, system controller and so on), with read and write counts and the functions that make the accesses. It follows register values through each function and across calls to work out the addresses.
 
 - With an EXE it analyses `GAME.EXE`, using the function list in `config/game.functions.toml`. `--ioctl` also lists the game's ioctl calls into the boot ROM's loader: the device and command number of each call.
-- With `--loader` it analyses the boot ROM's resident loader instead, and labels each access with what reaches it: the services the game calls, the exception vectors, the loader's own start-up or one of its device drivers.
+- With `--loader` it analyses the boot ROM's resident loader instead, and labels each access with what reaches it: the services the game calls, the exception vectors, the loader's own start-up or one of its device drivers. `--reach` also prints, for each of the 72 service slots, how many loader functions it reaches by direct calls and tail jumps, how many of those make an indirect call (so may reach more), and the hardware regions those functions access.
 
 The static census cannot see every access; [analysis/hardware-usage.md](analysis/hardware-usage.md) says where it falls short and gives the measurements taken in MAME.
 

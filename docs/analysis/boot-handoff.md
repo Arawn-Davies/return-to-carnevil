@@ -187,13 +187,13 @@ CPU interrupt-line table (0x800146A0), the GT64010 cause table (0x800146E0), the
 
 ## What `_start` copies: the stub block (confirmed)
 
-`_start` (0x800C4000) sets sp = 0x80800000, clears 0x801A4228 to 0x80800000 byte by byte, and
-copies 0x240 bytes (144 words) from 0xA0000000 to 0xA00C408C, that is physical 0x000 to 0x23F
-to the zeroed block 0x800C408C to 0x800C42CC (end exclusive), through KSEG1. The source is
-the loader's slot table: at entry the first 0x240 bytes of RAM equal the loader's ROM image byte for byte, and
-not the POST program's. The copy therefore holds 72 `j` instructions into the resident loader
-plus their `nop`s. Because `j` keeps the upper 4 address bits, each copied slot still jumps to
-the loader's routine at 0x8000xxxx.
+`_start` (0x800C4000) sets sp = 0x80800000, clears 0x801A4228 to 0x80800000 byte by byte,
+and copies 0x240 bytes (144 words) from 0xA0000000 to 0xA00C408C, that is physical 0x000 to
+0x23F to the zeroed block 0x800C408C to 0x800C42CC (end exclusive), through KSEG1. The
+source is the loader's slot table: at entry the first 0x240 bytes of RAM equal the loader's
+ROM image byte for byte, and not the POST program's. The copy therefore holds 72 `j`
+instructions into the resident loader plus their `nop`s. Because `j` keeps the upper 4
+address bits, each copied slot still jumps to the loader's routine at 0x8000xxxx.
 
 So the 29 call targets in the block are not code of their own: each is a slot, and calling
 it calls a routine of the RAM-resident loader. The block also holds copies of the 4
@@ -310,16 +310,16 @@ Hit Writeback Invalidate, Hit Writeback) in its memory-fill and flush routines a
 ## Decisions for the runtime (recommendations)
 
 1. **Native stand-ins for the whole slot table, not an interpreted loader.** Every call from
-   GAME.EXE into the loader goes through the 29 slots of the stub block (plus break 0x409 and
-   0x407, plus the reset jump). The runtime should fill 0x800C408C to 0x800C42CC (end
-   exclusive) itself and bind each slot to a native routine: the file calls (open, close, read, write, ioctl, lseek,
-   isatty) to the host's game-data files and device emulation; the PCI calls to the Voodoo
-   emulation or its replacement; the cache call to a no-op; the disk partition and raw IDE
-   calls to a disk image reader; the handler-registration calls to the runtime's own interrupt
-   and exception dispatch; slot 0x1A8 to a pointer to 4 zero words. Evidence: the slot list
-   above, MAME-confirmed. Sure: high for the mechanism and the call list; medium for the
-   meaning of the slots marked unconfirmed, which need reading before their stand-ins are
-   written.
+   GAME.EXE into the loader goes through the 29 slots of the stub block (plus break 0x409
+   and 0x407, plus the reset jump). The runtime should fill 0x800C408C to 0x800C42CC (end
+   exclusive) itself and bind each slot to a native routine: the file calls (open, close,
+   read, write, ioctl, lseek, isatty) to the host's game-data files and device emulation;
+   the PCI calls to the Voodoo emulation or its replacement; the cache call to a no-op; the
+   disk partition and raw IDE calls to a disk image reader; the handler-registration calls
+   to the runtime's own interrupt and exception dispatch; slot 0x1A8 to a pointer to 4 zero
+   words. Evidence: the slot list above, MAME-confirmed. Sure: high for the mechanism and
+   the call list; medium for the meaning of the slots marked unconfirmed, which need reading
+   before their stand-ins are written.
 2. **Loader file-system semantics need a second look before the stand-ins are written:**
    0x038, 0x190, 0x1B8, 0x1C0 and 0x1D8. Running the loader's code under the interpreter instead
    would need its 89 KB image, its BSS state and the IDE and GT64010 hardware behind it, so it
@@ -339,13 +339,14 @@ Hit Writeback Invalidate, Hit Writeback) in its memory-fill and flush routines a
    (0x80000000 to 0x80015C40, from ROM 0xBFC00F20) and its live BSS state must be loaded too.
    Sure: high (static scan of reached code for constant addresses below 0x800C4000, MAME dump).
 5. **Start state:** sp, FCSR and the cleared BSS are set by `_start` before use, so their
-   values in `boot_state.toml` matter only for the first instructions; gp is unused. Status is
-   not set by `_start`: GAME.EXE's reached code has no `mtc0`, so it runs with the loader's
-   Status (0x30010401, FR clear) apart from what loader services change. Sure: high (read,
-   `_start` 0x800C4000 to 0x800C4088; static census of reached code in `functions.md`). The loader leaves IE set with IP2 unmasked, so on the board an early IP2
+   values in `boot_state.toml` matter only for the first instructions; gp is unused. Status
+   is not set by `_start`: GAME.EXE's reached code has no `mtc0`, so it runs with the
+   loader's Status (0x30010401, FR clear) apart from what loader services change. Sure: high
+   (read, `_start` 0x800C4000 to 0x800C4088; static census of reached code in
+   `functions.md`). The loader leaves IE set with IP2 unmasked, so on the board an early IP2
    interrupt would reach the loader's default handler; the runtime should simply not deliver
-   interrupts until `main` has registered its handlers. Sure: medium (a design choice, not an
-   observation).
+   interrupts until `main` has registered its handlers. Sure: medium (a design choice, not
+   an observation).
 6. **Skipping DIAG.EXE loses nothing.** On a normal boot DIAG.EXE does not run (confirmed), so
    GAME.EXE cannot depend on it. On the Test Switch path the loader resets its handler tables
    and takes new argument words on every load, and GAME.EXE ignores its argument block anyway,

@@ -480,14 +480,15 @@ class Cop1X(DecodeBase):
 
 class Reserved(DecodeBase):
     def test_unassigned_primary_opcodes(self):
-        for op in (0x12, 0x1C, 0x1D, 0x1E, 0x1F, 0x32, 0x36, 0x3A, 0x3B, 0x3E):
+        for op in (0x1C, 0x1D, 0x1E, 0x1F, 0x3B):
             with self.subTest(op=op):
                 self.check(enc_i(op, 1, 2, 3), "unknown", "unknown")
 
-    def test_cop2_cop3_family(self):
-        # COP2 (0x12), LWC2/SWC2/LDC2/SDC2, and the old COP3 slot other than COP1X
-        for op in (0x12, 0x32, 0x3A, 0x36, 0x3E):
-            self.check(enc_i(op, 0, 0, 0), "unknown", "unknown")
+    def test_cop2_family(self):
+        # COP2 (0x12) and its loads and stores LWC2, LDC2, SWC2, SDC2: no COP2 on the R5000
+        for op in (0x12, 0x32, 0x36, 0x3A, 0x3E):
+            with self.subTest(op=op):
+                self.check(enc_i(op, 1, 2, 3), "unknown", "unknown")
 
     def test_unassigned_special_functs(self):
         for funct in (0x05, 0x0E, 0x15, 0x28, 0x29, 0x35, 0x37, 0x39, 0x3D):
@@ -498,6 +499,17 @@ class Reserved(DecodeBase):
         for rt in (4, 5, 6, 7, 13, 15, 20, 21, 31):
             with self.subTest(rt=rt):
                 self.check(enc_i(0x01, 1, rt, 0), "unknown", "unknown")
+
+    def test_special_must_be_zero_fields(self):
+        # Every SPECIAL instruction with a must-be-zero mask: zero fields decode, and each
+        # field of the mask set on its own makes the word unknown.
+        fields = (0x03E00000, 0x001F0000, 0x0000F800, 0x000007C0)  # rs, rt, rd, sa
+        for funct, (name, kind, mask) in mips._SPECIAL.items():
+            with self.subTest(name=name):
+                self.check(funct, name, kind)
+                for f in fields:
+                    if mask & f:
+                        self.check(funct | (f & 0x00210840), "unknown", "unknown")
 
     def test_nonzero_reserved_fields(self):
         self.check(enc_r(0, 1, 0, 0, 0, 0x08) | (3 << 16), "unknown", "unknown")  # jr, rt != 0
@@ -604,9 +616,12 @@ class GameExeTests(unittest.TestCase):
         with redirect_stdout(buf):
             rc = cli.main(["census", work_path("part0_files", "GAME.EXE")])
         self.assertEqual(rc, 0)
-        out = buf.getvalue()
-        self.assertIn("unknown", out)
-        self.assertIn("lw", out)
+        lines = buf.getvalue().splitlines()
+        image = exe.load_exe(work_path("part0_files", "GAME.EXE"))
+        counts = mips.census(image, image.load_addr, image.end_addr() & ~3)
+        for name in ("lw", "lwc1", "unknown"):
+            self.assertIn("  %s %d" % (name, counts[name]), lines)
+        self.assertIn("unknown words: %d" % counts["unknown"], lines)
 
     def test_cli_census_missing_file(self):
         err = io.StringIO()

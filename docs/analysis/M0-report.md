@@ -57,8 +57,8 @@ Every fact below carries its basis:
   K0 = 3 is read from the reset stub, since MAME does not expose Config. `_start` sets sp and
   FCSR (0x01000000) itself. It does **not** set Status: the game's reached code has no `mtc0`
   at all, so it runs with the Status the loader left (static, read). The text does hold four
-  unreferenced Status helpers in unreached code (see the open questions). The game reads nothing in RAM below its image except `_start`'s copy of the slot
-  table (static, MAME).
+  unreferenced Status helpers in unreached code (see the open questions). The game reads
+  nothing in RAM below its image except `_start`'s copy of the slot table (static, MAME).
 - Interrupt handlers the game registers through the loader (static; all logged in MAME): CPU
   line 0 = VBLANK (IP6) 0x800C6030, line 3 = IOASIC (IP3) 0x8013F678, GT64010 cause bits 1 to
   4 (bit 4 DMA0 complete), FPU causes 3 and 5 (0x80150860 emulates the trapped instruction
@@ -160,17 +160,19 @@ These are options with a recommendation each, not decisions already taken.
   Voodoo, `cmos:` as a 32 KB byte store, the ioctl sets, the handler registrations into the
   runtime's own interrupt and exception dispatch, `break 0x409`/`0x407` and the `break 7`/`6`
   hooks.
-  - **(a2) Stand-ins plus individual slots interpreted**: as (a), but a slot whose meaning is
-    not yet read (0x038, 0x190, 0x1B8, 0x1C0, 0x1D8) runs the loader's own routine under the
-    interpreter. The interpreter then needs the loader image (from the user's `boot.u32`) and
-    the loader state that routine reads, and the hardware it reaches. By direct calls (static,
-    `hwcensus` loader analysis): 0x038, 0x190, 0x1B8 and 0x1C0 each reach 46 to 57 loader
-    functions, the IDE task file and bus-master DMA, the IOASIC and the LEDs, with 3 of those
-    functions making indirect calls (the driver table); 0x1D8 reaches 5 functions and no
-    hardware. So for the four file-system slots the interpreter would need IDE emulation and
-    the loader's file-system and descriptor state kept consistent with whatever the native
-    file stand-ins do, which they would not maintain on their own. For 0x1D8 the cost is only
-    the loader state it reads, which was not traced.
+  - **(a2) Stand-ins plus individual slots interpreted**: as (a), but a slot whose meaning
+    is not yet read (0x038, 0x190, 0x1B8, 0x1C0, 0x1D8) runs the loader's own routine under
+    the interpreter. The interpreter then needs the loader image (from the user's
+    `boot.u32`) and the loader state that routine reads, and the hardware it reaches. By
+    direct calls (static, printed per slot by `python3 -m carnevil_tools hwcensus --loader
+    <boot.u32> --reach`): 0x038, 0x190, 0x1B8 and 0x1C0 each reach 46 to 57 loader
+    functions, the IDE task file, alternate status and bus-master DMA, the IOASIC, the ASIC
+    reset register and the LEDs, with 3 of those functions making indirect calls (the driver
+    table); 0x1D8 reaches 5 functions and no hardware. So for the four file-system slots the
+    interpreter would need IDE emulation and the loader's file-system and descriptor state
+    kept consistent with whatever the native file stand-ins do, which they would not
+    maintain on their own. For 0x1D8 the cost is only the loader state it reads, which was
+    not traced.
 - **(b) Recompile the loader too** and emulate the hardware beneath it at register level:
   IDE, GT64010 (timers, cause/mask, DMA, PCI), IOASIC (sound latches, inputs, UART, interrupt
   control), CMOS with its write enable, the CS3 control registers.
@@ -196,11 +198,11 @@ Weighed against the measurements:
   and the frame layout the FPU-emulation handler 0x80150860 reads (Cause +0x180, EPC +0x110,
   FPRs +0x218, FCSR +0x31C). No COP0 emulation is needed for the game's reached code, which
   has no COP0 moves; the four unreferenced Status helpers would need Status emulated if they
-  turn out to be reached (open questions). Under (b)
-  the recompiled vector code runs, so the runtime must emulate COP0 (Status, Cause, EPC,
-  `eret`), the GT64010 cause register and the IOASIC interrupt registers, and the loader's
-  debug monitor for `break`. Under (c) every VBLANK and IOASIC interrupt runs interpreted
-  loader code.
+  turn out to be reached (open questions). Under (b) the recompiled vector code runs, so the
+  runtime must emulate COP0 (Status, Cause, EPC, `eret`), including the `break` exception path
+  into the loader's debug monitor (the monitor itself is recompiled with the rest of the
+  loader), the GT64010 cause register and the IOASIC interrupt registers. Under (c) every
+  VBLANK and IOASIC interrupt runs interpreted loader code.
 - (b) and (c) also need the loader's state at entry: its image is in the user's boot ROM,
   but its BSS (the `loader_data` ranges in `boot_state.toml`) comes from a MAME dump, or from
   running the loader's start-up, which drives the PIC and the disk.
@@ -285,18 +287,19 @@ From `config/boot_state.toml`:
 
 - Registers: pc 0x800C4000 and Status 0x30010401 matter for the whole run (FR = 0; the
   game's reached code never writes Status). sp and FCSR matter only until `_start` sets them;
-  gp is unused; ra 0x8000EBE8 matters only if `main` returns (the loader would then report it and stop).
+  gp is unused; ra 0x8000EBE8 matters only if `main` returns (the loader would then report it
+  and stop).
 - The stub block: the runtime either places the loader's 576-byte slot table (from the user's
   `boot.u32`, ROM 0xBFC00F20) at physical 0 so that `_start`'s copy is faithful, or binds the
   slots at recompile time and lets `_start` copy whatever is there. With (a) of decision 1 the
   bytes are never executed.
 - Slot 0x1A8 returns the address of 4 zero words; `main` ignores it.
 - The CMOS bytes at 0xB6100000, seeded from a NVRAM file or blank, and the three `pic:` words
-  (stored by the loader at 0x800B8650, 0x800B8398, 0x800B867C; their values are in the run 1
-  RAM dump and were not recorded).
-- Nothing else in low RAM for option (a). For (a2): the loader image and the state of each
-  interpreted slot's routines. For (b) or (c): the loader's image and every
-  `loader_data` range in `boot_state.toml`, and the exception vectors.
+  (stored by the loader at 0x800B8650, 0x800B8398, 0x800B867C, read; their values should be
+  in the run 1 RAM dump, inferred, and were not recorded).
+- Nothing else in low RAM for option (a) (static). For (a2): the loader image and the state of
+  each interpreted slot's routines (inferred). For (b) or (c): the loader's image and every
+  `loader_data` range in `boot_state.toml`, and the exception vectors (inferred).
 
 ## Open questions and risks carried into M1
 
@@ -342,15 +345,16 @@ From `config/boot_state.toml`:
 ## How the findings were checked
 
 Static numbers come from the Python tools in `carnevil_tools/`, which have unit tests on
-synthetic fixtures and checks against the real files (TESTCOUNT tests). MAME numbers come from
-the Lua scripts in `tools/mame/` (command lines in its README), run under MAME 0.276 in the Linux container,
-the oracle: they set breakpoints and logged registers (boot hand-off, registrations,
+synthetic fixtures and checks against the real files (201 tests). MAME numbers come
+from the Lua scripts in `tools/mame/` (command lines in its README), run under MAME 0.276 on
+the Linux container, the oracle: they set breakpoints and logged registers (boot hand-off, registrations,
 callbacks), dumped RAM at the hand-off, and tapped the Voodoo and every other hardware range
-with PC attribution (`-nodrc` for exact PCs). Each task's result was reviewed independently, the reviewer
-re-running the numbers. Twice the dynamic check overturned a static conclusion: the RAM image
-at the hand-off differed from the extracted `GAME.EXE` in its last 556 bytes, which exposed the
-contiguous-block extraction bug; and the hardware tap showed the game reading the CMOS
-directly 252,532 times, where the static census had found no CMOS access by the game.
+with PC attribution (`-nodrc` for exact PCs). Each task's result was reviewed independently,
+the reviewer re-running the numbers. Twice the dynamic check overturned a static conclusion:
+the RAM image at the hand-off differed from the extracted `GAME.EXE` in its last 556 bytes,
+which exposed the contiguous-block extraction bug; and the hardware tap showed the game
+reading the CMOS directly 252,532 times, where the static census had found no CMOS access by
+the game.
 
 ## Still to record
 
