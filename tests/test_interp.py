@@ -1,0 +1,175 @@
+"""The reference interpreter (runtime/interp) against MAME's recorded results, and the
+contract of runtime/include/recomp.h that the harness exercises: memory routing, calls,
+FCSR and the host FP environment."""
+import os
+import struct
+import unittest
+
+from carnevil_tools import vectors
+from tests import charness
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+RECORDED = os.path.join(REPO, "tests", "vectors", "insn.json")
+
+A = vectors.assemble
+NOP = 0
+JR_RA = A("jr", rs=31)
+T0, T1, T2, T3, V0 = 8, 9, 10, 11, 2
+
+
+def _f32(value):
+    return struct.unpack("<I", struct.pack("<f", value))[0]
+
+
+def _case(name, *words, r=None, fpr=None, fcsr=0, mem=None):
+    """A case program at CODE_BASE ending in jr ra; nop, with all-zero state by default."""
+    regs = [0] * 32
+    regs[31] = vectors.RA
+    for reg, value in (r or {}).items():
+        regs[reg] = value
+    fp = [0] * 32
+    for reg, value in (fpr or {}).items():
+        fp[reg] = value
+    state = vectors.State(regs, 0, 0, fp, fcsr, dict(mem or {}))
+    return vectors.Case(name, list(words) + [JR_RA, NOP], state)
+
+
+def first_difference(want, got):
+    """The first field in which two states differ, as text, or None."""
+    for i, (u, v) in enumerate(zip(want.r, got.r)):
+        if u != v:
+            return f"r[{i}]: want {u:08X} got {v:08X}"
+    for name in ("hi", "lo"):
+        u, v = getattr(want, name), getattr(got, name)
+        if u != v:
+            return f"{name}: want {u:08X} got {v:08X}"
+    for i, (u, v) in enumerate(zip(want.fpr, got.fpr)):
+        if u != v:
+            return f"fpr[{i}]: want {u:08X} got {v:08X}"
+    if want.fcsr != got.fcsr:
+        return f"fcsr: want {want.fcsr:08X} got {got.fcsr:08X}"
+    for addr in sorted(set(want.mem) | set(got.mem)):
+        u, v = want.mem.get(addr, 0), got.mem.get(addr, 0)
+        if u != v:
+            return f"mem[{addr:08X}]: want {u:08X} got {v:08X}"
+    return None
+
+
+class InterpTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.exe = charness.build([])
+        cls.recorded = vectors.load(RECORDED)
+
+    def run_cases(self, cases):
+        return charness.run(self.exe, "interp", cases)
+
+    def run_one(self, case):
+        return self.run_cases([case])[0]
+
+    def assertMatches(self, pairs):
+        results = self.run_cases([case for case, _after in pairs])
+        self.assertEqual(len(results), len(pairs))
+        failures = []
+        for (case, want), got in zip(pairs, results):
+            diff = first_difference(want, got)
+            if diff:
+                failures.append(f"{case.name}: {diff}")
+        self.assertEqual(failures, [], f"{len(failures)} cases differ:\n" + "\n".join(failures))
+
+    def test_interp_matches_mame_vectors(self):
+        self.assertEqual(len(self.recorded), 1320)
+        self.assertMatches(self.recorded)
+
+    def test_division_edges_do_not_trap(self):
+        # The harness is always the sanitizer build: a trap or a UB report fails the run.
+        edges = [(c, a) for c, a in self.recorded
+                 if c.name.startswith(("div.edge.", "divu.edge."))
+                 and (c.name.endswith(".00000000") or c.name == "div.edge.80000000.FFFFFFFF")]
+        self.assertEqual(len(edges), 10)  # by zero; INT_MIN / -1 has no MAME vector
+        self.assertMatches(edges)
+        int_min, = [c for c in vectors.cases(1) if c.name == "div.edge.80000000.FFFFFFFF"]
+        got = self.run_one(int_min)
+        self.assertEqual((got.lo, got.hi), (0x80000000, 0))
+        self.assertEqual(got.calls, [])
+
+    def test_load_outside_ram_goes_to_the_bus(self):
+        got = self.run_one(_case(
+            "bus", A("lui", rt=T0, imm=0xA800), A("lw", rt=T1, rs=T0, imm=0),
+            A("lw", rt=T2, rs=0, imm=0x10), A("lui", rt=T3, imm=0xB610),
+            A("sw", rt=T1, rs=T3, imm=0)))
+        bus = charness.BUS_READ_VALUE
+        self.assertEqual(got.calls, [("bus_read", 0xA8000000, 4), ("bus_read", 0x00000010, 4),
+                                     ("bus_write", 0xB6100000, 4, bus)])
+        self.assertEqual((got.r[T1], got.r[T2]), (bus, bus))
+
+    def test_ram_aliases(self):
+        got = self.run_one(_case(
+            "alias", A("lui", rt=T0, imm=0xA020), A("sw", rt=T1, rs=T0, imm=0),
+            A("lui", rt=T2, imm=0x8020), A("lw", rt=T3, rs=T2, imm=0),
+            r={T1: 0x12345678}))
+        self.assertEqual(got.calls, [])
+        self.assertEqual(got.r[T3], 0x12345678)
+        self.assertEqual(got.mem, {vectors.SCRATCH: 0x12345678})
+
+    def test_access_straddling_the_end_of_ram(self):
+        got = self.run_one(_case(
+            "straddle", A("lui", rt=T0, imm=0x8080), A("lw", rt=T1, rs=T0, imm=-2),
+            A("lhu", rt=T2, rs=T0, imm=-2)))
+        # the word does not fit below the end of RAM; the halfword at the same address does
+        self.assertEqual(got.calls, [("bus_read", 0x807FFFFE, 4)])
+        self.assertEqual(got.r[T2], 0)
+
+    def test_call_to_unrecompiled_address_is_interpreted_and_logged(self):
+        callee = vectors.CODE_BASE + 0x40
+        words = [A("jal", target=callee), NOP, A("jal", target=callee), NOP, JR_RA, NOP]
+        words += [NOP] * (0x40 // 4 - len(words))
+        words += [A("addiu", rt=V0, rs=V0, imm=1)]  # callee: v0 += 1; jr ra; nop
+        got = self.run_one(_case("calls", *words, r={V0: 5}))
+        self.assertEqual(got.r[V0], 7)
+        self.assertEqual(got.unrecompiled, [vectors.CODE_BASE, callee])
+        self.assertEqual(got.calls, [])
+
+    def test_unsupported_instruction_stops_with_its_address(self):
+        with self.assertRaises(charness.HarnessError) as err:
+            self.run_one(_case("unsupported", NOP, 0x7C000000))
+        self.assertIn("7C000000", str(err.exception))
+        self.assertIn("80100004", str(err.exception))
+
+    def test_break_calls_rt_break_and_continues(self):
+        got = self.run_one(_case("break", 0x0007000D, A("ori", rt=T0, imm=1)))
+        self.assertEqual(got.calls, [("break", vectors.CODE_BASE, 0x1C00)])
+        self.assertEqual(got.r[T0], 1)
+
+    def test_fcsr_round_trip_and_rounding(self):
+        written = 0x00800001 | 1 << 26 | 0x7C  # cc0, cc3, flags, rounding mode 1 (to zero)
+
+        def program(name, fcsr):
+            return _case(
+                name, A("ctc1", rt=T0, fs=31), A("cvt.s.w", fd=0, fs=2),
+                A("cvt.s.w", fd=1, fs=3), A("cfc1", rt=T1, fs=31),
+                r={T0: fcsr}, fpr={2: 0x01000001, 3: 0x01000003})
+
+        to_zero, nearest = self.run_cases([program("rz", written), program("rn", 0)])
+        self.assertEqual((to_zero.fcsr, to_zero.r[T1]), (written, written))
+        self.assertEqual(to_zero.fpr[0], _f32(16777216.0))
+        self.assertEqual(to_zero.fpr[1], _f32(16777218.0))  # toward zero
+        self.assertEqual(nearest.fpr[1], _f32(16777220.0))  # nearest even, the case after
+
+    def test_flush_to_zero(self):
+        tiny = 57 << 23  # 2^-70: the exact product 2^-140 is denormal
+        product = A("mul.s", fd=0, fs=2, ft=4)
+
+        def program(name, fcsr):
+            return _case(name, product, fcsr=fcsr, fpr={0: 0xFFFFFFFF, 2: tiny, 4: tiny})
+
+        flushed, denormal, again = self.run_cases(
+            [program("fs", 1 << 24), program("no-fs", 0), program("fs-again", 1 << 24)])
+        self.assertEqual(flushed.fpr[0], 0)
+        self.assertEqual(flushed.fcsr, 1 << 24)
+        self.assertEqual(denormal.fpr[0], 1 << 9)
+        self.assertEqual(again.fpr[0], 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
