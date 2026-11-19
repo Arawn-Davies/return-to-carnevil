@@ -29,8 +29,8 @@ hand (with the `disasm` command), and says where. "Inferred" is labelled as such
   file; only facts (ranges, offsets, names) were taken, no code.
 - `GAME.EXE` (SHA-256 `f9455ce8...d3a6`) with `config/game.functions.toml`; `boot.u32`
   (SHA-256 `05346e09...c4a6`): the loader image is ROM bytes 0xF20 to 0x16B60 at 0x80000000.
-- The MAME run 3 NVRAM of Task 5 (`mame/nvram-carnevil/` on the share). No new MAME run was
-  made for this task (see "Not confirmed").
+- The MAME run 3 NVRAM of Task 5 (`mame/nvram-carnevil/` on the share), and one new MAME run
+  with memory taps on the Voodoo for this task ("Dynamic check: Voodoo accesses").
 
 ## Method
 
@@ -126,9 +126,10 @@ texture bases at 0x801E7574 (base + 0x400000) and 0x801E7570 (base + 0x800000), 
   Texture-unit code (0x80160340, 0x80163864, 0x80163F74, 0x80165124, 0x80165B7C, 0x801661C4,
   0x80166814, 0x80168558), indexed by TMU
 
-Not seen: the triangle set-up registers 0x008 to 0x100 (vertex, start, gradient and the
-triangle commands), nopCMD, fogTable, the fbiInit0/1/2/4 and video timing registers, the
-counters 0x14C to 0x15C. See "Not confirmed".
+Not seen by the static census: the triangle set-up registers 0x008 to 0x080 (vertex, start,
+gradient, triangleCMD), nopCMD, fogTable, most of nccTable, fbiInit0/1/2/4, the video timing
+registers, dacData, maxRgbDelta, trexInit0/1. The MAME run below shows the game writes all of
+them; see "Dynamic check: Voodoo accesses" for the full list and why the census missed them.
 
 **Voodoo LFB** (0x08400000): 45 sites, 16-bit accesses.
 - 0x8015BF58 and 0x8015BF08: fixed-pixel writes and reads with test patterns (0xDEAD,
@@ -281,9 +282,12 @@ for the offset list (one run, no game played).
 **3. Linear frame buffer or command registers only?** Both, plus texture memory. The LFB is
 used: lfbMode is written by 8 functions, the LFB is read and written through its base
 (0x80167390, 0x8016754C) and a memory test writes and reads fixed pixels (0x8015BF58). Texture
-memory is written by 4 texture download functions. Command registers seen: fastfillCMD and
-swapbufferCMD; the triangle commands were not seen (below). Sure: high that the LFB is used
-(constant addresses, MAME's map); medium for how much.
+memory is written by 4 texture download functions. In MAME the game's own code read the LFB
+8,237 times and wrote it 12 times in 85 seconds of attract mode, against 436,973 texture
+memory writes and 20,342 register writes (dynamic check below): in attract mode the LFB is a
+side path and drawing goes through the triangle registers (triangleCMD, nopCMD, fastfillCMD,
+swapbufferCMD). Sure: high that the LFB is used (static and dynamic); medium for how much
+during gameplay, which was not run.
 
 **4. Interrupt sources the game registers handlers for.** Static reading of the calls from
 `main` and 0x800C4D58 gives exactly the registrations run 3 logged (`boot-handoff.md`):
@@ -303,6 +307,93 @@ swapbufferCMD; the triangle commands were not seen (below). Sure: high that the 
 - Correction to `boot-handoff.md`: the loader calls a CPU-line handler with a0 = the Cause IP
   bit (0x100 << n), not (Cause, frame); a1 is not set for it (0x80005100, read). GT64010 and
   exception handlers are as described there. (Not edited in that page by this task.)
+
+## Dynamic check: Voodoo accesses (measured in MAME)
+
+**Run.** MAME 0.276 in the Linux container, `carnevil` (boot ROM 1.9, the `carnevil` CHD), blank NVRAM,
+default DIP switches, no input. It was started with `-video none -sound none -nothrottle
+-seconds_to_run 90` under `timeout 2400`, with the Lua `-autoboot_script`
+`mame/scripts/voodootap.lua`. The script installs a write tap and a read tap on the main
+CPU's program space over physical 0x08000000 to 0x08FFFFFF. For each access it records the
+raw offset, read or write, and whether the PC is inside GAME.EXE (0x800C4000 to 0x801A4224),
+with up to 12 PCs per offset. It writes `mame/voodoo-tap/voodoo-tap.txt` when the machine
+stops. All of it is on the share, not in git.
+- It ran 90.0 emulated seconds (4,891 frames). The first Voodoo access from GAME.EXE came at
+  about 5 emulated seconds, so the game ran for about 85 seconds: its own start-up, then
+  attract mode. No game was played.
+- The taps were removed and reinstalled every 30 frames (163 times), because the GT64010
+  remaps the CPU space when its windows are written. An access made between a remap and the
+  next reinstall would be lost. That is at most half a second per remap; how many remaps
+  happened after the hand-off was not measured.
+- The PCs are what MAME's recompiler reports at the access. They often point at the call
+  site of Glide's register-write helper rather than at the store, so they locate the code,
+  not the instruction.
+
+**Folding.** A register offset is folded to `offset & 0x3FC`, the register number. Bits 10 to
+13 select chips: 0 means all chips, 0x800 TMU0, 0x1000 TMU1, 0x2000 TMU2 (`voodoo.cpp`).
+Chip bits were seen only on textureMode, tLOD and tDetail (0 and 0x800) and on
+trexInit0/trexInit1 (0x800, 0x1000, 0x2000). Neither the alternate register map (bit 21)
+nor the byte-swizzle bit (bit 20) was seen. That rules out the alternate-map guess this page
+made before the run. GAME.EXE made 132 raw write offsets, which fold to 125 registers.
+
+**Writes by GAME.EXE** (20,342 in all). The tag is "static" where the static census also had
+the register and "missed" where it did not. Counts are writes:
+- vertexAx/Ay/Bx/By/Cx/Cy 0x008 to 0x01C: 260 each (missed)
+- startR/G/B/Z/A 0x020 to 0x030: 2 each; startS/T/W 0x034 to 0x03C: 260 each (missed)
+- dRdX/dGdX/dBdX/dZdX/dAdX 0x040 to 0x050: 2 each; dSdX/dTdX/dWdX 0x054 to 0x05C: 260 each
+  (missed)
+- dRdY ... dAdY 0x060 to 0x070: 2 each; dSdY/dTdY/dWdY 0x074 to 0x07C: 260 each (missed)
+- triangleCMD 0x080: 258 (missed)
+- fbzColorPath 6, fogMode 3, alphaMode 3, fbzMode 3,653, lfbMode 7,551, clipLeftRight 5,
+  clipLowYHighY 5 (static)
+- nopCMD 0x120: 269 (missed)
+- fastfillCMD 3, swapbufferCMD 108, fogColor 2, zaColor 3,646, chromaKey 2, stipple 2,
+  color0 4, color1 260 (static)
+- fogTable[0] to [31], 0x160 to 0x1DC: 2 each (missed)
+- fbiInit4 6, vRetrace 1, backPorch 2, videoDimensions 2, fbiInit0 17, fbiInit1 25, fbiInit2
+  22, fbiInit3 6, hSync 2, vSync 2 (missed). vRetrace is a read-only register in MAME's
+  table; the write is recorded as made.
+- clutData 33 (static), dacData 31, maxRgbDelta 2 (missed)
+- textureMode 114, tLOD 114, tDetail 3, texBaseAddr 116, texBaseAddr_1/_2/_3_8 2 each
+  (static)
+- trexInit0 5, trexInit1 11 (missed)
+- nccTable[0] to [23], 0x324 to 0x380: 2 each. The static census had nccTable[4] only.
+
+Not written: the float triangle path 0x088 to 0x100 (fvertex*, fstart*, fd*, ftriangleCMD)
+and the counters 0x14C to 0x15C. Attract mode uses the fixed-point triangle path only.
+
+**Reads by GAME.EXE** (568,262 in all; 16 registers):
+- vdstatus: 568,150 reads, the busy-wait (static)
+- fbzColorPath, fogMode, alphaMode, fbzMode, lfbMode, clipLeftRight, clipLowYHighY, stipple,
+  color0, color1: 1 read each, near 0x80161AE4 (static)
+- fbiInit4 5, fbiInit0 22, fbiInit1 30, fbiInit2 36 (missed); fbiInit3 9 (static)
+
+**Frame buffer and texture memory**, GAME.EXE only: LFB 8,237 reads and 12 writes (PCs near
+0x8015B250 to 0x8015DB10 and 0x8015C074 to 0x8015C220); texture memory 436,973 writes, no
+reads (0x8015B82C to 0x8015B85C, 0x80163864, 0x80163F74, the computed-jump copy routines
+around 0x801644F4, and 0x80169134 to 0x8016932C).
+
+**Code outside GAME.EXE** touched the Voodoo before the hand-off: 1,916 swapbufferCMD,
+178 each of textureMode, tLOD and texBaseAddr, 1 trexInit1 write, 45,330 vdstatus reads and
+399,314 texture writes. That is the boot ROM's POST program. No loader routine called on the
+game's behalf touches the Voodoo; slot 0x110 only maps it, through PCI configuration.
+
+**Reconciliation.** Every register the static census listed was seen in the run, so it gave
+no false positives. It missed 101 of the 125 written registers and 4 of the 16 read ones.
+All of the missed accesses go through Glide's one-instruction access helpers: 0x8015DB04
+stores a1 at a0, and 0x8015DB0C loads from a0. Their callers pass "base + register offset" in
+a0, for example 0x8015B1B0 (triangles), 0x801579F8 (register reset: every register once) and
+0x80157454 (board initialisation), with the base in a saved register that came in as an
+argument. What stopped the propagation:
+- the helper's a0 differs on every call, so the "all callers agree" rule gives it no entry
+  value, and the store inside it has no known base;
+- at the call sites, the base was itself a caller's argument that callers do not agree on, or
+  agree on only through a pointer whose holder is a table entry.
+
+A context-sensitive step would recover most of them: count a call to a function that only
+stores or loads through its incoming a0 as an access at the call site, at the caller's a0.
+The census does not do that yet, and the static lists above are left as measured. The
+recommendation is to take the Voodoo register list from this run.
 
 ## Constants that are not addresses
 
@@ -340,8 +431,10 @@ dereferenced there.
    medium until the 0x69xx/0x73xx/0x74xx semantics are read.
 2. **Emulate directly what GAME.EXE touches itself:** the Voodoo (registers, LFB, texture
    memory at 0x08000000), the gun registers, the sound FIFO at 0x13000000, the IOASIC
-   SOUNDSTAT write, the ASIC reset/flash register, and the reset vector. Sure: high for these
-   being touched; the Voodoo register set is incomplete (below).
+   SOUNDSTAT write, the ASIC reset/flash register, and the reset vector. For the Voodoo, take
+   the register list from the dynamic check (125 registers written, 16 read), not from the
+   static census alone. Sure: high for these being touched; medium for completeness of the
+   Voodoo list, since gameplay was not run.
 3. **Interrupts to deliver:** VBLANK as CPU line 0, the IOASIC summary as line 3, GT64010
    DMA0 completion (and the three error causes) through the GT64010 handler table, the FPU
    and exception handlers through the loader's frame layout. The loader's default IP2 path
@@ -353,15 +446,11 @@ dereferenced there.
 
 ## Not confirmed
 
-- **The Voodoo triangle path.** No write to the triangle set-up registers (0x008 to 0x100,
-  including triangleCMD/ftriangleCMD) was found, statically or by a search of all stores
-  with those offsets on non-stack bases. Glide must reach them through bases the census does
-  not follow (a pointer carried in a register from a table entry, or the alternate register
-  map at base + 0x200000: fbiInit3 is read in 0x8015C45C and the GC word at 0x801E75B4 is
-  set to 0x00200000 in 0x80162B50; inferred). A dynamic check is needed before the
-  runtime's Voodoo register list is final: a MAME write watchpoint over 0x08000000 to
-  0x083FFFFF for a few seconds of attract mode, logging PC and offset. Not done here: this
-  session had no shell in the Linux container.
+- **Voodoo registers used only during gameplay.** The dynamic check covered boot and attract
+  mode only, with no coin or input. Registers only gameplay uses (for example the float
+  triangle path 0x088 to 0x100, fogColor changes, other chromaKey or alpha settings) would
+  be missing from its list. Gameplay can't be reached without input in a headless run; a
+  run with scripted coin and start inputs would close this.
 - The IOASIC unlock (MAME: write 0xE2 to bus word 0) is not in the loader or GAME.EXE. MAME
   run 2 read the DIP switches at bus word 3, which is the unlocked order, so it happened
   earlier, presumably in the POST program (not analysed).
