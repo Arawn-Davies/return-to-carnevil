@@ -131,3 +131,14 @@ The design above is kept as written; these are the assumptions M0 showed wrong o
 - Exception vectors and interrupt delivery (section 3): the vectors and dispatcher are the loader's; GAME.EXE only registers handlers.
 - Code outside GAME.EXE: the game calls the RAM copy of the loader, not the ROM (except the reset vector).
 - MAME baseline fps on the PS4 (M0): still to be recorded.
+
+## Corrections from M1 planning (2026-11-19)
+
+Decisions taken when M1 was planned. The M1 plan (`docs/superpowers/plans/2026-11-19-carnevil-recomp-m1.md`, "Decisions this plan takes") gives the reasons.
+
+- Recompiler (section 3): not a fork of N64Recomp. It is a Python emitter built on M0's decoder and function analysis. N64Recomp (commit `598ce20`) rejects the MIPS IV instructions the game uses, hard-codes big-endian, keeps a single function-local FP condition bit, takes no jump tables from outside and has no interrupt check points. Its output shape (one C function per MIPS function over a register context) is kept and credited.
+- Loader services: native stand-ins (M0 report, decision 1, option a), with the interpreter as the fallback for individual slots.
+- Hardware traffic: caught at memory-access level (M0 report, decision 2, option b).
+- General registers are 32 bits wide in the port: reached code has no 64-bit integer instruction.
+- Interrupts (section 3): delivered by the runtime calling the handlers the game registered, at the check points the recompiler inserts. No recompiled exception vector and no COP0 emulation for reached code.
+- Unit tests (section 5): instruction semantics are checked against vectors recorded from MAME's R5000 core, as well as against the reference interpreter.

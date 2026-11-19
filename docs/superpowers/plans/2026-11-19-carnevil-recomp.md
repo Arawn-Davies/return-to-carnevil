@@ -260,6 +260,7 @@ Inserted by the controller after Task 5 found a load-bearing defect in Task 1's 
 ## M1–M7 outlines (each planned in detail when reached)
 
 ### M1: Recompiler emits C for all of `GAME.EXE`
+- **Planned in detail in [2026-11-19-carnevil-recomp-m1.md](2026-11-19-carnevil-recomp-m1.md).** That plan replaces this outline: the recompiler is a Python emitter on M0's analysis, not an N64Recomp fork, and it is checked against MAME vectors and replayed game functions.
 - Fork N64Recomp into `recomp/` (vendored, MIT, history noted). Add: little-endian memory access, a flat-image loader fed by `config/game.functions.toml` instead of an ELF, the MIPS IV instructions listed in `docs/analysis/opcode-census.md`, FP condition codes 0–7, the FR mode from `boot_state.toml`, interrupt check points at function entries and loop back-edges, jump tables as `switch`.
 - Reference interpreter `runtime/interp/` (C): the same instruction semantics, used for unrecompiled code and as the test oracle.
 - Tests: per-instruction semantic tests comparing recompiled C against the interpreter on random register states (every mnemonic in the census); a whole-image test that the generated C for all functions compiles and links against a stub runtime.
