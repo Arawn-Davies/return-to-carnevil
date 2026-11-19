@@ -2,8 +2,9 @@
 import argparse
 import os
 import sys
+import tomllib
 
-from carnevil_tools import disk, exe, functions, mips
+from carnevil_tools import disk, exe, functions, hwcensus, mips
 
 DEFAULT_WORK = "/Volumes/archive/reincarnevilation/work"
 
@@ -136,6 +137,73 @@ def _disasm(path, base, start, count):
     return 0
 
 
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+GAME_FUNCTIONS = os.path.join(REPO, "config", "game.functions.toml")
+BOOT_STATE = os.path.join(REPO, "config", "boot_state.toml")
+
+
+def _print_hwcensus(accesses, reach=None):
+    """Per region: sites and addresses, each address with reads, writes and functions."""
+    regions = {}
+    for a in accesses:
+        name = hwcensus.classify(a.addr)
+        if name in ("ram", "unknown") or not hwcensus.is_kseg01(a.addr):
+            continue
+        regions.setdefault(name, {}).setdefault(hwcensus.physical(a.addr), []).append(a)
+    for name in sorted(regions, key=lambda n: min(regions[n])):
+        regs = regions[name]
+        sites = [a for lst in regs.values() for a in lst]
+        via = sum(a.via is not None for a in sites)
+        print(f"{name}: {len(sites)} sites ({via} through a base held in memory), "
+              f"{len(regs)} addresses")
+        for addr in sorted(regs):
+            lst = regs[addr]
+            ops = {op: sum(a.op == op for a in lst) for op in ("read", "write", "cache")}
+            funcs = sorted({a.function for a in lst})
+            line = (f"  0x{addr:08X} {hwcensus.register_name(addr | 0xA0000000)}: "
+                    f"r{ops['read']} w{ops['write']}")
+            if ops["cache"]:
+                line += f" cache{ops['cache']}"
+            if any(a.indexed for a in lst):
+                line += " (indexed)"
+            line += f", {len(funcs)} functions: {_hex_list(funcs[:6])}"
+            if len(funcs) > 6:
+                line += " ..."
+            if reach is not None:
+                labels = sorted(set().union(*(reach.get(f, set()) for f in funcs)))
+                line += f" [{' '.join(labels) or 'unreached by direct calls'}]"
+            print(line)
+
+
+def _hwcensus(path, loader):
+    if loader is not None:
+        if not os.path.isfile(loader):
+            return _missing(loader)
+        try:
+            image = hwcensus.loader_image(loader)
+        except exe.UnknownRevisionError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        analysis, _notes = hwcensus.analyse_loader(image)
+        with open(BOOT_STATE, "rb") as f:
+            calls = tomllib.load(f)["external_call"]
+        game_slots = sorted({c["slot"] for c in calls if "slot" in c})
+        reach = hwcensus.loader_reach(image, analysis, game_slots)
+        print(f"loader 0x{image.load_addr:08X}-0x{image.end_addr():08X}, "
+              f"{len(analysis.functions)} functions; {len(game_slots)} slots called by GAME.EXE")
+        _print_hwcensus(hwcensus.all_accesses(hwcensus.census(image, analysis)), reach)
+        return 0
+    image, status = _load(path)
+    if image is None:
+        return status
+    analysis = functions.read_toml(GAME_FUNCTIONS)
+    print(f"{os.path.basename(path)} 0x{image.load_addr:08X}-0x{image.end_addr():08X}, "
+          f"{len(analysis.functions)} functions (config/game.functions.toml)")
+    c = hwcensus.census(image, analysis, hwcensus.GAME_RETURNS)
+    _print_hwcensus(hwcensus.all_accesses(c))
+    return 0
+
+
 def _verify(partition):
     """Check a partition's files against the game's own FILESYS.CHK table."""
     if not os.path.isfile(partition):
@@ -174,8 +242,16 @@ def main(argv=None):
                         help="address of the file's first byte")
     disasm.add_argument("--start", required=True, type=lambda s: int(s, 0), metavar="ADDR")
     disasm.add_argument("--count", required=True, type=int, metavar="N")
+    hwc = sub.add_parser("hwcensus", help="hardware registers the code of an image touches")
+    hwc.add_argument("exe", nargs="?", help="GAME.EXE (uses config/game.functions.toml)")
+    hwc.add_argument("--loader", metavar="BOOT_U32",
+                     help="census the boot ROM's resident loader instead")
     args = parser.parse_args(argv)
 
+    if args.command == "hwcensus":
+        if (args.exe is None) == (args.loader is None):
+            parser.error("hwcensus takes an EXE or --loader <boot.u32>, not both")
+        return _hwcensus(args.exe, args.loader)
     if args.command == "disasm":
         return _disasm(args.file, args.base, args.start, args.count)
     if args.command == "verify":
