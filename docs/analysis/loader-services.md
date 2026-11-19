@@ -198,7 +198,7 @@ runtime with the status in a0.**
 - The game calls it twice (0x801570F8, 0x801571D8) and keeps the base at 0x801E5DE0
   (`hardware-usage.md`). **Stand-in: return 0xA8000000 and the Voodoo's device number for
   index 0 and the 3dfx vendor ID; return 0 and 10 otherwise.** Which device number the Voodoo
-  has on the board was not read (open question 7).
+  has on the board was not read (open question 7, answered below).
 
 ### 0x118 select partition — `int disk_select_partition(int n)` (0x80010368, read)
 
@@ -668,7 +668,8 @@ forever.
   count is positive, up to 200 times. The callback, run from the IDE interrupt, decrements the
   count.
 - When the movie ends it removes the callback (slot 0x1D8 with 0) and clears its flags.
-- Which partition holds the movies and the frame geometry were not read (open question 6).
+- Which partition holds the movies and the frame geometry were not read (open question 6,
+  answered below).
 
 ### Stand-in recommendation for the disk (inferred)
 
@@ -679,7 +680,7 @@ forever.
   `wake(cookie)` and return 0 without calling `wait()`; otherwise return count. The callback
   and wake normally run at interrupt level; calling them synchronously from inside the slot
   changes only when they run, and both only adjust counters and process states (read in
-  outline), but this should be checked (open question 5).
+  outline), but this should be checked (open question 5, answered below).
 - Slot 0x1D8 and the uninstall path of 0x220 then never wait.
 
 ## 5. Sound
@@ -702,7 +703,8 @@ forever.
   - reset: SOUNDCTL (0x6906) writes; delays with timer 2 (0x8016A9E8).
 - 0xEEEE is propagated as the error result through about 150 sites in the DCS layer (read: the
   constant appears throughout 0x80169474 to 0x8016D968). What the game does at the top when the
-  DCS does not answer (retry, mark sound dead, or stop) was not traced (open question 3).
+  DCS does not answer (retry, mark sound dead, or stop) was not traced (open question 3,
+  answered below).
 - The SOUNDSTAT writes the census found (0x801470A4 ...) did not run in MAME (`hardware-usage.md`).
 
 ### What the loader's own code expects from the DCS
@@ -720,7 +722,8 @@ forever.
   time out. For bit 0x40 there are two consistent choices: always clear, so every read times
   out after 25 ms of emulated time and returns 0xEEEE (honest, but costs 25 ms per read and may
   make the game give up on sound), or answer reads with the values the DCS would send. Which
-  replies the game needs (boot version query, command acknowledgements) is open question 3.
+  replies the game needs (boot version query, command acknowledgements) is open question 3
+  (answered below; `dcs-handshake.md`).
 - SOUNDIN (0x690A): whatever reply is being modelled; SOUNDCTL (0x6907): read back the last
   write; writes to SOUNDOUT, SOUNDCTL and SOUNDIN: accept and drop.
 - The sound FIFO at 0x13000000 (direct): accept and drop.
@@ -854,7 +857,7 @@ The code is the instruction word at EPC shifted right 6.
   returns; its return value is ignored. **The resume PC is not advanced**: unless the hook
   changes frame + 0x110 (or does not return), the `break` executes again. If the hook is not
   set, the debug monitor is entered. The game's hooks are 0x800C4DA0 and 0x800C4E68 (not read
-  in detail; open question 9).
+  in detail; open question 9, answered below: never hit).
 - 0x400 to 0x40A, the monitor services (EPC is advanced by 4 and `eret` returns to the next
   instruction, with every register as before the `break`, at and v0 restored, except where the
   service enters the monitor). Cause.BD is not checked:
@@ -898,7 +901,7 @@ The code is the instruction word at EPC shifted right 6.
 - Console: flags word 0x800B6E50 = 0; ring buffer empty (head = tail = 0x800B6E5C).
 - Not in the dump (hardware registers): the value of IOASIC INTCTL, the interrupt enable
   register (0x17300000; its bit 7 is set only when line 0 is installed), CPU_MASK beyond bit 8,
-  and TIMER_CONTROL. These need a MAME read (open question 1).
+  and TIMER_CONTROL. These need a MAME read (open question 1, answered below).
 
 ## 8. What each stand-in must do
 
@@ -986,41 +989,133 @@ The code is the instruction word at EPC shifted right 6.
 
 ## Open questions that need a MAME run
 
+Answered on 2026-11-19 from MAME runs in the Linux container (MAME 0.276, blank NVRAM, `-nodrc`, the
+debugger on): attract runs of 150 s from the entry, as run A of `task-switch.md`, and a play
+run with run B's inputs (`tools/mame/m2facts.lua`, `tools/mame/dcstap.lua`; command lines in
+`tools/mame/README.md`). The runs are deterministic: the attract runs repeat run A event for
+event, and the play run's 22 snapshots are byte for byte those of run B. Each answer names its
+file in `mame/m2-facts/` on the share.
+
 1. **Hardware state at the hand-off.** Read, at the breakpoint on 0x800C4000: IOASIC INTCTL (bus
    word 8) and INTSTAT, the interrupt enable register 0x17300000, interrupt configuration
    0x17400000, GT64010 CPU_MASK (0x0C000C1C), INTR_CAUSE and TIMER_CONTROL (0x0C000864), and
    TIMER0 to TIMER3. Settles the start values in section 7.
+   **Answer (measured, debugger reads without side effects; `entry-hw.txt`):** IOASIC INTSTAT
+   0x000020C9, INTCTL 0x00004000; interrupt enable 0x17300000 = 0x00000002 (bit 7, VBLANK, is
+   clear until slot 0x200 installs line 0); interrupt configuration 0x17400000 = 0x00008004;
+   GT64010 INTR_CAUSE 0, CPU_MASK 0x0010011E (bits 1 to 4, 8 and 20), TIMER_CONTROL 0x00000003
+   (timer 0 enabled in timer mode, the others stopped); TIMER0 0x00313793 (counting down from
+   0x4C4B40), TIMER1 and TIMER2 0x442AFB52 (what MAME returns for these never-loaded timers;
+   not meaningful as counts, inferred), TIMER3 0x00F0BDB9; Status 0x30010401. A blank NVRAM
+   is filled with 0xFF: all 32,768 CMOS bytes read 0xFF at the entry.
 2. **Whether `pci:` is fd 6.** Breakpoint on the return of slot 0x088 called from 0x800C4540;
    log v0 (expected 6).
+   **Answer (measured, `loader-calls.md`, call 3; `opens.txt`):** yes. `open("pci:", 2)` from
+   the game's open wrapper (return address 0x80145738) returned 6, the first open of the run.
 3. **The DCS replies the game needs.** Tap ioctls 0x6908 (arguments) and 0x690A (results) and
    SOUNDSTAT reads during the first 20 s of a normal run, and log every return of 0xEEEE from
    0x8016A42C, 0x8016A510, 0x8016A82C and 0x8016A930; then rerun with SOUNDSTAT bit 0x40 forced
    clear (Lua write tap) and record whether attract mode still runs and whether the game sets a
    "sound dead" flag (watch where the 0xEEEE results are stored). Settles what a DCS-less
    runtime must return.
+   **Answer (measured; `dcs-trace.txt`, details in `dcs-handshake.md`):** with the board
+   answering, no DCS routine returned 0xEEEE in 150 s; the replies the game reads are 0x000A
+   after each reset and after each boot-load block, the 16-bit sum of each block's data words,
+   0x000C after 0x002A and 0x0223 after 0x55D4, and the bulk writes wait for SOUNDSTAT 0x8080.
+   With bit 0x40 forced clear (a breakpoint action in the loader's read path rather than a
+   tap) the game timed out 13 times, printed `main_init_sound(): ERROR initializing sound
+   system.` with three retries and `Aborting` at each of its two sound loads, sent no sound
+   data, and still ran attract mode (the same seven tasks, attract-mode snapshots to 150 s). No global flag receiving the 0xEEEE results was found (read, in part).
 4. **Scheduler loop timing.** Breakpoint on 0x80151C58 to 0x80151C7C (the VBLANK wait) logging
    the spin counter 0x801A36CC at exit, for 600 frames. Shows how close the wait comes to its
    100,000,000 limit and therefore how late a missing VBLANK reboots the game.
+   **Answer (measured, `spin.txt`):** in the 600 frames from the first pass (160 passes) the
+   counter at the end of the wait was at most 373,548 (median 219,574); over all 3,580 passes
+   of the 150 s at most 376,317, 0.38% of the limit. With `task-switch.md`'s mean wait of 5.19
+   million cycles at a median of about 216,000 spins, one spin takes about 24 cycles in MAME,
+   so 100,000,000 spins are about 2.4 × 10^9 cycles, **about 16 s at 150 MHz**: a VBLANK that
+   stops turns into a reboot only after some 16 s of spinning (inferred; the real R5000's spin
+   rate may differ).
 5. **Disk completion context.** Breakpoints on 0x800E7CF8 (movie callback) and 0x80149B40
    (wake) logging Status, sp and ra, and on 0x80149A44 (wait). Confirms that they run at
    interrupt level and whether wait is ever entered in attract mode; and whether wake is safe
    to call synchronously (log the process state words it changes).
+   **Answer (measured, `disk-hooks.txt`):** the movie callback ran 3,122 times, every time at
+   interrupt level (Status 0x30015C03: EXL and IE set), on the loader's exception stack (sp
+   0x800C1358), called from the IDE completion path (return address 0x800124D4), with a0 = 0
+   (success). Wait was entered in attract mode, 64 times, all during `loadwave`'s sound load
+   (12.79 s to 22.23 s): at task level (Status 0x30015C01), on the task's own stack, called
+   from the loader's queue path (return address 0x80011F58); its a0 held a leftover
+   (0xAA000F00), not an argument. Each wait was followed by one wake, 64 in all, at interrupt
+   level from the same completion path, with a0 = the cookie 0x803F75E0 (`loadwave`'s task
+   record). Each wake changed exactly one word: the record's +0xC, from 0x00008001 to
+   0x00000001 (bit 15 of the sleep-counter halfword cleared); nothing in the task-list words
+   0x801A3110 to 0x801A3123 changed. So wake only makes the sleeping task due again, and calling
+   it synchronously from inside the slot is harmless provided the slot then does not call wait
+   (inferred from these words; wait itself was not read).
 6. **Movie partition and geometry.** At the movie player's slot-0x158 call (0x800E7E2C) log a0,
    a1, a2 and the words 0x801DE92C, 0x801DE914, 0x801DE938. Gives the partition and sectors per
    frame.
+   **Answer (measured, `disk-hooks.txt`; read for the address arithmetic):** the partition word
+   was 13 for the attract movie (frames 0 to 2,545 from 22.6 s, then frames 2,475 to 2,545
+   looped six times) and 15 for a second movie (frames 0 to 149 from 146.7 s). In the loader's
+   1-based numbering these are the disk's part12 (start sector 0x00513CF0, 0x81E20 sectors)
+   and part14 (start 0x005D75A6). Sectors per frame 0xD0 = 208 (104 KB a frame); a2 = 208 in
+   every call. The logged a0 is the partition's start sector: the call's delay slot adds the
+   frame offset (frame × sectors per frame, from `mflo`), so the LBA is start + frame × 208
+   (read, 0x800E7DF0 to 0x800E7E30). The buffers (a1) cycle through 0x803F87B0, 0x8041F1B8 and
+   0x80445BC0.
 7. **The Voodoo's PCI device number.** Log the value stored through a3 by slot 0x110 at
    0x801570F8 and 0x801571D8.
+   **Answer (measured, `voodoo-reads.txt`):** **8**. The vendor probe (slot 0x108, vendor
+   0x121A) returned 1 for device 8 and 0 for 6, 7 and 9; slot 0x110 stored 8 and returned
+   0xA8000000 for index 0 at both sites, and stored 10 and returned 0 for indexes 1 to 14.
+   (`loader-calls.md` says "the fourth finds it"; it is the third probe, device 8.)
 8. **GT64010 DMA programming.** Log every ioctl 0x7301 {offset, value} pair from 0x80168224 and
    0x801683EC and the descriptor chain at 0x830's value (32 bytes per record until the end
    marker), plus the time to the cause-bit-4 interrupt. Gives the exact DMA model.
+   **Answer (measured, `dma0.txt`):** once per scheduler pass (3,580 times in 150 s), always
+   in the same order: offset 0x840 (channel 0 control) = 0x0DC0, offset 0x830 (next record) =
+   the chain's address, 0x840 = 0x2DC0, 0x840 = 0x1DC0 (bit 0x1000, the channel enable, set
+   only in the last). Ioctl 0x7300 was never issued. The chain addresses alternate between
+   0x002375C0 and 0x003175C0 (physical; two buffers). Each record is the 16-byte GT64010
+   descriptor {byte count, source, destination, next}; the chain ends with next = 0 (no other
+   end marker), and its last record always copies 4 bytes to 0x001B31B8, a word in game RAM,
+   which is how the game sees completion besides the interrupt (inferred). The records are not
+   32 bytes apiece: small ones (4 to 0x28 bytes) carry their source data right after the
+   descriptor (source = record + 0x10, next 32 or 64 bytes on) and go to Voodoo registers
+   (destinations 0x08000000 to 0x082FFFFF); the large ones copy 0x640 bytes from elsewhere in
+   RAM to 0x084xxxxx (the Voodoo's frame-buffer range) with next = record + 0x10. Chains had
+   28 records (the first, 116 bytes), 126, 195, 279, 564 to 576, or 386 (3,116 of the 3,580:
+   256 large records, 411,540 bytes). The cause-bit-4 handler ran once per start, at a time
+   from the enable write that depends only on the chain's shape (to within one cycle): 8,545
+   cycles for 28 records, 37,054 for 126, 57,127 for 195, 81,563 for 279, 167,963 for 576 and
+   1,079,381 (7.20 ms) for the 386-record chain. These fit about 400 cycles plus 291 per record
+   for the small records, plus about 2.36 cycles per byte of the large ones (inferred from the
+   fit; MAME's GT64010 DMA timing was not read). The descriptors are logged; the source data
+   they copy is not.
 9. **Break hooks.** Breakpoints on 0x800C4DA0 and 0x800C4E68 (were they ever hit? run 3 did not
    say) and, if hit, the frame + 0x110 before and after. Settles whether the hooks advance the
    PC or reboot.
+   **Answer (measured, `breaks.txt`):** neither hook was hit, in 150 s of attract mode or in
+   230 s with about 160 s of play. So no `break 6` or `break 7` executed, and whether the hooks
+   advance the PC or reboot remains unobserved; they were not read either.
 10. **What ioctl 0x6905 writes.** Log its arguments and callers; read MAME's IOASIC write
     handler for bus word 0 in the unlocked order.
+    **Answer (measured, `breaks.txt`):** not issued in attract mode. In play it was issued 144
+    times, four per coin for the 36 coins inserted: one frame after each coin press the game
+    writes 0x10 (return address 0x800C7C24) and 0x01 (0x800C7C34), and four frames (about 74
+    ms) later 0x10 (0x800C7C4C) and 0x00 (0x800C7C5C); all four calls are in the function
+    0x800C7C04 (`config/game.functions.toml`), next to the task function `ccproc` 0x800C7B3C.
+    So the game drives a pulse on bit 0, with 0x10 written before each change: a coin counter
+    (inferred from the timing). MAME's handler was not read: the Linux container has no MAME source tree.
 11. **FP exceptions in play.** A Lua breakpoint on 0x800C47E0 with Cause code 15 during a
     played game (scripted coin and start) shows whether FP traps ever happen; if they do, the
     catch-all reboot is observable.
+    **Answer (measured, `breaks.txt`):** the catch-all was never entered, in attract mode or in
+    the play run (run B's inputs, about 160 s of the first level): no FP trap and no other
+    exception of codes 1 to 8 or 10 to 15. Play beyond the first part of the first level was
+    not covered.
 
 ## Not done
 
@@ -1032,7 +1127,7 @@ The code is the instruction word at EPC shifted right 6.
 - The tty driver was read in outline (enough for the stand-in); the UART set-up is not
   documented.
 - The game's DCS protocol above the register level (which commands it sends and which replies
-  it requires) was not traced; section 5 gives only the handshake and its timeouts.
+  it requires) was not traced here; `dcs-handshake.md` (2026-11-19) traces it in attract mode.
 - The game's FPU handler 0x80150860's indexing of the FPR slots was not decoded, so it is not
   shown that it agrees with the FR = 0 layout above (it was written against this loader, so it
   should); section 6 shows the handler is unreachable after 0x800C4A08 anyway.

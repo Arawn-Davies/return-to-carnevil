@@ -599,6 +599,15 @@ dereferenced there.
    (the loader paths named above); that no-ops are enough is inferred. Sure: high.
 5. **IDE, GT64010 DMA/PCI, SCSI and update ROM** matter only if loader code is run under an
    interpreter; with native stand-ins for the slots they need not be emulated. Sure: high.
+   Correction, 2026-11-19, for the GT64010 DMA (`loader-services.md`, section 3 and open
+   question 8): the game itself programs DMA channel 0 through the loader's `pci:` ioctl
+   0x7301 (the "DMA0 6,075 control and 2,025 next writes" of the split run are these), once
+   per scheduler pass, with a chain of descriptors that copies its Voodoo register writes and
+   frame-buffer data, and its handler for GT64010 cause bit 4 takes the completion (read;
+   measured in MAME: 3,580 starts and 3,580 completions in 150 s of attract mode). So the
+   runtime must emulate chained DMA channel 0 behind ioctl 0x7301 and raise cause bit 4 when
+   a chain is done; IDE, the GT64010's PCI side, SCSI and the update ROM still need no
+   emulation.
 
 ## Not confirmed
 

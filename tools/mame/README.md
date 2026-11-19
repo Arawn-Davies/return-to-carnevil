@@ -339,3 +339,88 @@ command) counts and hottest call sites, the opens with their paths and results, 
 console output as lines with the frame and emulated time of each line's first byte. Outputs
 on the share: `mame/m2-measure/loader-A/` (`loader-calls-first.txt`, `report.txt`,
 `console.txt`, `debug.log.gz`, 35 MB).
+
+## M2 facts
+
+The remaining open questions of `docs/analysis/loader-services.md` and the DCS exchange of
+`docs/analysis/dcs-handshake.md`. Run in the Linux container like the M2 measurements, one MAME at a time,
+each run in a folder of its own with a blank NVRAM. The share holds the outputs under
+`mame/m2-facts/`. Both scripts' headers list every line they write and its fields. `c` is the
+CPU's total cycles; the R5000 runs at 150 MHz, so the emulated time since power-on in
+nanoseconds is c × 20 / 3 (the entry's cycle count, 750,535,450, against MAME's 5.003570 s
+agrees).
+
+**`dcstap.lua`**: the game's exchange with the DCS. Breakpoints in the loader's `ioasic:`
+ioctl routine, on its one read path (0x80006CC8, just after the load) and its one write path
+(0x80006CDC), log every SOUNDCTL, SOUNDOUT, SOUNDSTAT and SOUNDIN access the game makes through
+ioctls 0x6906 to 0x6911, and INTSTAT/INTCTL; breakpoints on the `jr ra` of the seven DCS
+routines that can return 0xEEEE log each such return with its caller; the general exception
+vector logs every exception with Cause IP3 and the IOASIC interrupt registers then; the task
+creation's return logs every task started; a watchpoint on UARTOUT logs the console from
+power-on. `$CARNEVIL_DCS_SECONDS` (150) is the run length after the entry;
+`$CARNEVIL_DCS_FORCE_CLEAR` = 1 clears bit 0x40 of every SOUNDSTAT read before the loader
+stores it (a breakpoint action that rewrites v0 at 0x80006CC8), the DCS-less case of open
+question 3; `$CARNEVIL_DCS_SNAP` = 1 takes a snapshot every 10 s from 20 s after the entry.
+
+**`m2facts.lua`**: the rest. At the entry, debugger reads of the interrupt and timer
+registers and a histogram of the CMOS bytes; then breakpoints and watchpoints for the input
+ioctls, the gun registers and 0x17F00000, the four PCI slots (handled from Lua, with their
+results), the Voodoo reads of GAME.EXE code for the first `$CARNEVIL_M2_VOODOO_SECONDS` (15)
+after the entry, the `pci:` ioctls in the loader's `sysctrl` driver with the DMA descriptor
+chain at each write of 0x830 (walked from Lua, up to `$CARNEVIL_M2_CHAIN_MAX` records,
+100,000), the cause-bit-4 handler, the disk hooks (the wake from Lua, comparing the words it
+changes), the movie player's sector call, the end of each scheduler wait, the break hooks,
+the catch-all and ioctl 0x6905. `$CARNEVIL_M2_SECONDS` (150) is the run length after the
+entry; `$CARNEVIL_M2_PLAY` = 1 is the play run: only the break hooks, the catch-all and
+0x6905 are armed, and the inputs are those of `tasksw.lua`'s `PLAY_STEPS` (run B of
+`task-switch.md`) at the same emulated times, with the same snapshots.
+
+In this build only the first breakpoint that hits at an address acts, so where one address
+needs both a `printf` and a Lua stop (the 0x7301 write path), the two breakpoints have
+complementary conditions. Debugger reads of the GT64010's TIMER_CONTROL, TIMER1 and TIMER2 at
+the entry are not reproducible (two identical runs gave different values); every other
+entry value was the same in both.
+
+```
+cd <scratch>/dcs-A && timeout 7200 mame carnevil -rompath <roms> -nodrc -debug \
+  -debugger none -debuglog -video none -sound none -nothrottle -cfg_directory cfg \
+  -nvram_directory nvram -snapshot_directory snap -diff_directory diff \
+  -autoboot_script <repo>/tools/mame/dcstap.lua
+cd <scratch>/facts-A2 && timeout 7200 mame carnevil <the same options> \
+  -autoboot_script <repo>/tools/mame/m2facts.lua
+cd <scratch>/dcs-F2 && CARNEVIL_DCS_FORCE_CLEAR=1 CARNEVIL_DCS_SNAP=1 timeout 7200 \
+  mame carnevil <the same options> -autoboot_script <repo>/tools/mame/dcstap.lua
+cd <scratch>/facts-P && CARNEVIL_M2_PLAY=1 CARNEVIL_M2_SECONDS=230 timeout 7200 mame carnevil \
+  <the same options> -autoboot_script <repo>/tools/mame/m2facts.lua
+```
+
+Wall times (`wall.txt`, the Linux container running one MAME at a time): dcs-A 1,333 s (11.6% speed),
+facts-A2 1,272 s (12.2%), dcs-F2 1,429 s (10.8%), facts-P 1,941 s (12.1%). Two earlier runs are kept
+too: facts-A (1,240 s), the same as facts-A2 but with the chain walk capped at 64 records, and
+dcs-F (1,469 s), the same as dcs-F2 without the task log and snapshots (their DCS, console
+and interrupt lines are identical). dcs-A ran before the task-creation breakpoint was added. The play run's 22
+snapshots are byte for byte those of run B. Between facts-A and facts-A2 the events and values
+agree except that from the first DMA start the cycle counts differ by up to a few hundred and
+some spin counts by one, so the Lua stop at each chain walk is not quite free of timing effects.
+
+The files in `mame/m2-facts/` are text, one event per line, fields separated by single
+spaces, numbers in hexadecimal with `0x` except times (decimal nanoseconds since power-on)
+and counts, text fields last; the first line of each starts with `#` and names the columns.
+They were cut from the runs' `debug.log` lines by field (the formats in the scripts' headers,
+cycles converted as above), or from the M2 measurements where those already held the data:
+
+- from facts-A2: `entry-hw.txt` (`M2 ENTRY`, `M2 NV`), `inputs.txt` (`M2 IN`, `M2 GUN`,
+  `M2 ARST`: each distinct value with its count), `voodoo-reads.txt` (`M2 VR`, `M2 PCI`),
+  `dma0.txt` (`M2 GW`, `M2 GR`, `M2 CHAIN`, `M2 RECS`, `M2 B4`), `disk-hooks.txt` (`M2 MCB`,
+  `M2 WAIT`, `M2 WAKE`, `M2 WAKED`, `M2 MOV`), `spin.txt` (`M2 SPIN`), and with facts-P
+  `breaks.txt` (`M2 BRK`, `M2 BRKR`, `M2 CATCH`, `M2 6905`);
+- from dcs-A: `dcs-trace.txt` (`DT R`, `DT W`, `DT E`, `DT I3`, `DT H3`);
+- from `m2-measure`: `opens.txt` (loader-A's `loader-calls-first.txt` and the `LS` lines of
+  its `debug.log.gz`), `loader-first.txt` (`loader-calls-first.txt`), `tasks.txt` (`TS CR`
+  and `TS X` of `tasksw-A/debug.log`), and `console.txt`: the 25 console writes of loader-A,
+  each with its bytes taken in order from dcs-A's `DT U` lines after the entry (loader-A's
+  `debug.log` lost the escapes of its `buf` fields; the UART bytes after the entry are
+  exactly the 902 bytes written, and the 14 writes in `loader-calls-first.txt` match them).
+
+The raw runs are kept in `mame/m2-facts/raw/<run>/` (`debug.log.gz`, `mame.out`, `wall.txt`,
+and the snapshots of facts-P and dcs-F2); the scripts as run are in `mame/m2-facts/scripts/`.

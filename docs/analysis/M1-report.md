@@ -288,6 +288,15 @@ These are options with a recommendation each, not decisions already taken.
 
 What it is (read, unless marked):
 
+> Note, 2026-11-19: `task-switch.md` (measured in MAME) refutes the pacing inferred below. A
+> scheduler pass is not timed by the `timer:` ioctls: it starts when the VBLANK handler's
+> counter 0x801A2FE8 reaches a target of 2 or 3 frames (27 or 18 passes a second on MAME's
+> 54.15 Hz screen), and the two fd-5 ioctls of the scheduler (0x7403, 0x7407) never ran in any
+> run, because their flag 0x801A36C4 is never set. The 0x7403 calls the loader-calls run counts
+> come from 0x8014FE24 (the Voodoo and GT64010 DMA timeouts), not from the scheduler. Also, the
+> record's +0x10 is the task stack's base address (passed to the task as a0), not an argument.
+> The text below is left as written.
+
 - `main` calls the scheduler 0x80151BC0 once (0x800C4740). It loops forever: each pass does
   some work that is probably per frame (inferred), including up to two `ioctl` calls on fd 5
   (commands 0x7403 and 0x7407, which are probably the `timer:` set of the M0 report;
@@ -418,7 +427,9 @@ nothing hand-written has to reproduce guest effects. It needs a new kind of manu
   function). Interrupts are therefore delayed, never lost, but a handler can see state the board
   would never show it, and the loader may mask interrupts around its services in ways the
   stand-ins must reproduce. What the game depends on (the VBLANK handler's timing, the
-  `vdstatus` busy-wait, the scheduler's pacing through `timer:`) is not measured.
+  `vdstatus` busy-wait, the scheduler's pacing through `timer:`) is not measured. (Note,
+  2026-11-19: the scheduler is paced by VBLANK, not by `timer:`; measured in
+  `task-switch.md`, section 4.)
 - **kuseg.** The mapping covers 0x00040000 to 8 MB. Any other kuseg address goes to the bus,
   where the board would take a TLB exception. Where the game's kuseg pointers come from is not
   traced, and a loader service that changes the TLB at run time would not be noticed.

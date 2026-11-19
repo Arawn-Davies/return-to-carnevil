@@ -96,8 +96,9 @@ Arguments: a0 = file name, a1 = a load address (0x80100000 or 0x800C0000; not us
 routine), a2 = pointer to 4 argument words. Steps:
 
 1. copy the 4 argument words to 0x800B6E30 (the block slot 0x1A8 returns);
-2. upper-case the name in place, reset the handler tables (slot 0x0D8), mask the interrupts,
-   reset devices, clear the break hooks;
+2. upper-case the name in place, reset the handler tables (0x80005050), mask the interrupts,
+   reset devices, clear the break hooks (correction, 2026-11-19, from `loader-services.md`:
+   this page first called the reset "slot 0x0D8"; slot 0x0D8 is `_exit`, 0x80005048, read);
 3. look the file up and open it; read header word 0 into 0x800B6E40 and header word 1 into
    a local (the load address);
 4. seek back to byte 4 and read the rest of the file, from the load-address word on, to the
@@ -216,8 +217,14 @@ callers):
 - 0x118 0x80010368 select disk partition, 0x128 0x800103BC partition table, 0x158 0x800112F4
   raw IDE sector transfer, 0x1D8 0x80012718 disk call with a timeout (unconfirmed), 0x220
   0x800127AC `install_disk_info` (callers include the movie player around 0x800E7188).
+  Correction, 2026-11-19 (`loader-services.md`, read): slot 0x118's partition numbers are
+  1-based. Partition 0 is the whole disk, partition 1 is the disk's part0 (the game file
+  system), and the game always selects 1.
 - 0x198 0x8000E930 load and run an EXE; 0x1A8 0x8000EE30 argument block address.
-- 0x0D8 0x80005048 reset all handler tables; 0x1E0 0x800060BC GT64010 interrupt handler;
+- 0x0D8 0x80005048 `_exit` (correction, 2026-11-19, `loader-services.md`, read: this line
+  first said "reset all handler tables"; 0x80005048 is a `break 0x402` into the debug monitor,
+  and the table reset is the next routine, 0x80005050, which load-and-run calls);
+  0x1E0 0x800060BC GT64010 interrupt handler;
   0x1E8 0x8000619C FPU exception handler; 0x1F0 0x80006200 break 7 hook; 0x1F8 0x80006210
   break 6 hook; 0x200 0x80006220 CPU interrupt-line handler.
 
@@ -273,8 +280,10 @@ these registrations after the entry (the order within each item is the static ca
   "probable callbacks" of `functions.md`.
 
 CPU interrupt-line handlers are called with a0 = the Cause IP bit of their line (0x100 << n);
-a1 is not set for them (0x80005100, read; `hardware-usage.md`). GT64010 cause handlers and
-exception handlers are called with (Cause, frame), FPU handlers with the frame in a0, and they
+a1 is not set for them (0x80005100, read; `hardware-usage.md`). GT64010 cause handlers are
+called with a0 = 1 and no other argument, and their return value is ignored (correction,
+2026-11-19, `loader-services.md` section 6, read: this page first said (Cause, frame)).
+Exception handlers are called with (Cause, frame), FPU handlers with the frame in a0, and they
 use the loader's frame layout: the FPU handler 0x80150860 reads Cause at
 frame + 0x180 and EPC at frame + 0x110, and writes saved FPRs from frame + 0x218 (it emulates
 the instruction that trapped and advances EPC).
@@ -352,7 +361,8 @@ Hit Writeback Invalidate, Hit Writeback) in its memory-fill and flush routines a
 3. **Exceptions and interrupts: native dispatch with the loader's ABI.** GAME.EXE never handles
    Cause or EPC itself and has no `eret`; it installs handlers through the slots and break
    0x409 and expects to be called as the loader calls it: CPU-line handlers with a0 = the
-   Cause IP bit, the others with (Cause, frame) on a frame laid out as the loader's (EPC at
+   Cause IP bit, GT64010 cause handlers with a0 = 1 only (correction, 2026-11-19, see above),
+   the others with (Cause, frame) on a frame laid out as the loader's (EPC at
    +0x110, FPRs at +0x218). The runtime must keep that frame layout for the FPU
    emulation handler at 0x80150860, or replace that handler. Sure: high for the registration
    path (static, registrations seen in run 3); medium for the frame offsets beyond EPC and the
