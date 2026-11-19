@@ -37,20 +37,24 @@ class BootState(unittest.TestCase):
             self.assertTrue(0 <= s[key] <= 0xFFFFFFFF, key)
 
     def test_entry_leftover_registers(self):
-        # the loader's leftovers at entry: only general registers, each a 32-bit value
+        # the loader's leftovers at entry: general registers and lo, each a 32-bit value
         known = {"entry", "sp", "gp", "status", "config", "fcr31", "ra"}
         leftovers = {k: v for k, v in self.state.items()
                      if k not in known and not isinstance(v, (dict, list))}
         self.assertEqual(sorted(leftovers),
-                         sorted("at v0 v1 a0 a1 a3 t0 t1 t2 t4 t5 s0 s1 s2 t9 k0 k1".split()))
+                         sorted("at v0 v1 a0 a1 a3 t0 t1 t2 t4 t5 s0 s1 s2 t9 k0 k1 lo".split()))
         for name, value in leftovers.items():
-            self.assertIn(name, REGISTERS, name)
+            self.assertIn(name, REGISTERS + ["lo"], name)
             self.assertIsInstance(value, int, name)
             self.assertTrue(0 < value <= 0xFFFFFFFF, name)
 
     def test_first_loader_call(self):
         call = self.state["first_loader_call"]
-        self.assertEqual(sorted(call), sorted(["slot", "a0", "a1", "a2", "a3", "ra", "sp"]))
+        # the slot and every register firstcall.lua recorded at the call: the general
+        # registers but zero, hi and lo
+        self.assertEqual(sorted(call), sorted(["slot", "hi", "lo"] + REGISTERS[1:]))
+        for name, value in call.items():
+            self.assertTrue(0 <= value <= 0xFFFFFFFF, name)
         self.assertIn(call["slot"], loader.game_slots(BOOT_STATE))
         self.assertTrue(RAM_START <= call["sp"] < RAM_END, hex(call["sp"]))
         text = range(self.analysis.text_start, self.analysis.text_end)

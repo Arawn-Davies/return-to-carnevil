@@ -16,9 +16,10 @@ ra = 0x8000EBE8      # in the loader's load-and-run routine, after its jalr to t
 # The other non-zero general registers at entry: the loader's leftovers. Values are from MAME
 # 0.276 (carnevil, default DIP switches) stopped at the first instruction of GAME.EXE by
 # tools/mame/firstcall.lua (four runs, identical); a0-a3, v0, v1 and s0-s2 also agree with run
-# 1 in docs/analysis/boot-handoff.md. Every general register not listed is 0; hi, lo and the
-# FP registers at entry are not recorded here. `_start` reads none of them, but they are not
-# dead: a3 reaches the first loader call (slot 0x038) unchanged, and s0-s2 are saved into
+# 1 in docs/analysis/boot-handoff.md. Every general register not listed is 0, and so is hi;
+# lo is listed with them. The FP registers at entry are not recorded here (halves 0 and 8 are
+# non-zero in MAME; FCSR is fcr31 above). `_start` reads none of them, but they are not dead:
+# a3 and lo reach the first loader call (slot 0x038) unchanged, and s0-s2 are saved into
 # stack frames above sp before it.
 at = 0x80010000
 v0 = 0x00000006
@@ -37,21 +38,49 @@ s2 = 0xBFC00008
 t9 = 0xBFC004E0
 k0 = 0x80014328
 k1 = 0x80004000
+lo = 0x0080730C
 
 # GAME.EXE's first call into the loader, from the entry state above (MAME 0.276,
-# tools/mame/firstcall.lua, -nodrc): the stub slot (offset from 0x800C408C) and the argument,
-# return-address and stack registers at the stub's first instruction. RAM at that moment is
-# mame/dumps/ram-at-first-loader-call.bin on the share. Two interrupts (Cause 0x400, IP2) were
-# taken in MAME on the way, at 0x800C4018 and 0x800C4020 in `_start`; their handlers wrote
-# nothing in 0x800C4000-0x807FFFFF.
+# tools/mame/firstcall.lua, -nodrc): the stub slot (offset from 0x800C408C) and every general
+# register (zero apart), hi and lo at the stub's first instruction, from the "call" lines of
+# its first-loader-call.txt. RAM at that moment is mame/dumps/ram-at-first-loader-call.bin on
+# the share. Two interrupts (Cause 0x400, IP2) were taken in MAME on the way, at 0x800C4018
+# and 0x800C4020 in `_start`; their handlers wrote nothing in 0x800C4000-0x807FFFFF.
 [first_loader_call]
 slot = 0x038
+at = 0x80230000
+v0 = 0x807FFEC0
+v1 = 0x005C4AE8
 a0 = 0x80174EC0
 a1 = 0x00000000
 a2 = 0x807FFEC0
 a3 = 0x000E0228
-ra = 0x80145350
+t0 = 0x01000000
+t1 = 0xA00C42CC
+t2 = 0xA00C42C8
+t3 = 0x00000000
+t4 = 0x00001000
+t5 = 0x0001F01F
+t6 = 0x00000000
+t7 = 0x00000000
+s0 = 0x80174EC0
+s1 = 0x800C4000
+s2 = 0xBFC00008
+s3 = 0x00000000
+s4 = 0x00000000
+s5 = 0x00000000
+s6 = 0x00000000
+s7 = 0x00000000
+t8 = 0x00000000
+t9 = 0xBFC004E0
+k0 = 0x80014328
+k1 = 0x80004000
+gp = 0x00000000
 sp = 0x807FFE98
+fp = 0x00000000
+ra = 0x80145350
+hi = 0x00000000
+lo = 0x0080730C
 
 # Every non-zero range of RAM below the image at entry. Ranges of non-zero words were merged
 # when fewer than 256 zero bytes separate them, except the boot_rom_copy entries, which are

@@ -10,7 +10,8 @@ Two checks, documented in tools/mame/README.md:
   during attract mode, run from MAME's before-state by `runtime/stub/replay.c` and compared
   with MAME's after-state.
 
-The programs are built once for the module from a fresh recompile in a temporary folder.
+The programs are built once for the module from a fresh recompile in a temporary folder;
+`replay` is built a second time from it with the undefined-behaviour sanitizer.
 """
 import json
 import os
@@ -65,9 +66,27 @@ def programs():
         if res.returncode != 0:
             raise AssertionError("make smoke replay failed:\n" + res.stdout[-4000:]
                                  + res.stderr[-4000:])
+        _build["generated"] = gen
         _build["smoke"] = os.path.join(build, "smoke")
         _build["replay"] = os.path.join(build, "replay")
     return _build["smoke"], _build["replay"]
+
+
+def ubsan_replay():
+    """replay built again, from the same recompile, with every file (the whole generated image
+    and the runtime) under -fsanitize=undefined -fno-sanitize-recover=undefined."""
+    if "ubsan_replay" not in _build:
+        programs()
+        build = os.path.join(_build["tmp"], "build-ubsan")
+        res = subprocess.run([_make(), "-C", charness.REPO, "replay",
+                              f"GENERATED={_build['generated']}", f"BUILD={build}",
+                              f"CC={shutil.which('cc') or 'cc'} " + " ".join(charness.SANITIZE)],
+                             capture_output=True, text=True)
+        if res.returncode != 0:
+            raise AssertionError("make replay (UBSan) failed:\n" + res.stdout[-4000:]
+                                 + res.stderr[-4000:])
+        _build["ubsan_replay"] = os.path.join(build, "replay")
+    return _build["ubsan_replay"]
 
 
 def tearDownModule():
@@ -181,8 +200,8 @@ class SmokeTest(unittest.TestCase):
         cls.tmp = tempfile.mkdtemp()
         cls.ram_out = os.path.join(cls.tmp, "ram.bin")
         # every general register boot_state.toml gives (sp, gp, ra and the loader's
-        # leftovers), and FCSR
-        args = [f"{k}=0x{v:08X}" for k, v in s.items() if k in REGISTERS]
+        # leftovers), lo, and FCSR
+        args = [f"{k}=0x{v:08X}" for k, v in s.items() if k in REGISTERS or k in ("hi", "lo")]
         args.append(f"fcsr=0x{s['fcr31']:08X}")
         cls.res = subprocess.run([smoke, work_path(*ENTRY_RAM), cls.ram_out, *args],
                                  capture_output=True, text=True, timeout=120)
@@ -203,8 +222,11 @@ class SmokeTest(unittest.TestCase):
         self.assertIsNotNone(want, "config/boot_state.toml has no [first_loader_call]")
         got = self.state
         self.assertEqual(got["slot"], want["slot"])
-        for i, name in ((4, "a0"), (5, "a1"), (6, "a2"), (7, "a3"), (31, "ra"), (29, "sp")):
+        # every general register, hi and lo, as firstcall.lua recorded them at the call
+        self.assertEqual(got["r"][0], 0)
+        for i, name in enumerate(REGISTERS[1:], 1):
             self.assertEqual(got["r"][i], want[name], name)
+        self.assertEqual((got["hi"], got["lo"]), (want["hi"], want["lo"]))
 
     @requires_capture(FIRST_CALL_RAM, "tools/mame/firstcall.lua, then copy its RAM to "
                       "mame/dumps/ (tools/mame/README.md, firstcall.lua)")
@@ -361,6 +383,20 @@ class ReplayTest(unittest.TestCase):
         self.assertEqual(failures, [], f"{len(failures)} of {len(dirs)} captures differ:\n"
                          + "\n".join(failures))
         self.assertGreaterEqual(len(clean), MIN_CAPTURES)
+
+    def test_pure_functions_replay_under_ubsan(self):
+        """The same captures through a replay whose whole generated image is built with the
+        undefined-behaviour sanitizer, which stops the program on any report: every capture
+        still replays clean or is impure at run time."""
+        replay = ubsan_replay()
+        nm = subprocess.run(["nm", replay], capture_output=True, text=True)
+        self.assertIn("__ubsan_handle", nm.stdout)  # the sanitizer is in
+        failures = []
+        for d in capture_dirs():
+            verdict, detail = classify_replay(replay, d)
+            if verdict == "failure":
+                failures.append(f"{os.path.basename(d)}: {detail}")
+        self.assertEqual(failures, [], "\n".join(failures))
 
     def test_replay_reports_a_difference(self):
         """A copy of a capture whose after-state has a0 and one RAM byte changed fails, naming

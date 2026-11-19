@@ -83,13 +83,13 @@ never runs (inferred).
 
 `smoke` loads MAME's RAM dump at `GAME.EXE`'s entry (`tools/mame/handoff.lua`), sets the
 registers of `config/boot_state.toml` and calls the recompiled `_start`. It reaches its first
-loader call at slot 0x038 with the same a0 to a3, ra and sp as MAME
-(`tools/mame/firstcall.lua`), and with RAM from 0x800C4000 up to sp identical to MAME's byte
-for byte. The port made no bus access, `break`, interrupt or interpreter entry on the way
-(test). All 32 general registers agree at the call; `lo` and FP halves 0 and 8 do not, because
-they are loader leftovers at the entry that `boot_state.toml` does not record (MAME and the
-smoke program, compared by hand during the work; the test asserts the slot, a0 to a3, ra and
-sp). Outside the compared range 38 bytes differ: 37 in the loader's exception frame and data
+loader call at slot 0x038 with all 32 general registers, `hi` and `lo` equal to MAME's
+(`tools/mame/firstcall.lua`, recorded in `boot_state.toml` [first_loader_call]), and with RAM
+from 0x800C4000 up to sp identical to MAME's byte for byte. The port made no bus access,
+`break`, interrupt or interpreter entry on the way (test). `lo` matches because its value at
+the entry, a loader leftover, is now in `boot_state.toml` too. FP halves 0 and 8 are also
+leftovers at the entry; they are neither set nor compared. Outside the compared range 38 bytes
+differ: 37 in the loader's exception frame and data
 (0x80014332-0x80014D8C) and one in the debug monitor's area (0x800B89D2) (test, printed and
 not asserted).
 
@@ -123,6 +123,10 @@ all 8 MB with MAME's after-state.
   access, with the same written value, from the same registers and the same RAM (a 64-bit hash
   of the 8 MB). For these 25 the only evidence is that the recompiled C and the interpreter
   agree up to the first hardware access. That is not a match with MAME (test).
+- **No undefined behaviour on the way.** `replay` built with `-fsanitize=undefined
+  -fno-sanitize-recover=undefined` over the whole generated image and the runtime gives the
+  same verdicts on all 152 captures, with no sanitizer report: the whole-image build takes
+  about 9 s on the Mac and the 152 runs (plus the 25 `--interp` runs) about 8 s (test).
 
 How strong: 127 real functions, from short leaves to code with loops, calls, FP and switches,
 agree with MAME on everything they leave behind. The impure rule has a hole: a recompiler bug
@@ -211,9 +215,11 @@ wrong.
   31 replays failed until the loader's TLB mapping was modelled (below).
 - **`boot_state.toml` gained every leftover register at the entry**, not only
   `[first_loader_call]`: without them a3 differed at the first loader call.
-- **The first loader call comes before `main`.** The exit check says "the recompiled `_start`
-  and the start of `main`"; the call is in `_start`'s second callee, so the check covers
-  `_start` only.
+- **The first loader call comes before `main` (accepted amendment).** The exit check said "the
+  recompiled `_start` and the start of `main`"; the call is in `_start`'s second callee, so the
+  check covers `_start` only. The amended bullet, accepted by the owner and now in the plan:
+  the recompiled `_start` reaches the first loader call (slot 0x038, before `main`) with
+  MAME's registers and RAM. `main` cannot be entered without a stand-in for that service (M2).
 - **Smaller ones**: the RAM dumps the tests read are under `mame/dumps/` on the share, where
   M0's dump already was; `funcreplay.lua` retries a function up to 3 times after a dropped
   attempt, where the plan said first hit; `replay` gained `--interp`, and so provides its own

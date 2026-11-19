@@ -2,8 +2,9 @@
  *
  * Usage: smoke RAM_IN RAM_OUT [NAME=VALUE ...]. RAM_IN is the 8 MB of RAM at GAME.EXE's entry
  * (MAME's dump, mame/dumps/ram-at-game-entry.bin). Each NAME=VALUE (hexadecimal with 0x, or
- * decimal) sets a general register by its ABI name (sp, gp, ra, a0, ...) or FCSR ("fcsr", as
- * ctc1 writes it); every other register is 0 and no interrupt is ever pending. The program
+ * decimal) sets a general register by its ABI name (sp, gp, ra, a0, ...), "hi", "lo" or FCSR
+ * ("fcsr", as ctc1 writes it); every other register is 0 and no interrupt is ever pending. The
+ * program
  * calls fn_800C4000 (it must be recompiled) and, at the first rt_loader call, prints
  * "slot S" and the state (common.h, print_state) to stdout, writes the 8 MB of RAM to RAM_OUT
  * and exits 0. If the entry function returns without a loader call it exits 1.
@@ -97,7 +98,8 @@ int main(int argc, char **argv)
         if (eq && (size_t)(eq - argv[k]) < sizeof name) {
             memcpy(name, argv[k], (size_t)(eq - argv[k]));
             name[eq - argv[k]] = '\0';
-            i = strcmp(name, "fcsr") == 0 ? 32 : reg_index(name);
+            i = strcmp(name, "fcsr") == 0 ? 32 : strcmp(name, "hi") == 0 ? 33
+                : strcmp(name, "lo") == 0 ? 34 : reg_index(name);
         }
         v = eq ? strtoull(eq + 1, &end, 0) : 0;
         if (i < 0 || i == 0 || eq[1] == '\0' || *end != '\0' || v > 0xFFFFFFFFull) {
@@ -106,6 +108,10 @@ int main(int argc, char **argv)
         }
         if (i == 32)
             fcsr = (uint32_t)v;
+        else if (i == 33)
+            c.hi = (uint32_t)v;
+        else if (i == 34)
+            c.lo = (uint32_t)v;
         else
             c.r[i] = (uint32_t)v;
     }

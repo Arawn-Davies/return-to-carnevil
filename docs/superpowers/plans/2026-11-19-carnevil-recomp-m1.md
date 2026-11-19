@@ -254,6 +254,6 @@ If fewer than 20 pure functions are hit in 90 s of attract mode, report the numb
 
 - `make recomp` writes the generated C for all of `GAME.EXE`, and `make linkcheck` links it with zero undefined symbols.
 - The interpreter and the generated C both match every MAME instruction vector.
-- The recompiled `_start` and the start of `main` reach the first loader call with MAME's registers and MAME's RAM.
+- The recompiled `_start` reaches the first loader call (slot 0x038, which happens before `main`) with MAME's registers and MAME's RAM. (Amended and accepted: `main` cannot be entered without a stand-in for that loader service, which is M2's.)
 - At least 20 real game functions replay with MAME's results.
 - Every function left to the interpreter and every unresolved jump is listed in config with a reason.

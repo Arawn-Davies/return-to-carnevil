@@ -96,9 +96,11 @@ The generated C, the interpreter and any runtime share one header.
 Every C file is built with `-std=c11 -O2 -ffp-contract=off -frounding-math
 -fno-strict-aliasing -fwrapv`, never `-ffast-math`. `-ffp-contract=off` stops the compiler
 fusing a multiply and an add; `-frounding-math` stops it folding FP expressions as if the
-rounding mode were always round-to-nearest, since `ctc1` can change it. The generated C has no
-undefined behaviour: the test harness builds it with `-fsanitize=undefined
--fno-sanitize-recover=undefined`.
+rounding mode were always round-to-nearest, since `ctc1` can change it. The generated C showed
+no undefined behaviour where it was run under `-fsanitize=undefined
+-fno-sanitize-recover=undefined`: the test harness builds the instruction and synthetic
+functions that way, and the test suite builds `replay` that way over the whole generated image
+and runs all 152 function captures through it (both modes for the impure ones).
 
 ## How each kind of instruction is handled
 
