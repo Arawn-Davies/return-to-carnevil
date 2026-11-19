@@ -26,11 +26,13 @@ The project is in its first milestone, M0: tools that extract the game's files a
 
 **M4: input.** Guns from a mouse or controller, coin and start. A level is playable.
 
-**M5: sound.** The DCS sound board, emulated on its own thread.
+**M5: sound.** The DCS sound board, emulated on its own thread. This completes the first playable build, on macOS: everything from M1 to M5 is developed and tested on a Mac.
 
-**M6: PlayStation 4.** A Linux x86-64 build, then the PS4 build and a performance pass. Full speed is the pass mark.
+**M6: Linux.** The same code built and tested on Linux x86-64, both native and under WSL2 on a Windows PC.
 
-**After M6:** replace the game's built-in Glide graphics library with native OpenGL routines, then higher resolutions and widescreen.
+**M7: PlayStation 4.** The PS4 Linux build and a performance pass on its slow processor. Full speed is the pass mark.
+
+**After M7:** replace the game's built-in Glide graphics library with native OpenGL routines, then higher resolutions and widescreen.
 
 ## What has been learned so far
 
@@ -56,4 +58,4 @@ About the code (preliminary, from the function discovery that is still under rev
 
 ## Target hardware
 
-The first target is a PlayStation 4 running Linux: eight 1.6 GHz Jaguar cores and a Radeon GPU with OpenGL through Mesa. Development happens on a Mac first, then a Linux PC, then the PS4. The code is kept portable, so other Linux and macOS machines should work too.
+The builds come in this order: macOS first (the development machine, and the first playable build), then Linux x86-64 including WSL2, then PlayStation 4 Linux. The PS4 is the machine the project exists for: eight 1.6 GHz Jaguar cores and a Radeon GPU with OpenGL through Mesa, too slow to emulate the game at full speed. It comes last because it is the slowest to test on. The code is kept portable throughout.

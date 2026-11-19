@@ -96,17 +96,18 @@ C/C++17, SDL2 for window/input/audio, OpenGL 3.3 core for rendering (radeonsi on
 - **M2** Boots and reaches the attract loop in the log (UART output, no graphics).
 - **M3** Voodoo-to-GL: attract mode renders correctly versus MAME.
 - **M4** Input and gun: a game can be played.
-- **M5** DCS audio.
-- **M6** PS4 build: performance pass, full speed, launcher entry. Full speed is the pass line; if register-level Voodoo can't reach it on Jaguar, the Glide HLE work is pulled forward into M6. *(Builder's call.)*
-- **Phase 2** Glide HLE function by function; then widescreen/high-resolution options. Planned separately after M6; the first plan ends at M6. *(Builder's call.)*
+- **M5** DCS audio. End of M5 = the first playable build, on macOS (M1–M5 are developed and tested on the Mac).
+- **M6** Linux x86-64 build, native and under WSL2 on the Linux PC. *(User's decision 2026-11-19: Mac build first, then Linux/WSL, then PS4.)*
+- **M7** PS4 build: performance pass, full speed, launcher entry. Full speed is the pass line; if register-level Voodoo can't reach it on Jaguar, the Glide HLE work is pulled forward into M7. *(Builder's call.)*
+- **Phase 2** Glide HLE function by function; then widescreen/high-resolution options. Planned separately after M7; the first plan ends at M7. *(Builder's call.)*
 
 ## Constraints
 
-- **Development hosts, in order (user's decision):** (1) the Mac natively first: Apple clang (already present), SDL2 built from source inside the project tree, OpenGL 3.3/4.1 core; the generated C and runtime stay portable, so arm64 macOS is a first-class dev target; (2) then the Linux PC (the PC with the PCIe HD60 Pro, reserved <address>) for Linux x86-64 testing; (3) the PS4 last. PS4 sessions are costly: they need the Linux PC running for the HD60 Pro, plus a USB HDMI capture device after it (two capture cards), on top of the jailbreak and Linux boot, so PS4 time is kept to M6.
+- **Development hosts, in order (user's decision):** (1) the Mac natively first: Apple clang (already present), SDL2 built from source inside the project tree, OpenGL 3.3/4.1 core; the generated C and runtime stay portable, so arm64 macOS is a first-class dev target; (2) then the Linux PC (the PC with the PCIe HD60 Pro, reserved <address>) for Linux x86-64 testing; (3) the PS4 last. PS4 sessions are costly: they need the Linux PC running for the HD60 Pro, plus a USB HDMI capture device after it (two capture cards), on top of the jailbreak and Linux boot, so PS4 time is kept to M7.
 - Builds: PS4 builds natively on the Linux container (Debian 13, GCC 14; binaries need glibc <= 2.38 to run on the PS4's 2.44, as with the tuned emulator cores) with `-O2 -march=btver2`.
 - No host installs on the user's Mac; toolchains live in containers/CTs.
 - Game data and generated C stay on the Gaming share (`reincarnevilation/` on the archive share); the git repo stays local/private and contains only tools, runtime, recompiler and tests.
-- PS4 time is expensive (see development hosts): PS4 is only needed from M6, apart from one MAME baseline measurement; earlier milestones are tested on the Mac, then the Linux PC.
+- PS4 time is expensive (see development hosts): PS4 is only needed from M7, apart from one MAME baseline measurement; earlier milestones are tested on the Mac, then the Linux PC.
 - The extracted game files, raw disk image and generated C live on the Gaming share under `reincarnevilation/` on the archive share; the Mac reaches them over the existing SMB mount (`/Volumes/archive`), or works on local copies kept outside the repo.
 
 ## Left to the builder
