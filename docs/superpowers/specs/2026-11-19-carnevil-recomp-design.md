@@ -30,7 +30,7 @@ The way there: translate the game's own MIPS code (`GAME.EXE`) to C once, ahead 
 ## Facts established (recon 2026-11-19)
 
 - Source data: `Consoles/ROMs/mame/carnevil/` on the Gaming share : `carnevil.chd` (4,310,046,720-byte disk, data SHA1 `ba32b7ef…`), `carnevi1.chd` (other revision), `boot.u32` / `carnevil1_9.u32` (boot ROM), `sound102.u95` (DCS ADSP-2115 boot ROM), `486_carnevil.u96`.
-- Extraction works with xclusivor/CarnEvil-Research scripts: CHD -> raw -> 17 partitions -> part0 has 1,356 files, including `GAME.EXE` (918,060 bytes) and `DIAG.EXE` (468,436 bytes), DCS `.BIN`/`.BNK`, `WMS` textures, `ZM`/`ZA` models. Work tree: `/share/Gaming/Research/carnevil/work/` (the Linux container `/mnt/gaming/Research/carnevil/work/`).
+- Extraction works with xclusivor/CarnEvil-Research scripts: CHD -> raw -> 17 partitions -> part0 has 1,356 files, including `GAME.EXE` (918,060 bytes) and `DIAG.EXE` (468,436 bytes), DCS `.BIN`/`.BNK`, `WMS` textures, `ZM`/`ZA` models. Work tree: `/share/reincarnevilation/work/` (the Linux container `/mnt/reincarnevilation/work/`).
 - `GAME.EXE` is a flat little-endian MIPS IV binary (no ELF/COFF header at offset 0). ~2,322 `jr ra`, ~1,862 `addiu sp,sp,-n` prologues, 1,317 distinct `jal` targets: on the order of 2,000 functions. Data references cluster at 0x8017xxxx–0x8023xxxx (KSEG0).
 - Built with GCC; statically links the 3dfx Glide library ("Portions Copyright (c) 1996 by 3DFx Interactive"), IDT MIPS runtime and DJ Delorie's libc. Debug strings exist (`graphics_init()`, `main_init_sound`, `grab_save_screen()`).
 - Boot chain (per the research repo): boot ROM -> DIAG.EXE -> boot ROM -> GAME.EXE.
@@ -105,9 +105,9 @@ C/C++17, SDL2 for window/input/audio, OpenGL 3.3 core for rendering (radeonsi on
 - **Development hosts, in order (user's decision):** (1) the Mac natively first: Apple clang (already present), SDL2 built from source inside the project tree, OpenGL 3.3/4.1 core; the generated C and runtime stay portable, so arm64 macOS is a first-class dev target; (2) then the Linux PC (the PC with the PCIe HD60 Pro, reserved <address>) for Linux x86-64 testing; (3) the PS4 last. PS4 sessions are costly: they need the Linux PC running for the HD60 Pro, plus a USB HDMI capture device after it (two capture cards), on top of the jailbreak and Linux boot, so PS4 time is kept to M6.
 - Builds: PS4 builds natively on the Linux container (Debian 13, GCC 14; binaries need glibc <= 2.38 to run on the PS4's 2.44, as with the tuned emulator cores) with `-O2 -march=btver2`.
 - No host installs on the user's Mac; toolchains live in containers/CTs.
-- Game data and generated C stay on the Gaming share (Research/carnevil); the git repo stays local/private and contains only tools, runtime, recompiler and tests.
+- Game data and generated C stay on the Gaming share (`reincarnevilation/` on the archive share); the git repo stays local/private and contains only tools, runtime, recompiler and tests.
 - PS4 time is expensive (see development hosts): PS4 is only needed from M6, apart from one MAME baseline measurement; earlier milestones are tested on the Mac, then the Linux PC.
-- The extracted game files, raw disk image and generated C live on the Gaming share under `Research/carnevil/`; the Mac reaches them over the existing SMB mount (`/Volumes/archive`), or works on local copies kept outside the repo.
+- The extracted game files, raw disk image and generated C live on the Gaming share under `reincarnevilation/` on the archive share; the Mac reaches them over the existing SMB mount (`/Volumes/archive`), or works on local copies kept outside the repo.
 
 ## Left to the builder
 

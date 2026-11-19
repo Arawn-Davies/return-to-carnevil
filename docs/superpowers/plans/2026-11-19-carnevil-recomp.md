@@ -14,14 +14,14 @@
 
 ## Global Constraints
 
-- No game data, extracted files, ROMs or generated C in the git repo, ever. They live under the Gaming share: `Research/carnevil/work/` (Mac: `/Volumes/archive/Gaming/Research/carnevil/work`; the Linux container: `/mnt/gaming/Research/carnevil/work`). Analysis notes may quote addresses, opcodes counts and short strings, not code listings.
-- The repo is local only. Never `git push`. No Claude attribution in commits.
+- No game data, extracted files, ROMs or generated C in the git repo, ever. They live under the Gaming share: `reincarnevilation/work/` on the archive share (Mac: `/Volumes/archive/reincarnevilation/work`; the Linux container: `/mnt/reincarnevilation/work`). Analysis notes may quote addresses, opcodes counts and short strings, not code listings.
+- The repo is published privately (GitHub `origin`, mirror `mirror`) on a BYOCHD basis: it ships no copyrighted game material, and users bring their own CHD. Implementers never `git push`; pushes happen only on the user's say-so. No Claude attribution in commits.
 - Nothing is installed on the Mac. Python tools use the stdlib only and run with the existing `python3`. Anything else runs in the Linux container (`ssh root@<host> 'pct exec <id> -- su roms -c "…"'`), where apt installs are fine.
 - Never run `head` or `tail`. Never print secrets.
 - One supported game revision: `GAME.EXE` SHA-256 `47aea64a3e5d15c15f28b3907294e706f078a4e9a47c422f551f420d9ba7da9e` (from `carnevil.chd`, data SHA1 `ba32b7ef9721d730ce58bd753d47fb947b6ae9b6`). Tools refuse other hashes.
 - Other pinned hashes: `DIAG.EXE` `38b2810864c85d6971cedc3a6b0e507c8c6d593e4d7c355c880f91dbcaaaa2b9`; `boot.u32` = `carnevil1_9.u32` `05346e09d90a8e5aadc5e0aae8bd53b80816e96ea1e649ba548e4c6b07dac4a6`.
 - Development host order: Mac natively, then the Linux PC, then PS4 (M6 only).
-- Tests that need game data read `CARNEVIL_WORK` (default `/Volumes/archive/Gaming/Research/carnevil/work`) and **skip** when it is missing. Unit tests use synthetic fixtures built in the test.
+- Tests that need game data read `CARNEVIL_WORK` (default `/Volumes/archive/reincarnevilation/work`) and **skip** when it is missing. Unit tests use synthetic fixtures built in the test.
 
 ## Review Focus
 
