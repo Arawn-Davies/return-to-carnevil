@@ -2,6 +2,15 @@
 /data/
 /work/
 /generated/
+# recompile output under any folder name, and its build (make linkcheck builds outside the repo)
+*.partial/
+funcs_[0-9]*.c
+func_table.c
+funcs.h
+manifest.toml
+/build/
+*.o
+game_stub
 *.chd
 *.raw
 *.EXE

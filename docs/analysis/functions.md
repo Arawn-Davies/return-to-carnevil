@@ -4,12 +4,19 @@ Produced by `python3 -m carnevil_tools functions GAME.EXE -o config/game.functio
 (`carnevil_tools/functions.py`, names from `carnevil_tools/naming.py`). The
 command prints every number below. It reads the hand-maintained
 `config/game.manual.toml` (the output's name with `.functions.toml` replaced
-by `.manual.toml`): the stub block and three function starts MAME showed, each
-with the note that shows it. `config/game.functions.toml` holds the result:
-`format = 1`, the SHA-256 of the EXE it came from, text bounds, the stub
-block, functions (address, size, name, sources), jump tables (the `jr`, the
-table address, the targets) and the unreached ranges. Counts and addresses
-only. A game-data test checks that the committed file equals a fresh analysis.
+by `.manual.toml`): the stub block, three function starts MAME showed, 16 jump
+tables read from the code ("Manual jump tables") and 2 functions left to the
+interpreter ("Jumps out of their function"), each with the evidence for it.
+`config/game.functions.toml` holds the result: `format = 2`, the SHA-256 of the
+EXE it came from, text bounds, the stub block, functions (address, size, name,
+sources), jump tables (the `jr`, the table address, 0 for a manual table, and
+the targets), the interpreted functions and the unreached ranges. Counts and
+addresses only. A game-data test checks that the committed file equals a fresh
+analysis.
+
+The numbers below are from the run with the full manual file of M1 Task 5. The
+16 manual jump tables made 488 bytes of case blocks reached code; the counts
+that moved are given with their earlier value ("was ...").
 
 Re-run in Task 5b on the chain-extracted GAME.EXE (SHA-256 f9455ce8...d3a6,
 `disk-format.md`): `config/game.functions.toml` was byte-for-byte unchanged
@@ -24,28 +31,32 @@ Entry: 0x800C4000 (the load address).
 
 The text runs from 0x800C4000 to 0x8016DC4C (695,372 bytes). There are 2,093
 functions: 29 one-slot stubs in the boot-ROM stub block and 2,064 of the
-game's own. There are 75 jump tables (1,488 entries, the largest has 121). One
-of the functions sits in the data, past text_end (0x801A355C, below). 165,638
-words are reached as code and none of them decodes as unknown. No function runs
-straight into the next one. 262 ranges (32,260 bytes, 4.64% of the text) are
-not reached; 15 KB of that is one data block inside the text. 16 indirect jumps
-could not be resolved; their targets (about 1 KB of code) are among the
-unreached ranges, listed below.
+game's own. There are 91 jump tables (1,619 entries, the largest has 121): 75
+found by the analysis and 16 from the manual file (was 75 and 1,488). One of
+the functions sits in the data, past text_end (0x801A355C, below). 165,760
+words are reached as code (was 165,638) and none of them decodes as unknown.
+No function runs straight into the next one. 253 ranges (31,772 bytes, 4.57% of
+the text; was 262, 32,260 bytes, 4.64%) are not reached; 15 KB of that is one
+data block inside the text. The analysis alone leaves 16 indirect jumps
+unresolved; the manual file gives the table of each, so none is left
+(below).
 
 ## Functions by source
 
 A function counts once under each of its sources:
 
 - entry: 1
-- call: 1,213 (`jal`, plus tail calls by `j`, see departure 4)
+- call: 1,214 (`jal`, plus tail calls by `j`, see departure 4; was 1,213: a
+  case block of the manual table at 0x80150174 calls 0x8014BD78)
 - pointer: 396
 - prologue: 981
 - manual: 3 (`config/game.manual.toml`)
 - stub: 29 (call targets inside the stub block)
 
-The combinations that occur: call 907, call+prologue 295, call+pointer 9,
-call+pointer+prologue 2, pointer 163, pointer+prologue 219, prologue 465,
-manual+pointer 3, stub 29, entry 1.
+The combinations that occur: call 907, call+prologue 296, call+pointer 9,
+call+pointer+prologue 2, pointer 163, pointer+prologue 219, prologue 464,
+manual+pointer 3, stub 29, entry 1. (0x8014BD78 moved from prologue to
+call+prologue.)
 
 The lui/addiu (and lui/ori) pass over reached code found 146 function starts
 that no other pass had found when it ran. These are callbacks whose address is
@@ -134,6 +145,18 @@ committed before the stub block and the manual starts were added):
   in this order. A prologue-only start that reached code takes as a delay slot
   is now withdrawn as well, like one that reached code runs into.
 
+Against that run, the 16 `[[jump_table]]` and 2 `[[interpreted]]` entries of
+M1 Task 5 changed this:
+
+- Reached: the 9 unreached ranges holding the case blocks of the 16 jumps
+  (488 bytes) are code now: 0x8012DCB0 to 0x8012DD50, 0x8015017C to
+  0x80150200 and the seven 28-byte tails (listed under "Manual jump tables").
+  No function was added, removed or resized; 0x8014BD78 gains the source
+  `call` (a case block of the table at 0x80150174 calls it).
+- 91 jump tables instead of 75; no `jr` is left unresolved.
+- `interpreted` lists 0x80151AC0 and 0x80151B50. They stay in the function
+  list and the analysis descends into them as before.
+
 ## Where the algorithm departs from the brief, and why
 
 1. **text_end** follows the island rule above. Without it, the stub at
@@ -153,7 +176,7 @@ committed before the stub block and the manual starts were added):
    result was 1,815 functions and 12.19% unreached, much of it real code
    behind a dead tail or a leaf in the same gap. (That was measured before
    the withdrawal step below was added.) With this rule it is 2,093
-   functions and 4.64% (with the manual input), still with no unknown word
+   functions and 4.57% (with the manual input; 4.64% before its jump tables), still with no unknown word
    in reached code.
 
    Because the passes run in rounds, a later pass can prove a prologue start
@@ -174,7 +197,8 @@ committed before the stub block and the manual starts were added):
 3. **Jump-table base.** GCC builds the table address as
    `lui at,%hi; addu at,at,idx; lw r,%lo(at)`, with the low half in the `lw`
    offset. The brief's `lui`/`addiu` form is also accepted. No entry of the
-   75 tables falls outside the function that holds its `jr`.
+   75 tables falls outside the function that holds its `jr` (a manual table is
+   refused if one does).
 4. **Tail calls.** A `j` to another known function start is a tail call, as
    the ruling says. A `j` out of the function it sits in, to an address that
    is not a known start, is a tail call only when the target is a
@@ -192,12 +216,13 @@ committed before the stub block and the manual starts were added):
 6. **Jump tables are all or nothing.** A table is recorded only if every
    entry is a word address inside the text; otherwise its `jr` is listed as
    unresolved and discovery runs again without it, so `targets[k]` is always
-   case k. All 75 tables pass.
+   case k. All 75 tables pass. (The manual tables are checked differently:
+   every target must lie inside the function of the `jr`.)
 
 ## Unreached ranges
 
-262 ranges, 32,260 bytes. functions.toml lists them all; they fall into these
-kinds:
+253 ranges, 31,772 bytes (was 262, 32,260 before the manual jump tables).
+functions.toml lists them all; they fall into these kinds:
 
 - **Data block inside the text: 0x80110B04 to 0x80114560** (14,940 bytes, 802
   words that do not decode). Code addresses it through lui pairs (11 of
@@ -222,30 +247,54 @@ kinds:
   (1,320 bytes). Among them, 0x80167FB8 to 0x80167FF4 holds four
   Status-register helpers (`mfc0`/`mtc0` on register 12). These are the only
   COP0 moves in the text, and nothing references them.
-- **19 other clean ranges** (720 bytes) with no `jr ra`. 488 bytes of that
-  are the case blocks of the unresolved indirect jumps below.
+- **10 other clean ranges** (232 bytes) with no `jr ra`. (There were 19,
+  720 bytes: the other 9, 488 bytes, were the case blocks of the 16 jumps
+  below, reached code now.)
 
-11 ranges (504 bytes) end inside a function rather than at a function start.
-9 are the case blocks of the unresolved jumps; the other two are
-0x800D87FC to 0x800D8804 and 0x80151BDC to 0x80151BE4.
+2 ranges (16 bytes) end inside a function rather than at a function start:
+0x800D87FC to 0x800D8804 and 0x80151BDC to 0x80151BE4. (There were 11; the
+other 9 were the case blocks.)
 
-## Unresolved indirect jumps (16)
+## Manual jump tables (16)
 
-None of these has a table within the brief's 12-instruction window. The next
-milestone needs their targets:
+The analysis finds no table within the brief's 12-instruction window for 16
+`jr`s. Each has a `[[jump_table]]` entry in `config/game.manual.toml`, with
+the targets read from the table in the file (case k is entry k) and a reason
+naming the instructions below; `functions.toml` records them with
+`table_addr = 0`.
 
-- 0x8012DCA8: a switch whose `sltiu` lies outside the window (the dispatch is
-  reached by a branch). The table is 0x80174328 and its cases are 0x8012DCB0
-  to 0x8012DD50.
-- 0x80150174: a switch with an `sltiu` bound of 5. The table base is held in
-  s5 from earlier in the function. The table is 0x801757A8 (5 entries), the
-  cases 0x8015017C to 0x80150200.
+- 0x8012DCA8: a switch whose `sltiu` lies outside the window. The dispatch is
+  reached only by the `bne` at 0x8012D97C, whose delay slot is
+  `sltiu v0,s0,28`; the `beq` at 0x8012DC94 sends indexes 28 and up to
+  0x8012DD50, then `lui at` / `addu` / `lw v0,0x4328(at)` read the table
+  0x80174328 (28 entries; the next table, of the `jr` at 0x8012DE14, starts at
+  0x80174398). Cases 0x8012DCB0 to 0x8012DD50.
+- 0x80150174: a switch with an `sltiu` bound of 5 (0x80150160). The table
+  base is held in s5, set to 0x801757A8 at 0x80150108 and 0x8015010C and not
+  written again before the epilogue. 5 entries, cases 0x8015017C to
+  0x80150200. The switch lies inside the loop that branches back at
+  0x80150248.
 - 0x80164484, 0x801644EC, 0x80164630, 0x80164698, 0x801647D0, 0x80164830,
   0x80164938, 0x80164998, 0x80164EB4, 0x80164F1C, 0x80165040, 0x801650A8,
   0x80165290, 0x801652F8: `lw v0,0(reg); jr v0` dispatches in a family of
-  block-copy routines. The routines go through tables of code labels (for
-  example 0x80176AD8) to the 28-byte tails at 0x801644F4, 0x801646A0,
+  block-copy routines (0x801643AC, 0x80164558, 0x80164708, 0x80164DD0,
+  0x80165124), two per copy loop. Before the loop, each routine computes
+  `sltiu tN,idx,7`, then `sll v1,idx,2` and, for each of the loop's two
+  dispatches, a base register = `v1` + a table address built by a `lui` /
+  `addiu` pair. Inside the loop each dispatch is reached only past
+  `beq tN,zero` (index 7 and up skip it), and the base is not written again
+  on any path to the `lw` (reaching definitions over the function; the case
+  tails write only v0). The tables are 7 words each, separated by a zero
+  word: 0x80176AD8 to 0x80176C90, two per tail. Each table's entries are the
+  four labels of the dispatch's own 28-byte tail: 0x801644F4, 0x801646A0,
   0x80164838, 0x801649A0, 0x80164F24, 0x801650B0 and 0x80165300.
+
+## Unresolved indirect jumps (0)
+
+With the manual tables, no `jr` on a register other than ra is left
+unresolved, so the recompiler emits no `rt_jump` for one. A `jr` added to
+this list must be checked not to be the back edge of a loop: `rt_jump` to an
+address that is not a function start runs the interpreter as a nested call.
 
 ## Jumps out of their function
 
@@ -256,19 +305,32 @@ stack. It looks like the shared restore path of hand-written save/restore
 code around 0x80151AC0 to 0x80152008, which is not GCC output. The
 recompiler has to treat it as a jump between functions.
 
+It is a context switch. 0x80151AC0 swaps sp and k1 (three `xor`s at
+0x80151AE4), saves s0-s7, fp, ra and FP registers below the stack it switched
+to and jumps to 0x80151E90; 0x80151B50 calls 0x80149C58, swaps sp and k1 the
+same way and jumps there too. 0x80151E90 lies inside 0x80151BC0, which loops
+over a list of saved contexts: it restores a context's registers and returns
+into it with `jr ra` at 0x80151E88, and 0x80151E90 is where it carries on when
+a context switches back. A manual start at 0x80151E90 does not recompile:
+0x80151BC0 then jumps into the new function (`j 0x80151F9C` at 0x80151CF4) and
+the new function jumps back (`j 0x80151CE4` at 0x80151F94), neither target a
+function start. So 0x80151AC0 and 0x80151B50 are `[[interpreted]]` entries
+in the manual file: the recompiler emits each as a call of `interp_run`, and
+their `j` runs on in the interpreter. Returning into another context with
+`jr ra`, or switching stacks under a C call chain, is a runtime question for
+M2 whichever side runs the code.
+
 ## Pointers refused by the prologue-or-known-start rule
 
-47 pointer values, from data words or lui pairs, land somewhere inside an
-unreached range that holds no undecodable word. Values inside the data block
-at 0x80110B04 are data pointers and are not counted.
+8 pointer values, from data words or lui pairs, land somewhere inside an
+unreached range that holds no undecodable word (was 47: the other 39 were case
+labels of the 16 jumps that have manual tables now, 6 in 0x8012DCB0 to
+0x8012DD3C, 5 in 0x8015017C to 0x801501F0 and 4 in each of the seven 28-byte
+tails). Values inside the data block at 0x80110B04 are data pointers and are
+not counted.
 
 - 0x800C42CC: the stub block's end, from `_start`'s copy loop. (The block's
   start, 0x800C408C, is no longer counted: the block is not unreached.)
-- 39 case labels of the unresolved jumps:
-  - 6 in 0x8012DCB0 to 0x8012DD3C;
-  - 5 in 0x8015017C to 0x801501F0;
-  - 4 in each of the seven 28-byte tails at 0x801644F4, 0x801646A0,
-    0x80164838, 0x801649A0, 0x80164F24, 0x801650B0 and 0x80165300.
 - 7 probable callbacks: 0x800C6F28, 0x800FE924, 0x800FEDB0, 0x80101CD8,
   0x80102454, 0x801150C8 and 0x801478C0. Code builds each of these addresses
   with a lui pair, and each lands on code with no stack frame. 0x801478C0
@@ -280,21 +342,24 @@ at 0x80110B04 are data pointers and are not counted.
 
 ## Census of reached code
 
-Restricted to the 165,638 reached words (all functions, minus the unreached
+Restricted to the 165,760 reached words (all functions, minus the unreached
 ranges and the stub block). This is the list of instructions the recompiler
-has to handle.
+has to handle. The 122 words the manual jump tables added (165,638 before
+them) changed ten counts and not the set of 98 mnemonics. The earlier counts
+were addiu 26682, lw 16445, lui 15999, addu 14937, sw 14706, sll 12824,
+jal 11199, beq 4834, j 4232 and jalr 63.
 
 Unknown words: 0.
 
-Mnemonic counts: addiu 26682, lw 16445, lui 15999, addu 14937, sw 14706,
-sll 12824, jal 11199, lwc1 6678, beq 4834, swc1 4481, j 4232, bne 3446,
+Mnemonic counts: addiu 26713, lw 16461, lui 16011, addu 14946, sw 14719,
+sll 12831, jal 11200, lwc1 6678, beq 4835, swc1 4481, j 4263, bne 3446,
 sh 2755, jr 2139, ori 1802, lhu 1604, mul.s 1589, andi 1513, slti 1497,
 add.s 1221, lh 1152, sub.s 1106, sra 928, ldc1 801, mtc1 791, sdc1 697,
 or 616, mfc1 551, lbu 513, bc1f 510, c.lt.s 484, subu 479, and 474, slt 459,
 cvt.s.w 443, mov.s 389, beql 325, bnel 323, blez 312, sltiu 310, div.s 306,
 sb 258, srl 210, c.le.s 209, bc1t 182, sltu 166, c.eq.s 137, bgez 134,
 neg.s 128, cvt.d.s 118, trunc.w.s 107, bc1tl 102, cvt.s.d 102, movz 82,
-mult 73, xor 72, bc1fl 71, mflo 65, madd.s 64, jalr 63, lb 60, add.d 59,
+mult 73, xor 72, bc1fl 71, mflo 65, jalr 64, madd.s 64, lb 60, add.d 59,
 cvt.d.w 54, bltz 53, mul.d 48, break 39, bgtz 35, movn 33, nor 32, mfhi 30,
 xori 30, c.lt.d 24, sllv 23, c.le.d 22, bltzl 21, sub.d 21, cache 20,
 mov.d 18, c.eq.d 16, div 15, msub.s 14, div.d 13, bgezl 11, addi 10,

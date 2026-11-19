@@ -9,12 +9,19 @@ with every emitted function registered by address (the entry also by name), one 
 registered. The image is loaded into RAM in both modes.
 """
 import dataclasses
+import io
+import os
 import random
 import re
+import shutil
 import struct
+import subprocess
+import tempfile
+import tomllib
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 
-from carnevil_tools import emit, exe, functions, mips, recomp, vectors
+from carnevil_tools import cli, emit, exe, functions, mips, recomp, vectors
 from tests import charness
 
 CODE = vectors.CODE_BASE
@@ -92,11 +99,13 @@ def _registration(fns, entry_name):
 class Program:
     """An analysed, emitted and built image."""
 
-    def __init__(self, asm, manual=(), stub_blocks=(), native=()):
+    def __init__(self, asm, manual=(), stub_blocks=(), native=(), jump_tables=(),
+                 interpreted=()):
         self.labels = dict(asm.labels)
         self.words = asm.words()
         self.image = image_of(self.words)
-        self.analysis = functions.analyse(self.image, CODE, manual, stub_blocks)
+        self.analysis = functions.analyse(self.image, CODE, manual, stub_blocks, jump_tables,
+                                          interpreted)
         self.fns = sorted(self.analysis.functions, key=lambda f: f.addr)
         self.c = {f.addr: recomp.function_c(self.image, self.analysis, f) for f in self.fns}
         source = "".join(self.c[f.addr] + "\n" for f in self.fns)
@@ -749,6 +758,310 @@ class VectorTest(unittest.TestCase):
             self.assertIsNone(charness.first_difference(u, v), case.name)
             self.assertEqual(u.calls, v.calls, case.name)
             self.assertEqual(v.calls[0][0], "break")
+
+
+MFC0 = 0x40086000  # mfc0 t0,$12: outside the reached census
+
+
+def dispatch_asm():
+    """`lw v0,0(a0); jr v0` over two cases the analysis cannot find (a manual jump table),
+    an interpreted function `g` and a function `h` holding mfc0, which only `g` calls."""
+    p = Asm()
+    p(A("addu", rd=S0, rs=RA, rt=0))
+    p.j("jal", "g")
+    p(0)
+    p(A("addu", rd=RA, rs=S0, rt=0))
+    p(A("lw", rt=V0, rs=A0, imm=0))
+    p.label("jr")
+    p(A("jr", rs=V0), 0)
+    p.label("case0")
+    p(A("ori", rt=V0, rs=0, imm=10))
+    p.j("j", "end")
+    p(0)
+    p.label("case1")
+    p(A("ori", rt=V0, rs=0, imm=11))
+    p.label("end")
+    p(JR_RA, 0)
+    p.label("g")
+    p(A("addiu", rt=SP, rs=SP, imm=-8), A("ori", rt=V1, rs=0, imm=7), JR_RA,
+      A("addiu", rt=SP, rs=SP, imm=8))
+    p.label("h")
+    p(A("addiu", rt=SP, rs=SP, imm=-8), MFC0, JR_RA, A("addiu", rt=SP, rs=SP, imm=8))
+    p.label("table")
+    p.ptr("case0")
+    p.ptr("case1")
+    return p
+
+
+def dispatch_analysis(p, interpreted=True):
+    """The image of `dispatch_asm` and its analysis with the manual jump table, `h` as a
+    manual start and `g` (and `h`) interpreted."""
+    L = p.labels
+    image = image_of(p.words())
+    table = functions.JumpTable(L["jr"], 0, [L["case0"], L["case1"]])
+    return image, functions.analyse(image, CODE, [L["h"]], (), [table],
+                                    [L["g"], L["h"]] if interpreted else [])
+
+
+def write_exe(path, words, load=CODE):
+    """An EXE file of `words` at `load` (header: checksum, load address); its SHA-256."""
+    body = struct.pack("<I", load) + struct.pack("<%dI" % len(words), *words)
+    raw = struct.pack("<I", exe.posix_cksum(body)) + body
+    with open(path, "wb") as f:
+        f.write(raw)
+    return exe.load_exe(path, expect_sha256=None)
+
+
+class RecompileTest(unittest.TestCase):
+    """recomp.recompile: the files, the manifest and the output folder."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp)
+
+    def test_recompile_writes_manifest_last_and_no_partial_dir(self):
+        image, analysis = dispatch_analysis(dispatch_asm())
+        out = os.path.join(self.tmp, "gen")
+        written = []
+        real = recomp._write
+
+        def spy(path, text):
+            written.append(os.path.relpath(path, self.tmp))
+            real(path, text)
+        recomp._write = spy
+        self.addCleanup(setattr, recomp, "_write", real)
+        manifest = recomp.recompile(image, analysis, out)
+        self.assertEqual(written[-1], os.path.join("gen.partial", "manifest.toml"))
+        self.assertEqual(sorted(os.listdir(out)), ["func_table.c", "funcs.h", "funcs_000.c",
+                                                   "manifest.toml"])
+        self.assertFalse(os.path.exists(out + ".partial"))
+        with open(os.path.join(out, "manifest.toml"), "rb") as f:
+            data = tomllib.load(f)
+        self.assertEqual(data, {"format": 1, "exe_sha256": "", "functions": 3, "files": 1,
+                                "stubs": 0, "interpreted": 2, "jump_tables": 1,
+                                "unresolved_jr": 0})
+        self.assertEqual(dataclasses.asdict(manifest), data)
+        # a complete output is replaced; anything else is refused and left alone
+        with open(os.path.join(out, "stale.c"), "w") as f:
+            f.write("/* from an earlier run */\n")
+        recomp.recompile(image, analysis, out)
+        self.assertNotIn("stale.c", os.listdir(out))
+        os.remove(os.path.join(out, "manifest.toml"))
+        with self.assertRaisesRegex(ValueError, "manifest.toml"):
+            recomp.recompile(image, analysis, out)
+        self.assertEqual(sorted(os.listdir(out)), ["func_table.c", "funcs.h", "funcs_000.c"])
+
+    def test_files_hold_64_functions_in_address_order(self):
+        p = Asm()
+        for k in range(70):
+            p.j("jal", f"f{k}")
+            p(0)
+        p(JR_RA, 0)
+        for k in range(70):
+            p.label(f"f{k}")
+            p(A("ori", rt=V0, rs=0, imm=k), JR_RA, 0)
+        image = image_of(p.words())
+        analysis = functions.analyse(image, CODE)
+        out = os.path.join(self.tmp, "gen")
+        self.assertEqual(recomp.recompile(image, analysis, out).files, 2)
+        names = []
+        for name in ("funcs_000.c", "funcs_001.c"):
+            with open(os.path.join(out, name)) as f:
+                text = f.read()
+            self.assertIn('#include "recomp.h"\n#include "funcs.h"\n', text)
+            # the prototypes are in funcs.h only, not repeated in the function files
+            self.assertNotRegex(text, r"(?m)^void fn_[0-9A-F]{8}\(uint8_t \*ram, cpu_t \*c\);$")
+            names.append(re.findall(r"^void (fn_[0-9A-F]{8})\(uint8_t \*ram, cpu_t \*c\)$", text,
+                                    re.M))
+        self.assertEqual([len(n) for n in names], [64, 7])
+        flat = names[0] + names[1]
+        self.assertEqual(flat, sorted(flat))
+        with open(os.path.join(out, "funcs.h")) as f:
+            header = f.read()
+        self.assertEqual(re.findall(r"^void (fn_[0-9A-F]{8})\(uint8_t \*ram, cpu_t \*c\);$",
+                                    header, re.M), flat)
+
+    def test_unsupported_instruction_leaves_no_output(self):
+        image, analysis = dispatch_analysis(dispatch_asm(), interpreted=False)
+        h = dispatch_asm().labels["h"]
+        out = os.path.join(self.tmp, "gen")
+        self.assertEqual(mips.decode(MFC0, h + 4).mnemonic, "mfc0")
+        with self.assertRaises(recomp.RecompileError) as err:
+            recomp.recompile(image, analysis, out)
+        self.assertEqual(err.exception.addr, h + 4)
+        self.assertIn(f"{h + 4:08X}", str(err.exception))
+        self.assertIn("mfc0", str(err.exception))
+        self.assertEqual(os.listdir(self.tmp), [])
+
+    def test_wrong_exe_hash_is_refused(self):
+        p = dispatch_asm()
+        exe_path = os.path.join(self.tmp, "GAME.EXE")
+        image = write_exe(exe_path, p.words())
+        _, analysis = dispatch_analysis(p)
+        analysis.exe_sha256 = "ab" * 32
+        toml = os.path.join(self.tmp, "game.functions.toml")
+        functions.write_toml(analysis, toml)
+        out = os.path.join(self.tmp, "gen")
+        err = io.StringIO()
+        with redirect_stderr(err):
+            status = cli.main(["recompile", exe_path, "-o", out, "--functions", toml])
+        self.assertEqual(status, 1)
+        self.assertIn(image.sha256, err.getvalue())
+        self.assertIn("ab" * 32, err.getvalue())
+        self.assertFalse(os.path.exists(out))
+        # with the right hash the CLI writes the output and says what it wrote
+        analysis.exe_sha256 = image.sha256
+        functions.write_toml(analysis, toml)
+        with redirect_stdout(io.StringIO()) as printed:
+            self.assertEqual(cli.main(["recompile", exe_path, "-o", out, "--functions", toml]),
+                             0)
+        self.assertIn("wrote 3 functions in 1 files", printed.getvalue())
+        self.assertTrue(os.path.isfile(os.path.join(out, "manifest.toml")))
+
+    def test_lookup_table_is_sorted_and_complete(self):
+        block = CODE + 0x400
+        p = dispatch_asm()
+        p.label("k")  # a manual start that calls a loader slot
+        p(A("jal", target=block + 0x10), 0, JR_RA, 0)
+        p.pad_to(block + 0x40)
+        L = p.labels
+        image = image_of(p.words())
+        analysis = functions.analyse(
+            image, CODE, [L["h"], L["k"]], [(block, block + 0x40)],
+            [functions.JumpTable(L["jr"], 0, [L["case0"], L["case1"]])], [L["g"], L["h"]])
+        starts = sorted(f.addr for f in analysis.functions)
+        self.assertIn(block + 0x10, starts)  # the stub slot
+        out = os.path.join(self.tmp, "gen")
+        manifest = recomp.recompile(image, analysis, out)
+        self.assertEqual((manifest.stubs, manifest.interpreted), (1, 2))
+        with open(os.path.join(out, "func_table.c")) as f:
+            text = f.read()
+        entries = re.findall(r"\{0x([0-9A-F]{8})u, (fn_[0-9A-F]{8})\}", text)
+        self.assertEqual([int(a, 16) for a, _ in entries], starts)
+        self.assertEqual([n for _, n in entries], [recomp.c_name(a) for a in starts])
+        self.assertIn("recomp_fn recomp_lookup(uint32_t addr)", text)
+
+    def test_interpreted_function_is_a_thunk(self):
+        p = dispatch_asm()
+        image, analysis = dispatch_analysis(p)
+        for label in ("g", "h"):  # h holds mfc0: its body is never emitted or checked
+            fn = next(f for f in analysis.functions if f.addr == p.labels[label])
+            text = recomp.function_c(image, analysis, fn)
+            body = text.split("{\n", 1)[1]
+            self.assertEqual(body, f"    interp_run(ram, c, 0x{fn.addr:08X}u);\n}}\n")
+        main = recomp.function_c(image, analysis, analysis.functions[0])
+        self.assertIn(f"fn_{p.labels['g']:08X}(ram, c);", main)
+
+    def test_function_text_without_prototypes(self):
+        p = dispatch_asm()
+        image, analysis = dispatch_analysis(p)
+        main = analysis.functions[0]
+        g = f"void fn_{p.labels['g']:08X}(uint8_t *ram, cpu_t *c);\n"
+        self.assertTrue(recomp.function_c(image, analysis, main).startswith(g))
+        self.assertTrue(recomp.function_c(image, analysis, main, prototypes=False)
+                        .startswith("/* _start */\n"))
+
+
+class ManualEntriesTest(RecompTestCase):
+    def test_manual_jump_table_is_used(self):
+        p = dispatch_asm()
+        L = p.labels
+        table = functions.JumpTable(L["jr"], 0, [L["case0"], L["case1"], L["case0"]])
+        prog = Program(p, manual=[L["h"]], jump_tables=[table], interpreted=[L["g"], L["h"]])
+        text = prog.c[CODE]
+        self.assertIn("switch (target) {", text)
+        self.assertEqual(sorted(re.findall(r"^\s*case 0x([0-9A-F]{8})u:", text, re.M)),
+                         [f"{L['case0']:08X}", f"{L['case1']:08X}"])
+        self.assertNotIn(f"rt_jump(ram, c, target);\n        return;\n    }}\n}}", text)
+
+        def setup(s, rng, i):
+            s.r[A0] = 0x80200000  # the harness's scratch page holds the case address
+            s.mem[0x80200000] = (L["case0"], L["case1"])[i % 2]
+        cases = prog.cases("manual-table", setup)
+        got = self.assertSameAsInterpreter(prog, cases, unrecompiled=[L["g"]])
+        for i, state in enumerate(got):
+            self.assertEqual(state.r[V0], 10 + i % 2)
+            self.assertEqual(state.r[V1], 7)  # g ran, in the interpreter
+
+
+def _make():
+    make = shutil.which("make")
+    if make is None:
+        raise unittest.SkipTest("no `make` on PATH")
+    charness._cc()  # skips without `cc`
+    return make
+
+
+def linkcheck(make, generated, build):
+    """Run `make linkcheck` on a generated folder; the CompletedProcess."""
+    return subprocess.run([make, "-C", charness.REPO, "linkcheck", f"GENERATED={generated}",
+                           f"BUILD={build}"], capture_output=True, text=True)
+
+
+class LinkTest(unittest.TestCase):
+    """The generated files, compiled with the stub runtime by `make linkcheck`."""
+
+    def setUp(self):
+        self.make = _make()
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp)
+
+    def test_synthetic_image_links_and_runs(self):
+        block = CODE + 0x400
+        p = Asm()
+        p(A("addu", rd=S0, rs=RA, rt=0))
+        p.j("jal", "f")  # recompiled
+        p(0)
+        p.j("jal", "g")  # interpreted
+        p(0)
+        p(A("lui", rt=T0, imm=0xB000))
+        p(A("lw", rt=T1, rs=T0, imm=0))  # the bus, twice: logged once
+        p(A("lw", rt=T2, rs=T0, imm=0))
+        p(A("sw", rt=T1, rs=T0, imm=4))
+        p(A("jal", target=block + 0x18))  # a loader slot
+        p(0)
+        p(A("addu", rd=RA, rs=S0, rt=0))
+        p(JR_RA, 0)
+        p.label("f")
+        p(A("ori", rt=V0, rs=0, imm=0x1234), JR_RA, 0)
+        p.label("g")
+        p(A("addiu", rt=SP, rs=SP, imm=-8), A("ori", rt=V1, rs=0, imm=7), JR_RA,
+          A("addiu", rt=SP, rs=SP, imm=8))
+        p.pad_to(block + 0x40)
+        exe_path = os.path.join(self.tmp, "GAME.EXE")
+        image = write_exe(exe_path, p.words())
+        analysis = functions.analyse(image, CODE, (), [(block, block + 0x40)], (),
+                                     [p.labels["g"]])
+        gen, build = os.path.join(self.tmp, "gen"), os.path.join(self.tmp, "build")
+        recomp.recompile(image, analysis, gen)
+        res = linkcheck(self.make, gen, build)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        stub = os.path.join(build, "game_stub")
+        run = subprocess.run([stub, f"0x{CODE:08X}", exe_path], capture_output=True, text=True)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        regs = [int(v, 16) for v in run.stdout.split("\n")[0].split()[1:]]
+        self.assertEqual(len(regs), 32)
+        self.assertEqual((regs[V0], regs[V1], regs[T1], regs[T2]), (0x1234, 7, 0, 0))
+        log = run.stderr.splitlines()
+        self.assertEqual(log, [f"stub: interp_run entered at 0x{p.labels['g']:08X}",
+                               "stub: bus_read 0xB0000000 size 4",
+                               "stub: bus_write 0xB0000004 size 4 value 0x00000000",
+                               "stub: rt_loader slot 0x018"])
+        # nothing changed: nothing is compiled or linked again
+        again = linkcheck(self.make, gen, build)
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertNotIn(" -c ", again.stdout)
+        self.assertNotIn(" -o ", again.stdout)
+
+    def test_linkcheck_refuses_a_folder_without_manifest(self):
+        image, analysis = dispatch_analysis(dispatch_asm())
+        gen, build = os.path.join(self.tmp, "gen"), os.path.join(self.tmp, "build")
+        recomp.recompile(image, analysis, gen)
+        os.remove(os.path.join(gen, "manifest.toml"))
+        res = linkcheck(self.make, gen, build)
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn(f"{gen}/manifest.toml not found", res.stderr)
+        self.assertFalse(os.path.exists(os.path.join(build, "game_stub")))
 
 
 if __name__ == "__main__":

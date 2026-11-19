@@ -1,6 +1,6 @@
 # Function discovery: python3 -m carnevil_tools functions <exe> -o <this file>
 # Addresses, sizes, names and sources only. See docs/analysis/functions.md.
-format = 1
+format = 2
 exe_sha256 = "f9455ce801d2e5c26a7b6e00eff88efa573deb7ab15fa29f9c90100623bfd3a6"
 text_start = 0x800C4000
 text_end = 0x8016DC4C
@@ -10219,7 +10219,7 @@ sources = ["call", "prologue"]
 addr = 0x8014BD78
 size = 440
 name = "func_8014BD78"
-sources = ["prologue"]
+sources = ["call", "prologue"]
 
 [[function]]
 addr = 0x8014BF30
@@ -13035,6 +13035,19 @@ targets = [
 ]
 
 [[jump_table]]
+jr_addr = 0x8012DCA8
+table_addr = 0x00000000
+targets = [
+  0x8012DCB0, 0x8012DCB0, 0x8012DCE8, 0x8012DCE8,
+  0x8012DD04, 0x8012DD04, 0x8012DD20, 0x8012DD20,
+  0x8012DD3C, 0x8012DD3C, 0x8012DD3C, 0x8012DD3C,
+  0x8012DCB0, 0x8012DCCC, 0x8012DCCC, 0x8012DCCC,
+  0x8012DCE8, 0x8012DD04, 0x8012DD50, 0x8012DD50,
+  0x8012DD50, 0x8012DD50, 0x8012DD50, 0x8012DD50,
+  0x8012DD50, 0x8012DD50, 0x8012DD50, 0x8012DD50,
+]
+
+[[jump_table]]
 jr_addr = 0x8012DE14
 table_addr = 0x80174398
 targets = [
@@ -13271,6 +13284,14 @@ targets = [
 ]
 
 [[jump_table]]
+jr_addr = 0x80150174
+table_addr = 0x00000000
+targets = [
+  0x8015019C, 0x801501BC, 0x8015017C, 0x801501D8,
+  0x801501F0,
+]
+
+[[jump_table]]
 jr_addr = 0x801508B0
 table_addr = 0x80175BF0
 targets = [
@@ -13402,6 +13423,118 @@ targets = [
 ]
 
 [[jump_table]]
+jr_addr = 0x80164484
+table_addr = 0x00000000
+targets = [
+  0x8016450C, 0x80164504, 0x801644FC, 0x801644F4,
+  0x801644FC, 0x80164504, 0x8016450C,
+]
+
+[[jump_table]]
+jr_addr = 0x801644EC
+table_addr = 0x00000000
+targets = [
+  0x8016450C, 0x80164504, 0x801644FC, 0x801644F4,
+  0x801644FC, 0x80164504, 0x8016450C,
+]
+
+[[jump_table]]
+jr_addr = 0x80164630
+table_addr = 0x00000000
+targets = [
+  0x801646B8, 0x801646B0, 0x801646A8, 0x801646A0,
+  0x801646A8, 0x801646B0, 0x801646B8,
+]
+
+[[jump_table]]
+jr_addr = 0x80164698
+table_addr = 0x00000000
+targets = [
+  0x801646B8, 0x801646B0, 0x801646A8, 0x801646A0,
+  0x801646A8, 0x801646B0, 0x801646B8,
+]
+
+[[jump_table]]
+jr_addr = 0x801647D0
+table_addr = 0x00000000
+targets = [
+  0x80164850, 0x80164848, 0x80164840, 0x80164838,
+  0x80164840, 0x80164848, 0x80164850,
+]
+
+[[jump_table]]
+jr_addr = 0x80164830
+table_addr = 0x00000000
+targets = [
+  0x80164850, 0x80164848, 0x80164840, 0x80164838,
+  0x80164840, 0x80164848, 0x80164850,
+]
+
+[[jump_table]]
+jr_addr = 0x80164938
+table_addr = 0x00000000
+targets = [
+  0x801649B8, 0x801649B0, 0x801649A8, 0x801649A0,
+  0x801649A8, 0x801649B0, 0x801649B8,
+]
+
+[[jump_table]]
+jr_addr = 0x80164998
+table_addr = 0x00000000
+targets = [
+  0x801649B8, 0x801649B0, 0x801649A8, 0x801649A0,
+  0x801649A8, 0x801649B0, 0x801649B8,
+]
+
+[[jump_table]]
+jr_addr = 0x80164EB4
+table_addr = 0x00000000
+targets = [
+  0x80164F3C, 0x80164F34, 0x80164F2C, 0x80164F24,
+  0x80164F2C, 0x80164F34, 0x80164F3C,
+]
+
+[[jump_table]]
+jr_addr = 0x80164F1C
+table_addr = 0x00000000
+targets = [
+  0x80164F3C, 0x80164F34, 0x80164F2C, 0x80164F24,
+  0x80164F2C, 0x80164F34, 0x80164F3C,
+]
+
+[[jump_table]]
+jr_addr = 0x80165040
+table_addr = 0x00000000
+targets = [
+  0x801650C8, 0x801650C0, 0x801650B8, 0x801650B0,
+  0x801650B8, 0x801650C0, 0x801650C8,
+]
+
+[[jump_table]]
+jr_addr = 0x801650A8
+table_addr = 0x00000000
+targets = [
+  0x801650C8, 0x801650C0, 0x801650B8, 0x801650B0,
+  0x801650B8, 0x801650C0, 0x801650C8,
+]
+
+[[jump_table]]
+jr_addr = 0x80165290
+table_addr = 0x00000000
+targets = [
+  0x80165318, 0x80165310, 0x80165308, 0x80165300,
+  0x80165308, 0x80165310, 0x80165318,
+]
+
+[[jump_table]]
+jr_addr = 0x801652F8
+table_addr = 0x00000000
+targets = [
+  0x80165318, 0x80165310, 0x80165308, 0x80165300,
+  0x80165308, 0x80165310, 0x80165318,
+]
+
+[[jump_table]]
 jr_addr = 0x80166924
 table_addr = 0x80177100
 targets = [
@@ -13419,6 +13552,12 @@ targets = [
   0x80166B1C, 0x80166B34, 0x80166B4C, 0x80166B64,
   0x80166B7C, 0x80166A54,
 ]
+
+[[interpreted]]
+addr = 0x80151AC0
+
+[[interpreted]]
+addr = 0x80151B50
 
 [[unreached]]
 start = 0x800C42CC
@@ -13881,10 +14020,6 @@ start = 0x8012D49C
 end = 0x8012D4A0
 
 [[unreached]]
-start = 0x8012DCB0
-end = 0x8012DD50
-
-[[unreached]]
 start = 0x8012F6C8
 end = 0x8012FBF0
 
@@ -14241,10 +14376,6 @@ start = 0x801500DC
 end = 0x801500E0
 
 [[unreached]]
-start = 0x8015017C
-end = 0x80150200
-
-[[unreached]]
 start = 0x801502EC
 end = 0x801502FC
 
@@ -14389,36 +14520,8 @@ start = 0x80163B50
 end = 0x80163D1C
 
 [[unreached]]
-start = 0x801644F4
-end = 0x80164510
-
-[[unreached]]
-start = 0x801646A0
-end = 0x801646BC
-
-[[unreached]]
-start = 0x80164838
-end = 0x80164854
-
-[[unreached]]
-start = 0x801649A0
-end = 0x801649BC
-
-[[unreached]]
 start = 0x80164C84
 end = 0x80164DD0
-
-[[unreached]]
-start = 0x80164F24
-end = 0x80164F40
-
-[[unreached]]
-start = 0x801650B0
-end = 0x801650CC
-
-[[unreached]]
-start = 0x80165300
-end = 0x8016531C
 
 [[unreached]]
 start = 0x80165A44

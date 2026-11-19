@@ -3,7 +3,7 @@ import argparse
 import os
 import sys
 
-from carnevil_tools import board, disk, exe, functions, hwcensus, loader, mips, vectors
+from carnevil_tools import board, disk, exe, functions, hwcensus, loader, mips, recomp, vectors
 
 DEFAULT_WORK = "/Volumes/archive/reincarnevilation/work"
 
@@ -79,27 +79,33 @@ def default_manual(out):
 def _functions(path, out, manual_path=None):
     if manual_path is None:
         manual_path = default_manual(out)
-    manual, stubs = [], []
+    m = functions.Manual()
     if manual_path:
         if not os.path.isfile(manual_path):
             print(f"error: {manual_path} is not a file", file=sys.stderr)
             return 1
         try:
-            manual, stubs = functions.read_manual(manual_path)
+            m = functions.read_manual(manual_path)
         except (ValueError, KeyError, OSError) as exc:  # TOMLDecodeError is a ValueError
             print(f"error: {manual_path}: {exc}", file=sys.stderr)
             return 1
     image, status = _load(path)
     if image is None:
         return status
-    res, notes = functions.discover(image, image.load_addr, manual, stubs)
+    try:
+        res, notes = functions.discover(image, image.load_addr, m.starts, m.stub_blocks,
+                                        m.jump_tables, m.interpreted)
+    except ValueError as exc:  # a manual entry the analysis contradicts
+        print(f"error: {manual_path}: {exc}", file=sys.stderr)
+        return 1
     try:
         functions.write_toml(res, out)
     except OSError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    print(f"manual input {manual_path or '-'}: {len(manual)} starts, "
-          f"{len(stubs)} stub blocks")
+    print(f"manual input {manual_path or '-'}: {len(m.starts)} starts, "
+          f"{len(m.stub_blocks)} stub blocks, {len(m.jump_tables)} jump tables, "
+          f"{len(m.interpreted)} interpreted")
     span = res.text_end - res.text_start
     by_source = {s: sum(s in f.sources for f in res.functions) for s in functions.SOURCES}
     islands = [f.addr for f in res.functions if f.addr >= res.text_end]
@@ -112,7 +118,10 @@ def _functions(path, out, manual_path=None):
     print(f"  named from debug strings: {notes.named}")
     print(f"  code islands beyond text_end: {_hex_list(islands)}")
     entries = sum(len(t.targets) for t in res.jump_tables)
-    print(f"jump tables {len(res.jump_tables)} ({entries} entries)")
+    manual_tables = sum(t.table_addr == 0 for t in res.jump_tables)
+    print(f"jump tables {len(res.jump_tables)} ({entries} entries), {manual_tables} of them "
+          f"from the manual file")
+    print(f"interpreted functions {len(res.interpreted)}: {_hex_list(res.interpreted)}")
     print(f"unresolved jr (no table found) {len(notes.unresolved_jr)}: {_hex_list(sorted(notes.unresolved_jr))}")
     print(f"unreached {len(res.unreached)} ranges, {gap} bytes, {100 * gap / span:.2f}% of the text")
     print(f"rejected pointers into unreached code {len(notes.rejected_pointers)}: "
@@ -251,6 +260,36 @@ def _hwcensus(path, rom, ioctl=False, reach=False):
     return 0
 
 
+def _recompile(path, out, functions_path):
+    """C for every function of the functions file, from the EXE it was made from."""
+    try:
+        analysis = functions.read_toml(functions_path)
+    except (ValueError, KeyError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if not os.path.isfile(path):
+        return _missing(path)
+    try:
+        image = exe.load_exe(path, expect_sha256=None)  # the functions file pins the hash
+    except (ValueError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if image.sha256 != analysis.exe_sha256:
+        print(f"error: {path} has SHA-256 {image.sha256}, but {functions_path} was made from "
+              f"the EXE with SHA-256 {analysis.exe_sha256}; refusing to recompile it",
+              file=sys.stderr)
+        return 1
+    try:
+        m = recomp.recompile(image, analysis, out)
+    except (recomp.RecompileError, ValueError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"wrote {m.functions} functions in {m.files} files to {out}: {m.stubs} loader stubs, "
+          f"{m.interpreted} interpreted, {m.jump_tables} jump tables, "
+          f"{m.unresolved_jr} jr left to rt_jump")
+    return 0
+
+
 def _value_text(value):
     if isinstance(value, int):
         return f"0x{value:X}"
@@ -349,6 +388,12 @@ def main(argv=None):
     hwc.add_argument("--reach", action="store_true",
                      help="with --loader: per service slot, the loader functions it reaches "
                           "and the hardware regions among them")
+    rec = sub.add_parser("recompile", help="write the C of every function of an EXE")
+    rec.add_argument("exe")
+    rec.add_argument("-o", "--out", required=True, metavar="DIR",
+                     help="output folder (replaced only if it holds a manifest.toml)")
+    rec.add_argument("--functions", default=GAME_FUNCTIONS, metavar="TOML",
+                     help="the analysis to recompile (default: config/game.functions.toml)")
     vec = sub.add_parser("vectors", help="instruction test cases for MAME, and their results")
     vec_mode = vec.add_mutually_exclusive_group(required=True)
     vec_mode.add_argument("--write-cases", metavar="JSON",
@@ -374,6 +419,8 @@ def main(argv=None):
         return _hwcensus(args.exe, args.loader, args.ioctl, args.reach)
     if args.command == "disasm":
         return _disasm(args.file, args.base, args.start, args.count)
+    if args.command == "recompile":
+        return _recompile(args.exe, args.out, args.functions)
     if args.command == "verify":
         return _verify(args.partition)
     if args.command == "census":

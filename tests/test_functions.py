@@ -191,6 +191,64 @@ class Discovery(unittest.TestCase):
                 self.assertEqual(res.unreached, [])  # every case block is code
                 self.assertEqual([f.addr for f in res.functions], [BASE])
 
+    def _dispatch(self):
+        """`lw v0,0(a0); jr v0` with two case blocks the analysis cannot find, then a
+        function `g` after them."""
+        a = Asm()
+        a.emit(jal("g"), NOP, lw(V0, 0, A0))
+        a.label("jr")
+        a.emit(jr(V0), NOP)
+        for k in range(2):
+            a.label("case%d" % k)
+            a.emit(beq(ZERO, ZERO, "done"), addiu(V0, ZERO, 10 + k))
+        a.label("done")
+        a.emit(jr(RA), NOP)
+        a.label("g")
+        a.emit(jr(RA), NOP)
+        a.label("data")
+        a.emit(DATA_WORD)
+        return a
+
+    def test_manual_jump_table(self):
+        a = self._dispatch()
+        L = a.labels
+        res, notes = functions.discover(a.image(), BASE)
+        self.assertEqual(notes.unresolved_jr, [L["jr"]])
+        self.assertEqual(res.unreached, [(L["case0"], L["g"])])
+        table = functions.JumpTable(L["jr"], 0, [L["case1"], L["case0"], L["case1"]])
+        res, notes = functions.discover(a.image(), BASE, jump_tables=[table])
+        self.assertEqual(notes.unresolved_jr, [])
+        self.assertEqual(res.jump_tables, [table])
+        self.assertEqual(res.unreached, [])  # the case blocks are code now
+        self.assertEqual([f.addr for f in res.functions], [BASE, L["g"]])
+
+    def test_manual_jump_table_is_checked(self):
+        a = self._dispatch()
+        L = a.labels
+        bad = [
+            (functions.JumpTable(L["jr"] + 4, 0, [L["case0"]]), "is sll, not a jr"),
+            (functions.JumpTable(L["g"], 0, [L["g"]]), "is jr ra, not a jr"),
+            (functions.JumpTable(L["data"], 0, [L["case0"]]), "not reached code"),
+            (functions.JumpTable(L["jr"], 0, [L["case0"], L["g"]]),
+             "target 0x%08X is not a word inside its function" % L["g"]),
+            (functions.JumpTable(L["jr"], 0, [L["case0"] + 2]), "is not a word inside"),
+        ]
+        for table, reason in bad:
+            with self.subTest(reason=reason):
+                with self.assertRaisesRegex(ValueError, r"\[\[jump_table\]\] jr_addr = 0x%08X: "
+                                            ".*%s" % (table.jr_addr, reason)):
+                    functions.analyse(a.image(), BASE, jump_tables=[table])
+
+    def test_interpreted(self):
+        a = self._dispatch()
+        L = a.labels
+        res = functions.analyse(a.image(), BASE, interpreted=[L["g"]])
+        self.assertEqual(res.interpreted, [L["g"]])
+        self.assertEqual([f.addr for f in res.functions], [BASE, L["g"]])  # still listed
+        with self.assertRaisesRegex(ValueError, r"\[\[interpreted\]\] addr = 0x%08X: not a "
+                                    "function start" % L["done"]):
+            functions.analyse(a.image(), BASE, interpreted=[L["done"]])
+
     def test_function_pointer_in_data(self):
         a = Asm()
         a.emit(jal("g"), NOP, jr(RA), NOP)
@@ -558,13 +616,17 @@ class Discovery(unittest.TestCase):
         res.unreached.append((0x80010100, 0x80010108))
         res.stub_blocks.append((0x80010200, 0x80010240))
         res.exe_sha256 = "ab" * 32
+        res.jump_tables.append(functions.JumpTable(BASE + 0x40, 0, [BASE + 0x48, BASE + 0x44]))
+        res.interpreted = [BASE]
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "f.toml")
             functions.write_toml(res, path)
             self.assertEqual(functions.read_toml(path), res)
             with open(path, encoding="utf-8") as f:
                 first = f.read()
-            self.assertIn("\nformat = 1\n", first)
+            self.assertIn("\nformat = 2\n", first)
+            self.assertIn("\n[[interpreted]]\naddr = 0x%08X\n" % BASE, first)
+            self.assertIn("\ntable_addr = 0x00000000\n", first)
             self.assertIn('\nexe_sha256 = "%s"\n' % ("ab" * 32), first)
             functions.write_toml(functions.read_toml(path), path)
             with open(path, encoding="utf-8") as f:
@@ -573,23 +635,54 @@ class Discovery(unittest.TestCase):
     def test_read_toml_rejects_a_missing_or_unknown_format(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "f.toml")
-            for header in ("", "format = 2\n"):
+            for header in ("", "format = 3\n"):
                 with open(path, "w", encoding="utf-8") as f:
                     f.write(header + 'exe_sha256 = ""\ntext_start = 0\ntext_end = 0\n')
                 with self.assertRaisesRegex(ValueError, "format"):
                     functions.read_toml(path)
+
+    def test_format_1_file_is_refused_with_a_clear_message(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "f.toml")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write('format = 1\nexe_sha256 = ""\ntext_start = 0\ntext_end = 0\n')
+            with self.assertRaises(ValueError) as err:
+                functions.read_toml(path)
+            message = str(err.exception)
+            self.assertIn(path, message)
+            self.assertIn("format 1", message)
+            self.assertIn("format = 2", message)
+            self.assertIn("python3 -m carnevil_tools functions", message)
 
     def test_read_manual(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "m.toml")
             with open(path, "w", encoding="utf-8") as f:
                 f.write('[[stub_block]]\nstart = 0x80010000\nend = 0x80010010\nreason = "r"\n'
-                        '[[manual]]\naddr = 0x80010020\nreason = "seen in MAME"\n')
-            self.assertEqual(functions.read_manual(path),
-                             ([0x80010020], [(0x80010000, 0x80010010)]))
+                        '[[manual]]\naddr = 0x80010020\nreason = "seen in MAME"\n'
+                        '[[jump_table]]\njr_addr = 0x80010030\ntargets = [0x80010040, '
+                        '0x80010038]\nreason = "table at 0x80020000, bound at 0x80010028"\n'
+                        '[[interpreted]]\naddr = 0x80010050\nreason = "saves and switches '
+                        'stacks"\n')
+            self.assertEqual(functions.read_manual(path), functions.Manual(
+                [0x80010020], [(0x80010000, 0x80010010)],
+                [functions.JumpTable(0x80010030, 0, [0x80010040, 0x80010038])], [0x80010050]))
+            for table in ("manual", "jump_table", "interpreted"):
+                with self.subTest(table=table):
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write("[[%s]]\naddr = 0x80010020\njr_addr = 0x80010030\n"
+                                "targets = [0x80010040]\n" % table)
+                    with self.assertRaisesRegex(ValueError, r"a \[\[%s\]\] entry has no reason"
+                                                % table):
+                        functions.read_manual(path)
             with open(path, "w", encoding="utf-8") as f:
-                f.write("[[manual]]\naddr = 0x80010020\n")
-            with self.assertRaisesRegex(ValueError, "reason"):
+                f.write('[[jump_table]]\njr_addr = 0x80010030\ntargets = []\nreason = "r"\n')
+            with self.assertRaisesRegex(ValueError, r"jr_addr = 0x80010030: no targets"):
+                functions.read_manual(path)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write('[[jump_table]]\njr_addr = 0x80010030\ntargets = [0x80010040]\n'
+                        'reason = "r"\n' * 2)
+            with self.assertRaisesRegex(ValueError, "two .* for one jr_addr"):
                 functions.read_manual(path)
 
 
@@ -639,15 +732,18 @@ class Cli(unittest.TestCase):
             with open(out, "rb") as f, open(COMMITTED, "rb") as g:
                 self.assertTrue(f.read() == g.read(), "config/game.functions.toml is stale")
         self.assertIn("unknown words reached as code 0", printed.getvalue())
-        self.assertIn("3 starts, 1 stub blocks", printed.getvalue())
+        self.assertIn("3 starts, 1 stub blocks, 16 jump tables, 2 interpreted",
+                      printed.getvalue())
 
 
 class GameExe(unittest.TestCase):
     @requires_file("part0_files", "GAME.EXE")
     def test_game_exe(self):
         image = exe.load_exe(work_path("part0_files", "GAME.EXE"))
-        manual, stubs = functions.read_manual(MANUAL)
-        res = functions.analyse(image, 0x800C4000, manual, stubs)
+        m = functions.read_manual(MANUAL)
+        manual = m.starts
+        res = functions.analyse(image, 0x800C4000, m.starts, m.stub_blocks, m.jump_tables,
+                                m.interpreted)
         # The committed file is this analysis (I2): format, hash, every entry.
         self.assertEqual(functions.read_toml(COMMITTED), res)
         self.assertEqual(res.exe_sha256, exe.GAME_EXE_SHA256)
@@ -681,6 +777,12 @@ class GameExe(unittest.TestCase):
         for addr in (0x80151BD4, 0x80151CE4, 0x80151F9C, 0x800D1588):
             self.assertNotIn(addr, addrs)
         self.assertIn(0x800C4524, addrs)  # main, reached by _start's tail `j`
+        # The manual jump tables (table_addr 0) are the 16 jr the analysis left unresolved,
+        # and the two hand-written context-switch entries are left to the interpreter.
+        self.assertEqual(sorted(t.jr_addr for t in res.jump_tables if t.table_addr == 0),
+                         sorted(t.jr_addr for t in m.jump_tables))
+        self.assertEqual(len(m.jump_tables), 16)
+        self.assertEqual(res.interpreted, [0x80151AC0, 0x80151B50])
         starts = set(addrs)
         unreached = set(range(*STUB_BLOCK, 4))
         for lo, hi in res.unreached:

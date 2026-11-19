@@ -28,14 +28,29 @@ emitted here, with the order of the reference interpreter (runtime/interp/interp
   callee's entry checks; see recomp.h);
 - a function whose code can run off its end calls the function starting there, then
   returns; `RecompileError` if none does;
-- a function in a stub block is a thunk whose body is the `rt_loader` call.
+- a function in a stub block is a thunk whose body is the `rt_loader` call; a function the
+  analysis lists as interpreted is a thunk whose body is `interp_run(ram, c, addr)` (its
+  own words are never emitted or checked).
 
 A control transfer in a delay slot, or an instruction outside the reached census, is a
 `RecompileError` naming its address.
+
+`recompile(image, analysis, out_dir)` writes the whole image: `funcs.h` (one prototype per
+function), `funcs_000.c` ... (FUNCTIONS_PER_FILE functions each, in address order, each file
+including recomp.h and funcs.h), `func_table.c` (`recomp_lookup`, a binary search over every
+function start, stub slots and interpreted functions included) and, last, `manifest.toml`.
+Everything goes to `<out_dir>.partial`, which is renamed to out_dir when complete and
+removed on any failure, so a folder with a manifest is always a complete output.
 """
 import dataclasses
+import os
+import shutil
 
 from carnevil_tools import emit, functions, mips
+
+FUNCTIONS_PER_FILE = 64
+MANIFEST = "manifest.toml"
+MANIFEST_FORMAT = 1
 
 _M32 = 0xFFFFFFFF
 _TRANSFERS = frozenset(("branch", "branch_likely", "jump", "jump_reg", "call", "call_reg"))
@@ -102,6 +117,7 @@ class _Function:
         self.wordset = set(self.words)
         self.starts = {f.addr for f in analysis.functions}
         self.tables = {t.jr_addr: t for t in analysis.jump_tables}
+        self.unresolved = []  # each `jr` (not on ra) left to rt_jump
         self.callees = set()
         self.labels = set()
         self.lines = []
@@ -193,6 +209,7 @@ class _Function:
         head = ["{", f"    uint32_t target = {_reg(insn.rs)};", *_indent(slot)]
         table = self.tables.get(addr)
         if table is None:
+            self.unresolved.append(addr)
             return head + _indent(self.dynamic_jump("target")) + ["}"], False
         cases = []
         for target in sorted(set(table.targets)):
@@ -251,18 +268,137 @@ class _Function:
             self.run_on(nxt, last)
         return self.lines
 
-    def text(self):
+    def text(self, prototypes=True):
         slot = self.stub_slot(self.fn.addr)
         if slot is not None:
             lines = [f"    rt_loader(ram, c, {_u(slot)});"]
+        elif self.fn.addr in self.analysis.interpreted:
+            lines = [f"    interp_run(ram, c, {_u(self.fn.addr)});"]
         else:
             lines = self.body()
         name = self.fn.name.replace("*/", "* /")
-        protos = [_prototype(a) + ";" for a in sorted(self.callees - {self.fn.addr})]
+        protos = [_prototype(a) + ";" for a in sorted(self.callees - {self.fn.addr})
+                  if prototypes]
         return "\n".join(protos + [f"/* {name} */", _prototype(self.fn.addr), "{", *lines,
                                    "}"]) + "\n"
 
 
-def function_c(image, analysis, fn):
-    """The C for one function of `analysis` (a functions.Analysis of the ExeImage `image`)."""
-    return _Function(image, analysis, fn).text()
+def function_c(image, analysis, fn, prototypes=True):
+    """The C for one function of `analysis` (a functions.Analysis of the ExeImage `image`).
+    With prototypes, the text is preceded by a prototype of each function it calls, so it
+    compiles on its own; without, it relies on a header declaring them (`recompile`'s
+    funcs.h)."""
+    return _Function(image, analysis, fn).text(prototypes)
+
+
+@dataclasses.dataclass
+class Manifest:
+    """What `recompile` wrote (manifest.toml)."""
+
+    format: int
+    exe_sha256: str
+    functions: int
+    files: int
+    stubs: int
+    interpreted: int
+    jump_tables: int
+    unresolved_jr: int  # `jr`s (not on ra) in emitted code that become rt_jump
+
+
+_HEAD = ("/* {name}: written by `python3 -m carnevil_tools recompile` from the EXE with SHA-256 "
+         "{sha}.\n * Generated code: do not edit, and never commit it. */\n")
+
+
+def _write(path, text):
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+
+
+def _remove(path):
+    if os.path.isdir(path) and not os.path.islink(path):
+        shutil.rmtree(path)
+    elif os.path.lexists(path):
+        os.remove(path)
+
+
+def _sources(image, analysis):
+    """{file name: text} of every C file, and the Manifest. Raises RecompileError."""
+    fns = sorted(analysis.functions, key=lambda f: f.addr)
+    sha = analysis.exe_sha256
+    texts, unresolved = [], 0
+    for fn in fns:
+        emitted = _Function(image, analysis, fn)
+        texts.append(emitted.text(prototypes=False))
+        unresolved += len(emitted.unresolved)
+    files = {"funcs.h": _HEAD.format(name="funcs.h", sha=sha) + "\n".join(
+        ["#ifndef FUNCS_H", "#define FUNCS_H", "", '#include "recomp.h"', ""]
+        + [_prototype(f.addr) + ";" for f in fns] + ["", "#endif"]) + "\n"}
+    for k in range(0, len(fns), FUNCTIONS_PER_FILE):
+        name = "funcs_%03d.c" % (k // FUNCTIONS_PER_FILE)
+        files[name] = (_HEAD.format(name=name, sha=sha) + '\n#include "recomp.h"\n'
+                       '#include "funcs.h"\n\n' + "\n".join(texts[k:k + FUNCTIONS_PER_FILE]))
+    entries = [f"    {{{_u(f.addr)}, {c_name(f.addr)}}}," for f in fns]
+    files["func_table.c"] = _HEAD.format(name="func_table.c", sha=sha) + "\n".join(
+        ["", "#include <stddef.h>", "", '#include "recomp.h"', '#include "funcs.h"', "",
+         "/* every function start, ascending */",
+         "static const struct {", "    uint32_t addr;", "    recomp_fn fn;", "} table[] = {",
+         *entries, "};", "",
+         "recomp_fn recomp_lookup(uint32_t addr)", "{",
+         "    size_t lo = 0, hi = sizeof table / sizeof table[0];",
+         "    while (lo < hi) {",
+         "        size_t mid = lo + (hi - lo) / 2;",
+         "        if (table[mid].addr < addr)",
+         "            lo = mid + 1;",
+         "        else if (table[mid].addr > addr)",
+         "            hi = mid;",
+         "        else",
+         "            return table[mid].fn;",
+         "    }",
+         "    return NULL;",
+         "}"]) + "\n"
+    stubs = sum(any(lo <= f.addr < hi for lo, hi in analysis.stub_blocks) for f in fns)
+    manifest = Manifest(MANIFEST_FORMAT, sha, len(fns),
+                        -(-len(fns) // FUNCTIONS_PER_FILE), stubs, len(analysis.interpreted),
+                        len(analysis.jump_tables), unresolved)
+    return files, manifest
+
+
+def _manifest_toml(m):
+    return ("# Written last by `python3 -m carnevil_tools recompile`: a folder holding this file "
+            "is a complete output.\n"
+            + "".join(f"{k} = " + (f'"{v}"' if isinstance(v, str) else str(v)) + "\n"
+                      for k, v in dataclasses.asdict(m).items()))
+
+
+def recompile(image, analysis, out_dir):
+    """Write the C of every function of `analysis` (made from the ExeImage `image`) to
+    out_dir; the Manifest. Raises RecompileError (nothing is written), ValueError when the
+    image is not the one the analysis was made from or out_dir exists without a
+    manifest.toml (it is left as it is), OSError."""
+    if image.sha256 != analysis.exe_sha256:
+        raise ValueError(f"the EXE has SHA-256 {image.sha256 or '(none)'}, the functions were "
+                         f"analysed from SHA-256 {analysis.exe_sha256 or '(none)'}")
+    out_dir = os.path.normpath(out_dir)
+    if os.path.lexists(out_dir) and not (
+            os.path.isdir(out_dir) and os.path.isfile(os.path.join(out_dir, MANIFEST))):
+        raise ValueError(f"{out_dir} exists and holds no {MANIFEST}: it is not a recompile "
+                         "output, so it is not replaced")
+    files, manifest = _sources(image, analysis)
+    partial, old = out_dir + ".partial", out_dir + ".old"
+    _remove(partial)
+    os.makedirs(partial)
+    try:
+        for name in sorted(files):
+            _write(os.path.join(partial, name), files[name])
+        _write(os.path.join(partial, MANIFEST), _manifest_toml(manifest))
+        _remove(old)
+        if os.path.lexists(out_dir):
+            os.rename(out_dir, old)
+        os.rename(partial, out_dir)
+    except BaseException:
+        _remove(partial)
+        if os.path.lexists(old) and not os.path.lexists(out_dir):
+            os.rename(old, out_dir)
+        raise
+    _remove(old)
+    return manifest

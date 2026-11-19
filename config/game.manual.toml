@@ -6,6 +6,11 @@
 # [[stub_block]]: start, end (exclusive): words the program fills at run time. They are
 #   never decoded; each call or jump target inside becomes a one-slot "stub" function.
 # [[manual]]: addr: a function start the analysis does not reach.
+# [[jump_table]]: jr_addr, targets (case k is targets[k]): the table of a `jr` the analysis
+#   cannot resolve. Checked when read: the jr is reached code of a function and every
+#   target lies inside that function. Recorded with table_addr = 0.
+# [[interpreted]]: addr: a function start left to the interpreter (the recompiler emits a
+#   thunk calling interp_run).
 
 [[stub_block]]
 start = 0x800C408C
@@ -23,3 +28,106 @@ reason = "executed in MAME run 3, 7 hits; its address is built by a lui pair in 
 [[manual]]
 addr = 0x80151A70
 reason = "registered as the exception-code-13 (trap) handler from 0x801519E0 in MAME run 3 (docs/analysis/boot-handoff.md, registrations)"
+
+# The 16 jumps docs/analysis/functions.md lists under "Unresolved indirect jumps": each
+# table read from the file, its index bound and base established in the code
+# (functions.md, "Manual jump tables").
+
+[[jump_table]]
+jr_addr = 0x8012DCA8
+targets = [
+  0x8012DCB0, 0x8012DCB0, 0x8012DCE8, 0x8012DCE8,
+  0x8012DD04, 0x8012DD04, 0x8012DD20, 0x8012DD20,
+  0x8012DD3C, 0x8012DD3C, 0x8012DD3C, 0x8012DD3C,
+  0x8012DCB0, 0x8012DCCC, 0x8012DCCC, 0x8012DCCC,
+  0x8012DCE8, 0x8012DD04, 0x8012DD50, 0x8012DD50,
+  0x8012DD50, 0x8012DD50, 0x8012DD50, 0x8012DD50,
+  0x8012DD50, 0x8012DD50, 0x8012DD50, 0x8012DD50,
+]
+reason = "table 0x80174328, 28 words: v0 = lw 0x4328(at) at 0x8012DCA4, at = 0x80170000 (lui at 0x8012DC9C) + s0 * 4 (sll in the slot at 0x8012DC98). The only way in is the bne at 0x8012D97C, whose slot (0x8012D980) is sltiu v0,s0,28; beq v0,zero at 0x8012DC94 takes indexes 28 and up to 0x8012DD50. The next table (jr 0x8012DE14) starts at 0x80174398"
+
+[[jump_table]]
+jr_addr = 0x80150174
+targets = [0x8015019C, 0x801501BC, 0x8015017C, 0x801501D8, 0x801501F0]
+reason = "table 0x801757A8, 5 words: v0 = lw 0(v0) at 0x80150170, v0 = a0 * 4 (sll in the slot at 0x80150168) + s5 (addu at 0x8015016C); s5 = 0x801757A8 (lui/addiu at 0x80150108 and 0x8015010C), callee-saved and not written again before the epilogue; sltiu v0,a0,5 at 0x80150160 and beq v0,zero at 0x80150164 take indexes 5 and up to 0x80150200. The switch is inside the loop that branches back at 0x80150248"
+
+[[jump_table]]
+jr_addr = 0x80164484
+targets = [0x8016450C, 0x80164504, 0x801644FC, 0x801644F4, 0x801644FC, 0x80164504, 0x8016450C]
+reason = "table 0x80176AD8, 7 words, the labels of the tail 0x801644F4: v0 = lw 0(t9) at 0x80164480, t9 = a2 * 4 (sll at 0x801643FC) + 0x80176AD8 (lui/addiu at 0x801643F4), addu at 0x80164400, the only write of t9; the lw is reached only past beq t3,zero at 0x80164478, t3 = sltiu a2,7 at 0x801643F0, from the same a2"
+
+[[jump_table]]
+jr_addr = 0x801644EC
+targets = [0x8016450C, 0x80164504, 0x801644FC, 0x801644F4, 0x801644FC, 0x80164504, 0x8016450C]
+reason = "table 0x80176AF8, 7 words, the labels of the tail 0x801644F4: v0 = lw 0(t7) at 0x801644E8, t7 = a2 * 4 (sll at 0x801643FC) + 0x80176AF8 (lui/addiu at 0x80164408), addu at 0x80164410, the only write of t7; the lw is reached only past beq t3,zero at 0x801644E0, t3 = sltiu a2,7 at 0x801643F0"
+
+[[jump_table]]
+jr_addr = 0x80164630
+targets = [0x801646B8, 0x801646B0, 0x801646A8, 0x801646A0, 0x801646A8, 0x801646B0, 0x801646B8]
+reason = "table 0x80176B18, 7 words, the labels of the tail 0x801646A0: v0 = lw 0(t9) at 0x8016462C, t9 = a2 * 4 (sll at 0x801645A8) + 0x80176B18, addu at 0x801645AC, the only write of t9; the lw is reached only past beq t3,zero at 0x80164624, t3 = sltiu a2,7 at 0x8016459C"
+
+[[jump_table]]
+jr_addr = 0x80164698
+targets = [0x801646B8, 0x801646B0, 0x801646A8, 0x801646A0, 0x801646A8, 0x801646B0, 0x801646B8]
+reason = "table 0x80176B38, 7 words, the labels of the tail 0x801646A0: v0 = lw 0(t7) at 0x80164694, t7 = a2 * 4 (sll at 0x801645A8) + 0x80176B38, addu at 0x801645BC, the only write of t7; the lw is reached only past beq t3,zero at 0x8016468C, t3 = sltiu a2,7 at 0x8016459C"
+
+[[jump_table]]
+jr_addr = 0x801647D0
+targets = [0x80164850, 0x80164848, 0x80164840, 0x80164838, 0x80164840, 0x80164848, 0x80164850]
+reason = "table 0x80176B58, 7 words, the labels of the tail 0x80164838: v0 = lw 0(s0) at 0x801647CC, s0 = a2 * 4 (sll at 0x80164754) + 0x80176B58, addu at 0x80164758, the only write of s0 that reaches the lw; the lw is reached only past beq t5,zero at 0x801647C4, t5 = sltiu a2,7 at 0x80164748"
+
+[[jump_table]]
+jr_addr = 0x80164830
+targets = [0x80164850, 0x80164848, 0x80164840, 0x80164838, 0x80164840, 0x80164848, 0x80164850]
+reason = "table 0x80176B78, 7 words, the labels of the tail 0x80164838: v0 = lw 0(a3) at 0x8016482C, a3 = a2 * 4 (sll at 0x80164754) + 0x80176B78, addu at 0x80164764, the only write of a3 that reaches the lw; the lw is reached only past beq t5,zero at 0x80164824, t5 = sltiu a2,7 at 0x80164748"
+
+[[jump_table]]
+jr_addr = 0x80164938
+targets = [0x801649B8, 0x801649B0, 0x801649A8, 0x801649A0, 0x801649A8, 0x801649B0, 0x801649B8]
+reason = "table 0x80176B98, 7 words, the labels of the tail 0x801649A0: v0 = lw 0(t7) at 0x80164934, t7 = a2 * 4 (sll at 0x801648BC) + 0x80176B98, addu at 0x801648C0, the only write of t7 that reaches the lw; the lw is reached only past beq t2,zero at 0x8016492C, t2 = sltiu a2,7 at 0x801648B0"
+
+[[jump_table]]
+jr_addr = 0x80164998
+targets = [0x801649B8, 0x801649B0, 0x801649A8, 0x801649A0, 0x801649A8, 0x801649B0, 0x801649B8]
+reason = "table 0x80176BB8, 7 words, the labels of the tail 0x801649A0: v0 = lw 0(t6) at 0x80164994, t6 = a2 * 4 (sll at 0x801648BC) + 0x80176BB8, addu at 0x801648CC, the only write of t6 that reaches the lw; the lw is reached only past beq t2,zero at 0x8016498C, t2 = sltiu a2,7 at 0x801648B0"
+
+[[jump_table]]
+jr_addr = 0x80164EB4
+targets = [0x80164F3C, 0x80164F34, 0x80164F2C, 0x80164F24, 0x80164F2C, 0x80164F34, 0x80164F3C]
+reason = "table 0x80176BD8, 7 words, the labels of the tail 0x80164F24: v0 = lw 0(s1) at 0x80164EB0, s1 = v1 * 4 (sll at 0x80164E2C) + 0x80176BD8, addu at 0x80164E30, the only write of s1 that reaches the lw; the lw is reached only past beq t3,zero at 0x80164EA8, t3 = sltiu v1,7 at 0x80164E20"
+
+[[jump_table]]
+jr_addr = 0x80164F1C
+targets = [0x80164F3C, 0x80164F34, 0x80164F2C, 0x80164F24, 0x80164F2C, 0x80164F34, 0x80164F3C]
+reason = "table 0x80176BF8, 7 words, the labels of the tail 0x80164F24: v0 = lw 0(t9) at 0x80164F18, t9 = v1 * 4 (sll at 0x80164E2C) + 0x80176BF8, addu at 0x80164E40, the only write of t9 that reaches the lw; the lw is reached only past beq t3,zero at 0x80164F10, t3 = sltiu v1,7 at 0x80164E20"
+
+[[jump_table]]
+jr_addr = 0x80165040
+targets = [0x801650C8, 0x801650C0, 0x801650B8, 0x801650B0, 0x801650B8, 0x801650C0, 0x801650C8]
+reason = "table 0x80176C18, 7 words, the labels of the tail 0x801650B0: v0 = lw 0(s1) at 0x8016503C, s1 = v1 * 4 (sll at 0x80164FB8) + 0x80176C18, addu at 0x80164FBC, the only write of s1 that reaches the lw; the lw is reached only past beq t3,zero at 0x80165034, t3 = sltiu v1,7 at 0x80164FAC"
+
+[[jump_table]]
+jr_addr = 0x801650A8
+targets = [0x801650C8, 0x801650C0, 0x801650B8, 0x801650B0, 0x801650B8, 0x801650C0, 0x801650C8]
+reason = "table 0x80176C38, 7 words, the labels of the tail 0x801650B0: v0 = lw 0(t7) at 0x801650A4, t7 = v1 * 4 (sll at 0x80164FB8) + 0x80176C38, addu at 0x80164FCC, the only write of t7 that reaches the lw; the lw is reached only past beq t3,zero at 0x8016509C, t3 = sltiu v1,7 at 0x80164FAC"
+
+[[jump_table]]
+jr_addr = 0x80165290
+targets = [0x80165318, 0x80165310, 0x80165308, 0x80165300, 0x80165308, 0x80165310, 0x80165318]
+reason = "table 0x80176C58, 7 words, the labels of the tail 0x80165300: v0 = lw 0(s3) at 0x8016528C, s3 = v1 * 4 (sll at 0x80165208) + 0x80176C58, addu at 0x8016520C, the only write of s3 before the epilogue; the lw is reached only past beq t5,zero at 0x80165284, t5 = sltiu v1,7 at 0x801651FC"
+
+[[jump_table]]
+jr_addr = 0x801652F8
+targets = [0x80165318, 0x80165310, 0x80165308, 0x80165300, 0x80165308, 0x80165310, 0x80165318]
+reason = "table 0x80176C78, 7 words, the labels of the tail 0x80165300: v0 = lw 0(s1) at 0x801652F4, s1 = v1 * 4 (sll at 0x80165208) + 0x80176C78, addu at 0x8016521C, the only write of s1 before the epilogue; the lw is reached only past beq t5,zero at 0x801652EC, t5 = sltiu v1,7 at 0x801651FC"
+
+# The hand-written context switch around 0x80151AC0 to 0x80152008 (functions.md, "Jumps
+# out of their function"): its two `j 0x80151E90` cannot be recompiled.
+
+[[interpreted]]
+addr = 0x80151AC0
+reason = "swaps sp and k1 (three xor at 0x80151AE4), saves s0-s7, fp, ra and FP registers below the stack it switched to, then j 0x80151E90 at 0x80151B48, a label inside 0x80151BC0 (the scheduler's restore path). A manual start at 0x80151E90 does not recompile: 0x80151BC0 then jumps into it (j 0x80151F9C at 0x80151CF4) and it jumps back (j 0x80151CE4 at 0x80151F94), neither target a function start"
+
+[[interpreted]]
+addr = 0x80151B50
+reason = "calls 0x80149C58, swaps sp and k1 (xor at 0x80151B70, 0x80151B74 and the slot 0x80151B7C) and j 0x80151E90 at 0x80151B78, the same restore path inside 0x80151BC0 as 0x80151AC0"

@@ -24,11 +24,16 @@ in the text range is listed in `Analysis.unreached`; a function's size stops
 short of unreached words between it and the next function.
 
 What the analysis cannot discover comes from a hand-maintained file
-(config/game.manual.toml, `read_manual`): manual starts, and stub blocks, ranges
-the program fills at run time. Stub-block words are never decoded; each call or
-jump target inside one is a function of one slot with source "stub". A jump
-table is recorded only when every entry lies in the text, so targets[k] is
-always case k.
+(config/game.manual.toml, `read_manual`): manual starts; stub blocks, ranges
+the program fills at run time; jump tables for a `jr` the analysis cannot
+resolve; and functions left to the interpreter. Stub-block words are never
+decoded; each call or jump target inside one is a function of one slot with
+source "stub". A jump table is recorded only when every entry lies in the text,
+so targets[k] is always case k. A manual jump table has table_addr 0; its
+targets are descended into like a found table's, and it is checked against the
+result (the `jr` is reached code of a function and every target lies inside that
+function). An interpreted function must be a function start; it stays in the
+function list (`Analysis.interpreted` names it) so calls to it resolve.
 """
 import bisect
 import tomllib
@@ -37,7 +42,7 @@ from dataclasses import dataclass, field
 from carnevil_tools import mips, naming
 
 SOURCES = ("entry", "call", "pointer", "prologue", "manual", "stub")
-FORMAT = 1  # version of the TOML layout written by write_toml
+FORMAT = 2  # version of the TOML layout written by write_toml
 STUB_SLOT = 8  # bytes per slot of a stub block (a `j` and its delay slot)
 RA = mips.RA
 JUMP_TABLE_LOOKBACK = 12  # instructions searched back from a `jr reg`
@@ -58,7 +63,7 @@ class Function:
 @dataclass
 class JumpTable:
     jr_addr: int
-    table_addr: int
+    table_addr: int  # 0 for a table from the manual file
     targets: list[int]
 
 
@@ -72,6 +77,18 @@ class Analysis:
     # [start, end) ranges filled at run time, not code in the file (game.manual.toml)
     stub_blocks: list[tuple[int, int]] = field(default_factory=list)
     exe_sha256: str = ""  # SHA-256 of the file the analysis was made from
+    # function starts left to the interpreter (game.manual.toml), ascending
+    interpreted: list[int] = field(default_factory=list)
+
+
+@dataclass
+class Manual:
+    """The hand-maintained input of `analyse` (`read_manual`)."""
+
+    starts: list[int] = field(default_factory=list)
+    stub_blocks: list[tuple[int, int]] = field(default_factory=list)
+    jump_tables: list[JumpTable] = field(default_factory=list)  # table_addr 0
+    interpreted: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -118,10 +135,11 @@ def _entry_run_ok(run):
 
 
 class _Descent:
-    def __init__(self, image, stub_blocks=(), refused_tables=()):
+    def __init__(self, image, stub_blocks=(), refused_tables=(), manual_tables=()):
         self.image = image
         self.stub_blocks = sorted(stub_blocks)
         self.refused_tables = set(refused_tables)  # jr addresses whose table left the text
+        self.manual_tables = {t.jr_addr: t for t in manual_tables}
         self.code = set()  # every word known to be an instruction
         self.walked = set()  # words a path has continued from (delay slots may not be)
         self.starts = {}  # function start -> set of sources
@@ -226,6 +244,11 @@ class _Descent:
         a word address in the image (and, checked by `discover`, in the text), so that
         targets[k] is case k."""
         if jr_addr in self.tables:
+            return
+        manual = self.manual_tables.get(jr_addr)
+        if manual is not None:  # checked against the result by `discover`
+            self.pending.extend(t for t in manual.targets if self.valid(t))
+            self.tables[jr_addr] = JumpTable(jr_addr, 0, list(manual.targets))
             return
         if jr_addr in self.refused_tables:
             self.notes.unresolved_jr.append(jr_addr)
@@ -435,14 +458,14 @@ def _table_address(seq, reg):
     return None
 
 
-def analyse(image, entry, manual=(), stub_blocks=()):
+def analyse(image, entry, manual=(), stub_blocks=(), jump_tables=(), interpreted=()):
     """Discover the functions, jump tables and text/data boundary of an ExeImage."""
-    return discover(image, entry, manual, stub_blocks)[0]
+    return discover(image, entry, manual, stub_blocks, jump_tables, interpreted)[0]
 
 
-def _descend(image, entry, manual, stub_blocks, refused_tables):
+def _descend(image, entry, manual, stub_blocks, refused_tables, manual_tables):
     """Run the passes to a fixpoint; (descent, text_start, text_end)."""
-    d = _Descent(image, stub_blocks, refused_tables)
+    d = _Descent(image, stub_blocks, refused_tables, manual_tables)
     d.add_start(entry, "entry")
     for addr in manual:
         d.add_start(addr, "manual")
@@ -468,22 +491,30 @@ def _descend(image, entry, manual, stub_blocks, refused_tables):
     return d, text_start, text_end
 
 
-def discover(image, entry, manual=(), stub_blocks=()):
+def discover(image, entry, manual=(), stub_blocks=(), jump_tables=(), interpreted=()):
     """As `analyse`, also returning the run's Notes.
 
     stub_blocks: [start, end) ranges whose words are filled at run time: never decoded,
     and each call or jump target inside one is a function of one slot (STUB_SLOT bytes)
     with source "stub". A jump table with an entry outside [text_start, text_end) is
     not recorded; its `jr` is listed as unresolved and the discovery is run again
-    without it, so no case is lost or shifted."""
+    without it, so no case is lost or shifted.
+
+    jump_tables: JumpTables (table_addr 0) for `jr`s the analysis cannot resolve; their
+    targets are descended into. interpreted: function starts left to the interpreter.
+    ValueError, naming the entry, if a jump table's `jr_addr` is not a `jr reg` (reg other
+    than ra) in the reached code of a function, or one of its targets is not a word inside
+    that function; or if an interpreted address is not a function start."""
     if entry % 4 or not image.contains(entry):
         raise ValueError("entry outside the image")
     stub_blocks = sorted((lo, hi) for lo, hi in stub_blocks)
+    manual_jrs = {t.jr_addr for t in jump_tables}
     refused = set()
     while True:
-        d, text_start, text_end = _descend(image, entry, manual, stub_blocks, refused)
-        bad = {t.jr_addr for t in d.tables.values()
-               if not all(text_start <= v < text_end for v in t.targets)}
+        d, text_start, text_end = _descend(image, entry, manual, stub_blocks, refused,
+                                           jump_tables)
+        bad = {t.jr_addr for t in d.tables.values() if t.jr_addr not in manual_jrs
+               and not all(text_start <= v < text_end for v in t.targets)}
         if not bad:
             break
         refused |= bad
@@ -510,7 +541,8 @@ def discover(image, entry, manual=(), stub_blocks=()):
         funcs.append(Function(addr, end - addr, name, set(d.starts[addr])))
     analysis = Analysis(text_start, text_end, funcs,
                         [d.tables[a] for a in sorted(d.tables)], unreached,
-                        list(stub_blocks), image.sha256)
+                        list(stub_blocks), image.sha256, sorted(set(interpreted)))
+    _check_manual(analysis, d, jump_tables)
     pairs = list(d.address_pairs())
     d.notes.named = naming.name_from_strings(image, analysis, pairs)
     values = {v for _a, v in pairs}
@@ -526,6 +558,32 @@ def discover(image, entry, manual=(), stub_blocks=()):
             refused.append(value)
     d.notes.rejected_pointers = refused
     return analysis, d.notes
+
+
+def _check_manual(analysis, d, jump_tables):
+    """ValueError naming the first manual entry the result contradicts (see `discover`)."""
+    starts = {f.addr for f in analysis.functions}
+    for addr in analysis.interpreted:
+        if addr not in starts:
+            raise ValueError("[[interpreted]] addr = %s: not a function start" % _hex(addr))
+    if not jump_tables:
+        return
+    by_addr = {f.addr: f for f in analysis.functions}
+    owner = {addr: by_addr[start] for start, words in reached_words(analysis).items()
+             for addr in words}
+    for t in jump_tables:
+        entry = "[[jump_table]] jr_addr = %s" % _hex(t.jr_addr)
+        f = owner.get(t.jr_addr)
+        if f is None:
+            raise ValueError(entry + ": not reached code of a function")
+        insn = d.insn(t.jr_addr)
+        if insn.mnemonic != "jr" or insn.rs == RA:
+            raise ValueError(entry + ": the instruction there is %s, not a jr on a register "
+                             "other than ra" % (insn.mnemonic + (" ra" if insn.rs == RA else "")))
+        for target in t.targets:
+            if target % 4 or not f.addr <= target < f.addr + f.size:
+                raise ValueError(entry + ": target %s is not a word inside its function "
+                                 "%s-%s" % (_hex(target), _hex(f.addr), _hex(f.addr + f.size)))
 
 
 def reached_words(analysis):
@@ -576,6 +634,8 @@ def write_toml(analysis, path):
         for k in range(0, len(t.targets), 4):
             lines.append("  " + " ".join(_hex(v) + "," for v in t.targets[k:k + 4]))
         lines.append("]")
+    for addr in sorted(analysis.interpreted):
+        lines += ["", "[[interpreted]]", "addr = " + _hex(addr)]
     for lo, hi in sorted(analysis.unreached):
         lines += ["", "[[unreached]]", "start = " + _hex(lo), "end = " + _hex(hi)]
     with open(path, "w", encoding="utf-8") as f:
@@ -587,10 +647,12 @@ def read_toml(path):
     missing or not FORMAT."""
     with open(path, "rb") as f:
         data = tomllib.load(f)
-    if data.get("format") != FORMAT:
-        raise ValueError("%s: unsupported functions TOML format %r (expected format = %d; "
-                         "regenerate it with the functions command)"
-                         % (path, data.get("format"), FORMAT))
+    found = data.get("format")
+    if found != FORMAT:
+        found = "with no format key" if found is None else "in format %r" % (found,)
+        raise ValueError("%s: a functions TOML %s; only format = %d is read. Regenerate it: "
+                         "python3 -m carnevil_tools functions <GAME.EXE> -o %s"
+                         % (path, found, FORMAT, path))
     return Analysis(
         data["text_start"],
         data["text_end"],
@@ -601,26 +663,41 @@ def read_toml(path):
         [(u["start"], u["end"]) for u in data.get("unreached", [])],
         [(b["start"], b["end"]) for b in data.get("stub_block", [])],
         data["exe_sha256"],
+        sorted(i["addr"] for i in data.get("interpreted", [])),
     )
 
 
+_MANUAL_KINDS = ("manual", "stub_block", "jump_table", "interpreted")
+
+
 def read_manual(path):
-    """(manual starts, stub blocks) from a hand-maintained input such as
-    config/game.manual.toml: [[manual]] entries (addr, reason) and [[stub_block]]
-    entries (start, end exclusive, reason). Every entry needs a reason."""
+    """The Manual in a hand-maintained input such as config/game.manual.toml. Entries, each
+    with a `reason` citing the evidence:
+    - [[manual]] addr: a function start the analysis does not reach;
+    - [[stub_block]] start, end (exclusive): words the program fills at run time;
+    - [[jump_table]] jr_addr, targets (case k is targets[k]): the table of a `jr` the
+      analysis cannot resolve (checked against the analysis by `discover`);
+    - [[interpreted]] addr: a function start left to the interpreter."""
     with open(path, "rb") as f:
         data = tomllib.load(f)
-    unknown = set(data) - {"manual", "stub_block"}
+    unknown = set(data) - set(_MANUAL_KINDS)
     if unknown:
         raise ValueError("%s: unknown keys %s" % (path, ", ".join(sorted(unknown))))
-    for table in ("manual", "stub_block"):
+    for table in _MANUAL_KINDS:
         for entry in data.get(table, []):
             if not isinstance(entry.get("reason"), str) or not entry["reason"].strip():
                 raise ValueError("%s: a [[%s]] entry has no reason" % (path, table))
-    manual = [m["addr"] for m in data.get("manual", [])]
     blocks = [(b["start"], b["end"]) for b in data.get("stub_block", [])]
     for lo, hi in blocks:
         if lo % 4 or hi % 4 or lo >= hi:
             raise ValueError("%s: stub block 0x%08X-0x%08X is empty or unaligned"
                              % (path, lo, hi))
-    return manual, blocks
+    tables = [JumpTable(t["jr_addr"], 0, list(t["targets"])) for t in data.get("jump_table", [])]
+    for t in tables:
+        if not t.targets:
+            raise ValueError("%s: [[jump_table]] jr_addr = %s: no targets"
+                             % (path, _hex(t.jr_addr)))
+    if len({t.jr_addr for t in tables}) != len(tables):
+        raise ValueError("%s: two [[jump_table]] entries for one jr_addr" % path)
+    return Manual([m["addr"] for m in data.get("manual", [])], blocks, tables,
+                  [i["addr"] for i in data.get("interpreted", [])])

@@ -31,7 +31,8 @@ Every fact below carries its basis:
   the stub block (below) and are not the game's code, so the game has 2,064 functions of its
   own, including the island and the 3 manual starts of `config/game.manual.toml`. 75 jump
   tables (1,488 entries), 165,638 words reached as code, none of them an unknown encoding,
-  262 unreached ranges (4.64% of the text) (static).
+  262 unreached ranges (4.64% of the text) (static). Since M1 Task 5 added 16 manual jump
+  tables: 91 tables (1,619 entries), 165,760 words reached, 253 unreached ranges (4.57%).
 - Built with GCC, with 3dfx's Glide, an IDT MIPS runtime and DJ Delorie's libc linked in. 21
   functions are named from debug strings, 6 of those names probably wrong (static).
 
@@ -126,6 +127,7 @@ Each item is an assumption of the design document that M0 showed wrong or incomp
   prologue counts. Discovery gives 2,093 entries, of which 29 are loader slots, so 2,064 game
   functions (3 of them manual starts MAME showed), plus 75 jump tables, 16 unresolved indirect
   jumps and 7 probable callbacks that still need manual entries ([functions](functions.md)).
+  (M1 Task 5 gave the 16 jumps manual tables; the 7 callbacks are left to the interpreter.)
 - **MIPS IV needs.** The design lists indexed FP loads and stores, `pref` and FP condition
   codes 0 to 7. Reached code uses none of the indexed forms or `pref`, and condition codes 0 to
   2 only ([functions](functions.md), "Census of reached code").
@@ -272,14 +274,18 @@ From the census of reached code ([functions](functions.md)):
   `config/game.functions.toml` marks it as `[[stub_block]]` and its 29 entries as `stub`.
 - 75 jump tables as `switch`. 16 unresolved `jr`: 2 switches whose tables are known
   (0x80174328, 0x801757A8) and 14 label-table dispatches in the block-copy routines; they need
-  `manual` entries or the interpreter fallback. 6 of the 14 ran in MAME.
+  `manual` entries or the interpreter fallback. 6 of the 14 ran in MAME. (Done in M1 Task 5:
+  all 16 are `[[jump_table]]` entries in `config/game.manual.toml`, so 91 tables.)
 - Of the 10 probable callbacks, the 3 MAME showed are manual starts in
   `config/game.manual.toml`: 0x800C6030 is the VBLANK handler and ran thousands of times,
   0x8014A930 ran, 0x80151A70 is registered as the trap handler (MAME). The other 7 still need
   `manual` starts or the interpreter fallback (static).
 - 2 `j` instructions into 0x80151E90, a shared restore path in hand-written code, must be
-  treated as jumps between functions (static).
-- 63 `jalr` sites, through the lookup table of recompiled functions.
+  treated as jumps between functions (static). (M1 Task 5: a start at 0x80151E90 does not
+  recompile, so the two functions holding them, 0x80151AC0 and 0x80151B50, are
+  `[[interpreted]]`; [functions](functions.md), "Jumps out of their function".)
+- 63 `jalr` sites, through the lookup table of recompiled functions (64 since the manual jump
+  tables made one more case block reached code).
 
 ### 4. What the runtime provides at game entry
 
