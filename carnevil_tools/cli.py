@@ -110,6 +110,32 @@ def _functions(path, out):
     return 0
 
 
+_REG = ("zero at v0 v1 a0 a1 a2 a3 t0 t1 t2 t3 t4 t5 t6 t7 "
+        "s0 s1 s2 s3 s4 s5 s6 s7 t8 t9 k0 k1 gp sp fp ra").split()
+
+
+def _disasm(path, base, start, count):
+    """Decode `count` words of a raw little-endian file mapped at `base`, from `start`."""
+    if not os.path.isfile(path):
+        return _missing(path)
+    with open(path, "rb") as f:
+        raw = f.read()
+    end = base + len(raw) - len(raw) % 4
+    if start % 4 or not base <= start < end:
+        print(f"error: start 0x{start:08X} is not a word inside 0x{base:08X}-0x{end:08X}",
+              file=sys.stderr)
+        return 1
+    for addr in range(start, min(end, start + 4 * count), 4):
+        word = int.from_bytes(raw[addr - base:addr - base + 4], "little")
+        insn = mips.decode(word, addr)
+        line = (f"0x{addr:08X}  {word:08X}  {insn.mnemonic:<10} rs={_REG[insn.rs]} "
+                f"rt={_REG[insn.rt]} rd={_REG[insn.rd]} sa={insn.sa} imm=0x{insn.imm & 0xFFFFFFFF:X}")
+        if insn.target is not None:
+            line += f" -> 0x{insn.target:08X}"
+        print(line)
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="carnevil_tools")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -124,8 +150,16 @@ def main(argv=None):
     funcs = sub.add_parser("functions", help="discover the functions of an EXE image")
     funcs.add_argument("exe")
     funcs.add_argument("-o", "--out", required=True, metavar="TOML")
+    disasm = sub.add_parser("disasm", help="decode words of a raw file to the terminal")
+    disasm.add_argument("file")
+    disasm.add_argument("--base", required=True, type=lambda s: int(s, 0), metavar="ADDR",
+                        help="address of the file's first byte")
+    disasm.add_argument("--start", required=True, type=lambda s: int(s, 0), metavar="ADDR")
+    disasm.add_argument("--count", required=True, type=int, metavar="N")
     args = parser.parse_args(argv)
 
+    if args.command == "disasm":
+        return _disasm(args.file, args.base, args.start, args.count)
     if args.command == "census":
         return _census(args.exe)
     if args.command == "functions":

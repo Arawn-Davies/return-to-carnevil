@@ -1,0 +1,69 @@
+"""config/boot_state.toml: machine state at GAME.EXE's entry (docs/analysis/boot-handoff.md).
+
+Reads only committed files, so it runs without the game data.
+"""
+import os
+import tomllib
+import unittest
+
+from carnevil_tools import functions
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BOOT_STATE = os.path.join(REPO, "config", "boot_state.toml")
+FUNCTIONS = os.path.join(REPO, "config", "game.functions.toml")
+
+ENTRY = 0x800C4000
+RAM_START, RAM_END = 0x80000000, 0x80800000
+SOURCES = {"boot_rom_copy", "diag_leftover", "loader_data", "unknown"}
+REGIONS = {"boot_rom", "low_ram", "stub_block", "other"}
+
+
+class BootState(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        with open(BOOT_STATE, "rb") as f:
+            cls.state = tomllib.load(f)
+        cls.analysis = functions.read_toml(FUNCTIONS)
+
+    def test_registers(self):
+        s = self.state
+        self.assertEqual(s["entry"], ENTRY)
+        self.assertTrue(RAM_START <= s["sp"] < RAM_END, hex(s["sp"]))
+        for key in ("gp", "status", "config", "fcr31", "ra"):
+            self.assertIsInstance(s[key], int, key)
+            self.assertTrue(0 <= s[key] <= 0xFFFFFFFF, key)
+
+    def test_ram_preload_below_the_image(self):
+        preload = self.state["ram_preload"]
+        self.assertTrue(preload)
+        previous_end = RAM_START
+        for r in preload:
+            self.assertIn(r["source"], SOURCES, r)
+            self.assertGreater(r["size"], 0, r)
+            self.assertGreaterEqual(r["addr"], previous_end, "ranges sorted, not overlapping")
+            self.assertLessEqual(r["addr"] + r["size"], ENTRY, hex(r["addr"]))
+            previous_end = r["addr"] + r["size"]
+
+    def test_external_calls_lie_outside_the_text(self):
+        calls = self.state["external_call"]
+        self.assertTrue(calls)
+        text = range(self.analysis.text_start, self.analysis.text_end)
+        for c in calls:
+            self.assertNotIn(c["addr"], text, hex(c["addr"]))
+            self.assertIn(c["region"], REGIONS, c)
+            self.assertTrue(c["callers"], c)
+            for caller in c["callers"]:
+                self.assertIn(caller, text, "0x%08X calls 0x%08X" % (caller, c["addr"]))
+
+    def test_every_stub_block_call_is_listed(self):
+        # The 29 call targets inside the stub block 0x800C408C-0x800C42CC (functions.md).
+        stubs = [c["stub"] for c in self.state["external_call"] if c["region"] == "stub_block"]
+        self.assertEqual(len(stubs), 29)
+        self.assertEqual(len(set(stubs)), 29)
+        for stub in stubs:
+            self.assertTrue(0x800C408C <= stub < 0x800C42CC and stub % 8 == 0x800C408C % 8,
+                            hex(stub))
+
+
+if __name__ == "__main__":
+    unittest.main()

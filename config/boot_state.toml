@@ -1,0 +1,410 @@
+# Machine state at GAME.EXE's entry (0x800C4000), the point the native runtime starts from.
+# Values are from MAME 0.276 (carnevil, default DIP switches) stopped at the first instruction
+# of GAME.EXE, cross-checked against a static reading of boot.u32 and GAME.EXE.
+# docs/analysis/boot-handoff.md has the evidence, and says which values are unconfirmed.
+# Registers are the low 32 bits (MAME shows them sign-extended to 64).
+
+entry = 0x800C4000
+sp = 0x807FFFA8      # the loader's stack; _start sets sp = 0x80800000 in its first instruction
+gp = 0x00000000      # GAME.EXE never sets gp
+status = 0x30010401  # CU1 CU0 DE IM2 IE: interrupts enabled, BEV clear (vectors in RAM)
+config = 0x00000003  # K0 = 3 (cacheable, write-back), written at reset; the other fields are
+                     # read-only R5000 hardware fields that MAME does not expose (unconfirmed)
+fcr31 = 0x01000400   # FS (flush to zero) and the divide-by-zero enable; _start rewrites it
+ra = 0x8000EBE8      # in the loader's load-and-run routine, after its jalr to the EXE
+
+# Every non-zero range of RAM below the image at entry. Ranges of non-zero words were merged
+# when fewer than 256 zero bytes separate them.
+
+[[ram_preload]]
+addr = 0x80000000
+size = 0x240
+source = "boot_rom_copy"
+note = "loader jump table: 72 j/nop slots, ROM 0xBFC00F20; slots 0x000/0x080/0x100/0x180 are the exception vectors; _start copies all 576 bytes to 0x800C408C"
+
+[[ram_preload]]
+addr = 0x80000240
+size = 0x15A00
+source = "boot_rom_copy"
+note = "rest of the resident loader (code, then initialised data), ROM 0xBFC01160-0xBFC16B60; 276 bytes of its data in 0x80014084-0x800158D0 differ from the ROM (state the loader changed, e.g. the upper-cased name GAME.EXE)"
+
+[[ram_preload]]
+addr = 0x80016308
+size = 0x114
+source = "loader_data"
+
+[[ram_preload]]
+addr = 0x80016940
+size = 0x30
+source = "loader_data"
+
+[[ram_preload]]
+addr = 0x8001EB44
+size = 0xD9E8
+source = "loader_data"
+note = "loader BSS (0x80015C40-0x800C1410), written while it read the disk"
+
+[[ram_preload]]
+addr = 0x8002C940
+size = 0x2028
+source = "loader_data"
+
+[[ram_preload]]
+addr = 0x8002F940
+size = 0x828
+source = "loader_data"
+
+[[ram_preload]]
+addr = 0x80030940
+size = 0x5A00
+source = "loader_data"
+
+[[ram_preload]]
+addr = 0x80096350
+size = 0x8130
+source = "loader_data"
+
+[[ram_preload]]
+addr = 0x8009E6C4
+size = 0xF5C
+source = "loader_data"
+
+[[ram_preload]]
+addr = 0x800B6560
+size = 0x8FC
+source = "loader_data"
+note = "includes the open file (0x800B6DD0), its stat block (0x800B6E00), the 4-word argument block (0x800B6E30, all zero at entry) and the header and computed checksums (0x800B6E40, 0x800B6E44)"
+
+[[ram_preload]]
+addr = 0x800B6F60
+size = 0xCC
+source = "loader_data"
+
+[[ram_preload]]
+addr = 0x800B7160
+size = 0xDC
+source = "loader_data"
+
+[[ram_preload]]
+addr = 0x800B7364
+size = 0x4C
+source = "loader_data"
+
+[[ram_preload]]
+addr = 0x800B8394
+size = 0x2EC
+source = "loader_data"
+
+[[ram_preload]]
+addr = 0x800B89D0
+size = 0x18
+source = "loader_data"
+note = "inside the debug-monitor save area at 0x800B86A8"
+
+[[ram_preload]]
+addr = 0x800C1368
+size = 0xA8
+source = "loader_data"
+note = "the loader's exception stack, which grows down from 0x800C1400"
+
+[[ram_preload]]
+addr = 0x800C1410
+size = 0xC
+source = "unknown"
+note = "above the loader's BSS; most likely left by the boot ROM's POST program (its BSS runs to 0x800FEBD0); GAME.EXE does not read it"
+
+# Calls from GAME.EXE's reached code to targets outside its text range
+# [0x800C4000, 0x8016DC4C). For the stub block, addr is where the copied `j` lands in the
+# resident loader, stub is the slot GAME.EXE calls and slot its offset in the table.
+
+[[external_call]]
+addr = 0xBFC00000
+region = "boot_rom"
+note = "reset vector, reached by lui at,0xBFC0; jalr at after a failed call: a reboot"
+callers = [0x800C49C4, 0x800C4CAC, 0x800C4E24, 0x800C4EEC]
+
+[[external_call]]
+addr = 0x801A355C
+region = "other"
+note = "inside GAME.EXE past text_end: `break 0x409; nop; jr ra`, the debug-monitor service that installs an exception handler (code a0, handler a1) in the loader's table at 0x80014660"
+callers = [
+    0x800C4A20, 0x800C4A2C, 0x800C4A38, 0x800C4A44, 0x800C4A50, 0x800C4A5C,
+    0x800C4A68, 0x800C4A74, 0x800C4A80, 0x800C4A8C, 0x800C4A98, 0x800C4AA4,
+    0x800C4AB0, 0x800C4ABC, 0x801519B8, 0x801519E0, 0x80151A10, 0x80151A1C,
+]
+
+[[external_call]]
+addr = 0x8000B1D0
+region = "stub_block"
+stub = 0x800C40A4
+slot = 0x018
+note = "close(fd)"
+callers = [0x80145368]
+
+[[external_call]]
+addr = 0x8000B240
+region = "stub_block"
+stub = 0x800C40B4
+slot = 0x028
+note = "open a file for writing: open(name, 1), stores the descriptor through a2"
+callers = [0x80145758]
+
+[[external_call]]
+addr = 0x8000B70C
+region = "stub_block"
+stub = 0x800C40C4
+slot = 0x038
+note = "file-system call, purpose unconfirmed"
+callers = [0x80145348]
+
+[[external_call]]
+addr = 0x8000BB68
+region = "stub_block"
+stub = 0x800C4114
+slot = 0x088
+note = "open(name, mode); device-prefixed names"
+callers = [0x80145730]
+
+[[external_call]]
+addr = 0x8000BCB0
+region = "stub_block"
+stub = 0x800C411C
+slot = 0x090
+note = "read(fd, buf, n)"
+callers = [0x801453CC, 0x80151A98, 0x80168658, 0x801686AC]
+
+[[external_call]]
+addr = 0x8000BE10
+region = "stub_block"
+stub = 0x800C414C
+slot = 0x0C0
+note = "write(fd, buf, n); fd 1 is the console"
+callers = [0x801448AC, 0x80145540, 0x8014565C, 0x80145780]
+
+[[external_call]]
+addr = 0x8000BEB0
+region = "stub_block"
+stub = 0x800C4154
+slot = 0x0C8
+note = "ioctl(fd, cmd, arg) to a device driver"
+callers = [
+    0x800C64D4, 0x800C64E4, 0x800C64F4, 0x800C7C1C, 0x800C7C2C, 0x800C7C44,
+    0x800C7C54, 0x8013F518, 0x8013F534, 0x8013F544, 0x8013F55C, 0x8013F584,
+    0x8013F59C, 0x8013F5C4, 0x8013F5DC, 0x8013F604, 0x8013F61C, 0x8013F644,
+    0x8013F660, 0x8013F688, 0x8013F6BC, 0x80145C4C, 0x80145CD0, 0x80145D7C,
+    0x80145D94, 0x80145FE4, 0x801460BC, 0x801461F0, 0x80146234, 0x801462F0,
+    0x80146360, 0x801463A0, 0x801463EC, 0x801464B0, 0x801464F4, 0x801465CC,
+    0x801466A8, 0x80146708, 0x801467A8, 0x8014681C, 0x80146890, 0x80146988,
+    0x801469E4, 0x80146AE4, 0x80146B40, 0x80146B9C, 0x80146C74, 0x80146C88,
+    0x80146CCC, 0x80146CDC, 0x80146DD8, 0x80146DEC, 0x80146E38, 0x80146E48,
+    0x801470D0, 0x801470F8, 0x801471A0, 0x801471CC, 0x80147210, 0x8014723C,
+    0x80147280, 0x801472AC, 0x801472F0, 0x8014731C, 0x80147510, 0x80147520,
+    0x8014764C, 0x8014765C, 0x801476F8, 0x80147724, 0x80147750, 0x8014777C,
+    0x801477F4, 0x8014782C, 0x80147864, 0x8014FE3C, 0x8014FE6C, 0x8014FE94,
+    0x80151CAC, 0x80151FF8, 0x80159388, 0x80168014, 0x80168300, 0x80168328,
+    0x80168348, 0x80168368, 0x80168480, 0x801684A8, 0x801684C8, 0x801684E8,
+    0x8016A2A0, 0x8016A2C4, 0x8016A2DC, 0x8016A2FC, 0x8016A314, 0x8016A338,
+    0x8016A360, 0x8016A384, 0x8016A39C, 0x8016A3BC, 0x8016A3D4, 0x8016A3F8,
+    0x8016A448, 0x8016A458, 0x8016A47C, 0x8016A498, 0x8016A4B0, 0x8016A4CC,
+    0x8016A4DC, 0x8016A4EC, 0x8016A52C, 0x8016A53C, 0x8016A560, 0x8016A57C,
+    0x8016A594, 0x8016A5B0, 0x8016A5C0, 0x8016A5F0, 0x8016A630, 0x8016A640,
+    0x8016A664, 0x8016A680, 0x8016A698, 0x8016A6B4, 0x8016A6C4, 0x8016A708,
+    0x8016A718, 0x8016A744, 0x8016A760, 0x8016A778, 0x8016A794, 0x8016A7A4,
+    0x8016A7DC, 0x8016A7EC, 0x8016A848, 0x8016A858, 0x8016A87C, 0x8016A898,
+    0x8016A8B4, 0x8016A8C4, 0x8016A8E4, 0x8016A8F4, 0x8016A90C, 0x8016A948,
+    0x8016A984, 0x8016A9A4, 0x8016A9C4, 0x8016AA20, 0x8016AA30, 0x8016AA50,
+    0x8016CB24, 0x8016CB34, 0x8016CB58, 0x8016CB74, 0x8016CB90, 0x8016CBA4,
+    0x8016CBB4, 0x8016CBD4, 0x8016D308, 0x8016D324,
+]
+
+[[external_call]]
+addr = 0x80005048
+region = "stub_block"
+stub = 0x800C4164
+slot = 0x0D8
+note = "reset the exception, interrupt and FPU handler tables and the break hooks"
+callers = [0x80143DD4]
+
+[[external_call]]
+addr = 0x80006754
+region = "stub_block"
+stub = 0x800C416C
+slot = 0x0E0
+note = "isatty(fd): true when the descriptor's device is con:"
+callers = [0x8014302C]
+
+[[external_call]]
+addr = 0x80004E3C
+region = "stub_block"
+stub = 0x800C4174
+slot = 0x0E8
+note = "write back and invalidate the whole 32 KB data cache"
+callers = [0x80168064, 0x80168274, 0x80168434]
+
+[[external_call]]
+addr = 0x8000F95C
+region = "stub_block"
+stub = 0x800C417C
+slot = 0x0F0
+note = "PCI configuration read (reg, dev, out)"
+callers = [
+    0x8015723C, 0x80157278, 0x801572BC, 0x80157300, 0x8015C570, 0x8015CC14,
+    0x8015CC8C, 0x8015CF34, 0x8015CF70, 0x8015CFA0, 0x8015CFE0, 0x8015D0E8,
+    0x8015D144, 0x8015D1A0, 0x8015D1F4, 0x8015D280, 0x8015D368, 0x8015D3C0,
+    0x8015D408, 0x8015D458,
+]
+
+[[external_call]]
+addr = 0x8000F930
+region = "stub_block"
+stub = 0x800C4184
+slot = 0x0F8
+note = "PCI configuration write (reg, dev, in)"
+callers = [
+    0x801563A8, 0x8015712C, 0x8015725C, 0x801574AC, 0x801574CC, 0x801574E8,
+    0x80157504, 0x8015766C, 0x80158584, 0x80158608, 0x80159A18, 0x80159BD4,
+    0x80159D18, 0x80159DB4, 0x8015A1F0, 0x8015A3A8, 0x8015A560, 0x8015A60C,
+    0x8015A924, 0x8015A9BC, 0x8015AAD8, 0x8015AB54, 0x8015ACC4, 0x8015AD84,
+    0x8015C594, 0x8015C5D8, 0x8015CC40, 0x8015CCB8, 0x8015CCD4, 0x8015CD48,
+    0x8015CD88, 0x8015CF1C, 0x8015CF58, 0x8015CFC8, 0x8015D114, 0x8015D1CC,
+    0x8015D218, 0x8015D390, 0x8015D3E4, 0x8015D430, 0x8015D47C, 0x80162874,
+]
+
+[[external_call]]
+addr = 0x8000E7D0
+region = "stub_block"
+stub = 0x800C4194
+slot = 0x108
+note = "PCI device probe: vendor id match"
+callers = [0x8015707C]
+
+[[external_call]]
+addr = 0x8000E80C
+region = "stub_block"
+stub = 0x800C419C
+slot = 0x110
+note = "PCI device set-up, purpose partly unconfirmed"
+callers = [0x801570F8, 0x801571D8]
+
+[[external_call]]
+addr = 0x80010368
+region = "stub_block"
+stub = 0x800C41A4
+slot = 0x118
+note = "select the current disk partition"
+callers = [0x800C50E8, 0x800F5DB0, 0x800F625C, 0x800F6F60]
+
+[[external_call]]
+addr = 0x800103BC
+region = "stub_block"
+stub = 0x800C41B4
+slot = 0x128
+note = "get the partition table"
+callers = [0x800E7DF4, 0x8013FA70]
+
+[[external_call]]
+addr = 0x800112F4
+region = "stub_block"
+stub = 0x800C41E4
+slot = 0x158
+note = "raw IDE sector transfer through the task-file registers"
+callers = [0x800E7E2C, 0x8013FDAC, 0x8013FDF4, 0x8013FE6C]
+
+[[external_call]]
+addr = 0x80009A80
+region = "stub_block"
+stub = 0x800C421C
+slot = 0x190
+note = "file-system call, purpose unconfirmed"
+callers = [0x80143C38]
+
+[[external_call]]
+addr = 0x8000E930
+region = "stub_block"
+stub = 0x800C4224
+slot = 0x198
+note = "load and run an EXE: (name, unused, args[4]); GAME.EXE uses it to start diag.exe"
+callers = [0x800C6990]
+
+[[external_call]]
+addr = 0x8000EE30
+region = "stub_block"
+stub = 0x800C4234
+slot = 0x1A8
+note = "return the address of the loader's 4-word argument block (0x800B6E30)"
+callers = [0x800C4078]
+
+[[external_call]]
+addr = 0x80009C9C
+region = "stub_block"
+stub = 0x800C4244
+slot = 0x1B8
+note = "file-system call, purpose unconfirmed"
+callers = [0x80143D60]
+
+[[external_call]]
+addr = 0x80009CBC
+region = "stub_block"
+stub = 0x800C424C
+slot = 0x1C0
+note = "lseek-like call on a descriptor, purpose partly unconfirmed"
+callers = [0x80145388]
+
+[[external_call]]
+addr = 0x80012718
+region = "stub_block"
+stub = 0x800C4264
+slot = 0x1D8
+note = "disk-driver call with a timeout, purpose unconfirmed"
+callers = [0x800E7594, 0x800E7DDC, 0x800F6174, 0x800F69B4]
+
+[[external_call]]
+addr = 0x800060BC
+region = "stub_block"
+stub = 0x800C426C
+slot = 0x1E0
+note = "install a GT64010 interrupt-cause handler (bit, handler)"
+callers = [0x800C4678, 0x800C46B0, 0x800C4D68, 0x800C4D78, 0x800C4D88]
+
+[[external_call]]
+addr = 0x8000619C
+region = "stub_block"
+stub = 0x800C4274
+slot = 0x1E8
+note = "install an FPU exception handler (cause 0..5, handler) and set its FCSR enable"
+callers = [0x800C46A0, 0x800C46C0]
+
+[[external_call]]
+addr = 0x80006200
+region = "stub_block"
+stub = 0x800C427C
+slot = 0x1F0
+note = "set the break 7 (divide by zero) hook"
+callers = [0x800C46D0]
+
+[[external_call]]
+addr = 0x80006210
+region = "stub_block"
+stub = 0x800C4284
+slot = 0x1F8
+note = "set the break 6 (overflow) hook"
+callers = [0x800C46E0]
+
+[[external_call]]
+addr = 0x80006220
+region = "stub_block"
+stub = 0x800C428C
+slot = 0x200
+note = "install a CPU interrupt-line handler (line, handler)"
+callers = [0x800C4668, 0x800C4690]
+
+[[external_call]]
+addr = 0x800127AC
+region = "stub_block"
+stub = 0x800C42AC
+slot = 0x220
+note = "install_disk_info() (name from the loader's error string): install, or with null arguments remove, the disk driver's request callbacks"
+callers = [
+    0x800C697C, 0x800E7500, 0x800F5DA8, 0x800F60A0, 0x800F6F58, 0x800F706C,
+    0x801410BC,
+]

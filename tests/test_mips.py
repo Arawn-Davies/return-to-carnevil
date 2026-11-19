@@ -1,6 +1,8 @@
 import dataclasses
 import io
+import os
 import struct
+import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 
@@ -568,6 +570,61 @@ class GameExeTests(unittest.TestCase):
             rc = cli.main(["census", "/nonexistent/GAME.EXE"])
         self.assertEqual(rc, 2)
         self.assertIn("not found", err.getvalue())
+
+
+class DisasmCli(unittest.TestCase):
+    """`disasm`: a raw file mapped at --base, decoded from --start for --count words."""
+
+    def _raw(self, words):
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        self.addCleanup(os.unlink, tmp.name)
+        tmp.write(struct.pack("<%dI" % len(words), *words))
+        tmp.close()
+        return tmp.name
+
+    def _run(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = cli.main(["disasm", *argv])
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_decodes_words_at_their_mapped_address(self):
+        lui_sp = enc_i(0x0F, 0, 29, 0x8080)
+        jal = enc_j(0x03, (BASE + 0x40) >> 2 & 0x03FFFFFF)
+        path = self._raw([0, lui_sp, jal, 0x03E00008])
+        rc, out, _ = self._run(path, "--base", "0x%X" % BASE, "--start", "0x%X" % (BASE + 4),
+                               "--count", "2")
+        self.assertEqual(rc, 0)
+        lines = out.splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(lines[0].startswith("0x80010004  3C1D8080  lui"), lines[0])
+        self.assertIn("rt=sp", lines[0])
+        self.assertIn("imm=0x8080", lines[0])
+        self.assertTrue(lines[1].startswith("0x80010008  %08X  jal" % jal), lines[1])
+        self.assertIn("-> 0x80010040", lines[1])
+
+    def test_count_stops_at_end_of_file(self):
+        path = self._raw([0, 0x03E00008])
+        rc, out, _ = self._run(path, "--base", "0xBFC00000", "--start", "0xBFC00000",
+                               "--count", "10")
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(out.splitlines()), 2)
+        self.assertIn("jr", out.splitlines()[1])
+
+    def test_start_outside_file_is_an_error(self):
+        path = self._raw([0, 0])
+        for start in ("0xBFBFFFFC", "0xBFC00008", "0xBFC00002"):
+            rc, out, err = self._run(path, "--base", "0xBFC00000", "--start", start,
+                                     "--count", "1")
+            self.assertEqual(rc, 1, start)
+            self.assertEqual(out, "")
+            self.assertIn("error:", err)
+
+    def test_missing_file(self):
+        rc, _, err = self._run("/nonexistent/boot.u32", "--base", "0", "--start", "0",
+                               "--count", "1")
+        self.assertEqual(rc, 2)
+        self.assertIn("not found", err)
 
 
 if __name__ == "__main__":
