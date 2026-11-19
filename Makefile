@@ -45,6 +45,10 @@ DISK_OBJS := $(patsubst $(ROOT)/runtime/%.c,$(BUILD)/runtime/%.o,$(DISK_SRCS))
 MACHINE_SRCS := $(ROOT)/runtime/core/clock.c $(ROOT)/runtime/core/irq.c \
                 $(ROOT)/runtime/core/exc.c
 MACHINE_OBJS := $(patsubst $(ROOT)/runtime/%.c,$(BUILD)/runtime/%.o,$(MACHINE_SRCS))
+# the host contexts of the game's tasks and the glue rt_host_switch (runtime/core/tasks.h),
+# for the runtime; compiled with -pthread, and a program linking them links with -pthread
+TASKS_SRCS := $(ROOT)/runtime/core/tasks.c
+TASKS_OBJS := $(patsubst $(ROOT)/runtime/%.c,$(BUILD)/runtime/%.o,$(TASKS_SRCS))
 GENERATED_SRCS := $(sort $(wildcard $(GENERATED)/funcs_*.c)) $(GENERATED)/func_table.c
 GENERATED_OBJS := $(patsubst $(GENERATED)/%.c,$(BUILD)/generated/%.o,$(GENERATED_SRCS))
 
@@ -78,6 +82,8 @@ $(BUILD)/replay: $(GENERATED_OBJS) $(filter-out %/call.o,$(CORE_OBJS)) $(BUILD)/
 $(BUILD)/runtime/stub/smoke.o $(BUILD)/runtime/stub/replay.o: $(ROOT)/runtime/stub/common.h
 $(DISK_OBJS): $(ROOT)/runtime/disk/disk.h
 $(MACHINE_OBJS): $(INCLUDE)/machine.h
+$(TASKS_OBJS): $(INCLUDE)/machine.h $(ROOT)/runtime/core/tasks.h
+$(TASKS_OBJS): C_FLAGS += -pthread
 
 $(BUILD)/generated/%.o: $(GENERATED)/%.c $(GENERATED)/funcs.h $(INCLUDE)/recomp.h
 	@mkdir -p "$(@D)"
