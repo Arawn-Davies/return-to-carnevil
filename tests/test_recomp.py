@@ -1221,6 +1221,21 @@ class LinkTest(unittest.TestCase):
         self.assertIn(f"{gen}/manifest.toml not found", res.stderr)
         self.assertFalse(os.path.exists(os.path.join(build, "game_stub")))
 
+    def test_make_refuses_a_path_with_a_space(self):
+        """make cannot handle a space in CARNEVIL_WORK, GENERATED or BUILD: it stops at once
+        with one line naming the three, before it builds or creates anything."""
+        spaced = os.path.join(self.tmp, "with space")
+        for var in ("CARNEVIL_WORK", "GENERATED", "BUILD"):
+            for target in ("linkcheck", "recomp"):
+                with self.subTest(var=var, target=target):
+                    res = subprocess.run([self.make, "-C", charness.REPO, target,
+                                          f"{var}={spaced}"], capture_output=True, text=True)
+                    self.assertNotEqual(res.returncode, 0)
+                    lines = [l for l in res.stderr.splitlines() if "***" in l]
+                    self.assertEqual(len(lines), 1, res.stderr)
+                    self.assertIn("contain a space", lines[0])
+                    self.assertFalse(os.path.exists(spaced))
+
 
 if __name__ == "__main__":
     unittest.main()

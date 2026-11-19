@@ -784,14 +784,22 @@ def _diff(before, after):
 
 def merge(cases_path, results_path, out_path):
     """Write the committed vector file from the script's input and its output. Raises
-    ValueError naming the cases MAME failed or did not run."""
+    ValueError, writing nothing, naming the cases MAME failed or did not run, a case with more
+    than one result, and a result for a name that is not a case."""
     case_list = _read_cases(cases_path)
-    results = {}
+    names = {c.name for c in case_list}
+    results, problems = {}, []
     with open(results_path) as f:
         for line in f:
             if line.strip():
                 res = json.loads(line)
-                results[res["name"]] = res
+                if res["name"] in results:
+                    problems.append(f"{res['name']}: more than one result")
+                elif res["name"] not in names:
+                    problems.append(f"{res['name']}: not a case of {cases_path}")
+                results.setdefault(res["name"], res)
+    if problems:
+        raise ValueError("the results do not match the cases:\n  " + "\n  ".join(problems))
     failed = [f"{n}: {r['error']}" for n, r in results.items() if "error" in r]
     missing = [c.name for c in case_list if c.name not in results]
     if failed or missing:

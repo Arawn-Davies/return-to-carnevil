@@ -48,8 +48,10 @@ What the analysis cannot find by itself comes from a hand-maintained manual file
 
 - `[[manual]]` (`addr`): an extra function start.
 - `[[stub_block]]` (`start`, `end` exclusive): a range the program fills at run time. Stub-block words are never decoded; each call or jump target inside one becomes an 8-byte function with the source `stub`.
-- `[[jump_table]]` (`jr_addr`, `targets`, case k being `targets[k]`): the table of a `jr` the analysis cannot resolve. Its targets are followed like those of a table the analysis found, and it is recorded with `table_addr = 0`. The command stops with an error naming the entry when `jr_addr` is not a `jr` on a register other than `ra` in a function's reached code, or a target is not a word inside that function.
+- `[[jump_table]]` (`jr_addr`, `targets`, case k being `targets[k]`): the table of a `jr` the analysis cannot resolve. Its targets are followed like those of a table the analysis found, and it is recorded with `table_addr = 0`. The command stops with an error naming the entry when `jr_addr` is not a `jr` on a register other than `ra` in a function's reached code, when a target is not a word inside that function, when the entry has no targets or a second entry names the same `jr_addr`, and when the analysis resolves that `jr` by itself (a manual table is only for a `jr` it cannot resolve).
 - `[[interpreted]]` (`addr`): a function the recompiler leaves to the interpreter. It must be a function start; it stays in the function list, so calls to it still resolve.
+
+The file itself is checked when it is read: a top-level table other than these four, an entry without a non-empty `reason`, an entry missing one of its keys, and an entry with a key it does not take are each an error naming the file and the entry.
 
 Without `--manual`, the command reads the file named like the output with `.functions.toml` replaced by `.manual.toml`, if it exists: `-o config/game.functions.toml` reads `config/game.manual.toml`. Any other output name gets no manual input.
 
@@ -80,7 +82,7 @@ python3 -m carnevil_tools vectors --write-cases <cases.json> [--seed N]
 python3 -m carnevil_tools vectors --merge <cases.json> <results.jsonl> -o tests/vectors/insn.json
 ```
 
-Builds the instruction test cases (short synthetic programs, 12 random ones per mnemonic of the census plus edge cases; seed 1 is the committed set) for `tools/mame/insnvec.lua`, and merges the script's results into the vector file the tests read, keeping for each case only what changed. A merge stops when a case failed or is missing. `--seed` applies to `--write-cases` only, `-o` to `--merge` only. The cases are synthetic, so the vector file is committed; `tools/mame/README.md` has the MAME command line, and [analysis/recompiler.md](analysis/recompiler.md) the cases whose results are MAME's rather than established hardware facts.
+Builds the instruction test cases (short synthetic programs, 12 random ones per mnemonic of the census plus edge cases and the flush-to-zero cases; seed 1 is the committed set) for `tools/mame/insnvec.lua`, and merges the script's results into the vector file the tests read, keeping for each case only what changed. A merge stops, writing nothing, when a case failed or is missing, has more than one result, or a result names no case. `--seed` applies to `--write-cases` only, `-o` to `--merge` only; giving either with the other mode is an error. The cases are synthetic, so the vector file is committed; `tools/mame/README.md` has the MAME command line, and [analysis/recompiler.md](analysis/recompiler.md) the cases whose results are MAME's rather than established hardware facts.
 
 ## make
 
@@ -96,7 +98,7 @@ make test         # the unit tests
 
 `make linkcheck` compiles the generated files and the runtime (`runtime/core`, `runtime/interp` and the stub runtime `runtime/stub/stub.c`) in parallel, one job per core, and links them into `game_stub`. `BUILD` defaults to `$CARNEVIL_WORK/build/<uname -s>-<uname -m>`; `GENERATED`, `BUILD`, `CARNEVIL_WORK`, `JOBS` and `CC` can be set on the command line. It stops with an error when the generated folder has no `manifest.toml`, and compiles or links nothing that is up to date. The whole image builds in about 4 s on the Mac (Apple clang, 10 cores) and about 27 s with GCC 14 in a 4-core container. `CARNEVIL_WORK` defaults to the author's share, so set it (in the environment or on the command line) to your own work folder. You need a C compiler (`cc`, or `CC=…`) and GNU make 3.81 or later; nothing else.
 
-Limits of the Makefile: paths with spaces do not work; generated objects are named after the generated file's name alone, so two generated folders built into one `BUILD` folder share objects (give each its own `BUILD`); and `make recomp` rewrites every generated file, so the next `make linkcheck` compiles everything again.
+Limits of the Makefile: paths with spaces do not work, so `make` stops at once, with one line saying so, when `CARNEVIL_WORK`, `GENERATED` or `BUILD` contains a space; generated objects are named after the generated file's name alone, so two generated folders built into one `BUILD` folder share objects (give each its own `BUILD`); and `make recomp` rewrites every generated file, so the next `make linkcheck` compiles everything again.
 
 `game_stub` with no argument does nothing: the link is the check. `game_stub <entry> [<EXE>]` loads the EXE into RAM, calls the function at the entry address with every register 0 but sp (just below the top of RAM) and prints the general registers. Its runtime is the smallest one: the bus reads 0 and logs each address the first time it sees it; the loader, `break` and interrupt entry points log their arguments and return; and each address the interpreter is entered at is logged once.
 

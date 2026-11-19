@@ -429,9 +429,8 @@ Found in reviews and left for later; none affects the results above.
 Tests:
 
 - `test_edge_operands_present` checks the union of operand values, not the pairs.
-- Interpreter test gaps: size-1 and size-2 bus paths, `lb`/`lhu` at 0x807FFFFF, `jalr` with
-  `rd` equal to `rs`, a visible nullified slot (the delay-slot shapes are covered in the
-  function tests).
+- Interpreter test gaps: `lb`/`lhu` at 0x807FFFFF, `jalr` with `rd` equal to `rs`, a visible
+  nullified slot (the delay-slot shapes are covered in the function tests).
 - `first_difference` compares with `zip`, so a length mismatch would pass.
 - The INT_MIN / -1 guard is only provable on x86-64; there is no Rosetta variant of the
   interpreter tests in the suite.
@@ -450,24 +449,19 @@ Tests:
 
 Tools and runtime:
 
-- `vectors.merge` ignores extra or duplicate result lines; the `vectors` command ignores
-  `--seed` with `--merge` and `-o` with `--write-cases`; `assemble`'s docstring has a first line
-  over 100 characters.
+- `assemble`'s docstring has a first line over 100 characters.
 - `insnvec.lua` parses a hand-written JSON subset without escapes.
 - The interpreter exits on a fetch outside RAM (for example the boot ROM) instead of handing it
   on (documented in `recomp.h`; the change is M2's); its entry log merges kseg0 and kseg1
   aliases, and logs a non-RAM entry every time.
-- `recomp.py`'s `body()` adds labels while emitting, an ordering assumption without a comment.
 - `recompile`: a short `umask(0)` window; a failure to remove the set-aside folder raises after
   a successful swap; a failed restore rename masks the original exception.
-- The Makefile cannot handle spaces in paths, keys objects by file name, and `make recomp`
+- The Makefile cannot handle spaces in paths (it now stops with one line saying so), keys
+  objects by file name, and `make recomp`
   rewrites every generated file, so the next link check rebuilds everything
   ([tools.md](../tools.md), "make").
 - `stub.c` reads the EXE's header word in host byte order.
-- `.gitignore` ignores `funcs.h` and `manifest.toml` anywhere, and `smoke` and `replay`
-  unanchored.
-
-Docs:
-
-- The M1 plan still says `<out_dir>.partial` for the working folder (the code and
-  [tools.md](../tools.md) are right).
+- `.gitignore` ignores `funcs.h` and `manifest.toml` anywhere.
+- A passing suite prints its diagnostics (the replay summary and the impure captures, the RAM
+  differing outside the compared range) to stderr even when not verbose: `unittest` has no
+  public channel for verbose-only output, so gating them is not a two-line change.

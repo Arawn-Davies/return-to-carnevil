@@ -37,7 +37,7 @@ The disk has 17 partitions. Partition 0 holds the 1,356 files the game runs from
 export CARNEVIL_WORK=/path/to/work
 ```
 
-The built-in default is the author's own path, so set this; the tools, the tests and the `Makefile` all read it. The boot ROM is not on the disk; it is `boot.u32` in MAME's `carnevil` set. The tests that read it run only when you name it:
+The built-in default is the author's own path, so set this; the tools, the tests and the `Makefile` all read it. Use a path without spaces: `make` cannot handle one, and stops with a one-line error if `CARNEVIL_WORK`, `GENERATED` or `BUILD` contains a space. The boot ROM is not on the disk; it is `boot.u32` in MAME's `carnevil` set. The tests that read it run only when you name it:
 
 ```
 export CARNEVIL_BOOT_ROM=/path/to/boot.u32

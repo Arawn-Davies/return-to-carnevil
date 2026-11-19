@@ -18,6 +18,19 @@ path has no spaces or commas. The breakpoint scripts log through the debugger, w
 These paths replace the share paths the scripts were run with; the scripts have not been run
 again since (`os.getenv` is standard Lua, which MAME's scripting provides).
 
+## Where to run MAME
+
+Run MAME from a scratch folder outside the repository, `<scratch>` below (for example `mkdir -p
+/tmp/carnevil-mame` and `cd` into it), and give each script by its absolute path,
+`<repo>/tools/mame/<script>.lua`: the absolute path of this folder on the machine that runs
+MAME (copy the scripts there first if the repository is not on that machine). MAME writes into
+the current folder: `debug.log` under `-debuglog`, the `cfg`, `nvram`, `snap` and `diff`
+folders the commands name (`diff/carnevil.dif` is the CHD's write delta, disk-derived data),
+and the scripts' own outputs when `$CARNEVIL_MAME_OUT` is unset. None of that belongs in git;
+`.gitignore` also ignores those names, in case MAME is run from the repository anyway. The
+`python3 -m carnevil_tools` commands run from `<repo>`. `<share>` is the work folder
+(`$CARNEVIL_WORK`) as the machine running the command sees it.
+
 ## Common options
 
 The tap runs' options are recorded in `hardware-usage.md`. For the breakpoint runs only the
@@ -34,8 +47,8 @@ checksum compare and its jump to the EXE log the registers; at the first instruc
 read) and quits at `GAME.EXE`'s entry. About 18 s wall time (`debug.log` timestamps).
 
 ```
-mame carnevil -rompath <roms> -debug -debugger none -debuglog -video none -sound none \
-  -nothrottle -autoboot_script tools/mame/handoff.lua
+cd <scratch> && mame carnevil -rompath <roms> -debug -debugger none -debuglog -video none -sound none \
+  -nothrottle -autoboot_script <repo>/tools/mame/handoff.lua
 ```
 
 **`diagpath.lua`** (run 2): the same with the Test Switch on, so the boot goes through
@@ -44,8 +57,8 @@ entry and at `GAME.EXE`'s entry reached that way, then quits. About 20 s wall ti
 timestamps).
 
 ```
-mame carnevil -rompath <roms> -debug -debugger none -debuglog -video none -sound none \
-  -nothrottle -autoboot_script tools/mame/diagpath.lua
+cd <scratch> && mame carnevil -rompath <roms> -debug -debugger none -debuglog -video none -sound none \
+  -nothrottle -autoboot_script <repo>/tools/mame/diagpath.lua
 ```
 
 **`gamerun.lua`** (run 3): lets `GAME.EXE` run and logs every handler it registers with the
@@ -55,8 +68,8 @@ first hit of each registered handler. Up to 150 emulated seconds (149 reached), 
 minutes wall time (`debug.log` timestamps).
 
 ```
-mame carnevil -rompath <roms> -debug -debugger none -debuglog -video none -sound none \
-  -nothrottle -seconds_to_run 150 -autoboot_script tools/mame/gamerun.lua
+cd <scratch> && mame carnevil -rompath <roms> -debug -debugger none -debuglog -video none -sound none \
+  -nothrottle -seconds_to_run 150 -autoboot_script <repo>/tools/mame/gamerun.lua
 ```
 
 **`voodootap.lua`**: read and write taps on physical 0x08000000 to 0x08FFFFFF (Voodoo
@@ -65,8 +78,8 @@ is in `GAME.EXE`, with up to 12 PCs per offset; writes `voodoo-tap.txt`. 90 emul
 at 160% speed, about 1 minute wall time.
 
 ```
-timeout 2400 mame carnevil -rompath <roms> -video none -sound none -nothrottle \
-  -seconds_to_run 90 -autoboot_script tools/mame/voodootap.lua
+cd <scratch> && timeout 2400 mame carnevil -rompath <roms> -video none -sound none -nothrottle \
+  -seconds_to_run 90 -autoboot_script <repo>/tools/mame/voodootap.lua
 ```
 
 **`hwtap.lua`**: read and write taps on physical 0x0A000000 to 0x0C000FFF (PCI I/O, so IDE,
@@ -78,8 +91,8 @@ instruction after the access, or the branch target for an access in a delay slot
 emulated seconds at 28% speed, about 5.5 minutes wall time.
 
 ```
-timeout 2400 mame carnevil -rompath <roms> -nodrc -video none -sound none -nothrottle \
-  -seconds_to_run 90 -autoboot_script tools/mame/hwtap.lua
+cd <scratch> && timeout 2400 mame carnevil -rompath <roms> -nodrc -video none -sound none -nothrottle \
+  -seconds_to_run 90 -autoboot_script <repo>/tools/mame/hwtap.lua
 ```
 
 **`hwtap-split.lua`**: `hwtap.lua` plus a tap on the first word of the stub block; the first
@@ -88,8 +101,8 @@ other accesses after it are counted apart. Writes `hw-tap-split.txt`. 90 emulate
 28% speed, about 5.5 minutes wall time.
 
 ```
-timeout 2400 mame carnevil -rompath <roms> -nodrc -video none -sound none -nothrottle \
-  -seconds_to_run 90 -autoboot_script tools/mame/hwtap-split.lua
+cd <scratch> && timeout 2400 mame carnevil -rompath <roms> -nodrc -video none -sound none -nothrottle \
+  -seconds_to_run 90 -autoboot_script <repo>/tools/mame/hwtap-split.lua
 ```
 
 **`insnvec.lua`**: runs the instruction test cases of `carnevil_tools/vectors.py` on MAME's
@@ -107,13 +120,16 @@ appended at the end leave the earlier entries unchanged (the 1,320 entries recor
 FS cases were identical after the re-run that added them).
 
 ```
-python3 -m carnevil_tools vectors --write-cases <share>/mame/scripts/insnvec-cases.json
-CARNEVIL_VECTORS=<share>/mame/scripts/insnvec-cases.json CARNEVIL_MAME_OUT=. \
-  timeout 2400 mame carnevil -rompath <roms> -nodrc -debug -debugger none -debuglog \
-  -video none -sound none -nothrottle -cfg_directory cfg -nvram_directory nvram \
-  -snapshot_directory snap -diff_directory diff -autoboot_script tools/mame/insnvec.lua
-python3 -m carnevil_tools vectors --merge <share>/mame/scripts/insnvec-cases.json \
-  insnvec.jsonl -o tests/vectors/insn.json
+cd <repo> && python3 -m carnevil_tools vectors \
+  --write-cases <share>/mame/scripts/insnvec-cases.json
+cd <scratch> && CARNEVIL_VECTORS=<share>/mame/scripts/insnvec-cases.json \
+  CARNEVIL_MAME_OUT=<scratch> timeout 2400 mame carnevil -rompath <roms> -nodrc -debug \
+  -debugger none -debuglog -video none -sound none -nothrottle -cfg_directory cfg \
+  -nvram_directory nvram -snapshot_directory snap -diff_directory diff \
+  -autoboot_script <repo>/tools/mame/insnvec.lua
+cd <repo> && python3 -m carnevil_tools vectors \
+  --merge <share>/mame/scripts/insnvec-cases.json <scratch>/insnvec.jsonl \
+  -o tests/vectors/insn.json
 ```
 
 **`firstcall.lua`**: GAME.EXE from its entry to its first loader call, for the smoke run of
@@ -132,12 +148,13 @@ sign-extended 64-bit value, so the conditions mask it. Two runs gave the same RA
 byte. About 35 s wall time (`date` around the run), nearly all of it the boot.
 
 ```
-CARNEVIL_MAME_OUT=<share>/mame/firstcall timeout 1200 mame carnevil -rompath <roms> -nodrc \
-  -debug -debugger none -debuglog -video none -sound none -nothrottle -cfg_directory cfg \
-  -nvram_directory nvram -snapshot_directory snap -diff_directory diff \
-  -autoboot_script tools/mame/firstcall.lua
+cd <scratch> && CARNEVIL_MAME_OUT=<share>/mame/firstcall timeout 1200 mame carnevil \
+  -rompath <roms> -nodrc -debug -debugger none -debuglog -video none -sound none -nothrottle \
+  -cfg_directory cfg -nvram_directory nvram -snapshot_directory snap -diff_directory diff \
+  -autoboot_script <repo>/tools/mame/firstcall.lua
 cp <share>/mame/firstcall/ram-at-first-loader-call.bin <share>/mame/dumps/
-grep -c "FIRSTCALL loader write" debug.log; grep -c "FIRSTCALL control write" debug.log
+grep -c "FIRSTCALL loader write" <scratch>/debug.log
+grep -c "FIRSTCALL control write" <scratch>/debug.log
 ```
 
 **`funcreplay.lua`**: captures of pure functions (`python3 -m carnevil_tools pure-functions`)
@@ -156,12 +173,12 @@ seconds after the entry), `CARNEVIL_REPLAY_MAX` (200 captures; past that it only
 hits) and `CARNEVIL_REPLAY_TRIES` (3).
 
 ```
-python3 -m carnevil_tools pure-functions > <share>/mame/scripts/pure-functions.txt
-CARNEVIL_PURE=<share>/mame/scripts/pure-functions.txt CARNEVIL_MAME_OUT=<share>/mame/replay \
-  CARNEVIL_TMP=/tmp/funcreplay timeout 7200 mame carnevil -rompath <roms> -nodrc -debug \
-  -debugger none -debuglog -video none -sound none -nothrottle -cfg_directory cfg \
-  -nvram_directory nvram -snapshot_directory snap -diff_directory diff \
-  -autoboot_script tools/mame/funcreplay.lua
+cd <repo> && python3 -m carnevil_tools pure-functions > <share>/mame/scripts/pure-functions.txt
+cd <scratch> && CARNEVIL_PURE=<share>/mame/scripts/pure-functions.txt \
+  CARNEVIL_MAME_OUT=<share>/mame/replay CARNEVIL_TMP=<scratch>/funcreplay timeout 7200 \
+  mame carnevil -rompath <roms> -nodrc -debug -debugger none -debuglog -video none \
+  -sound none -nothrottle -cfg_directory cfg -nvram_directory nvram -snapshot_directory snap \
+  -diff_directory diff -autoboot_script <repo>/tools/mame/funcreplay.lua
 ```
 
 The capture folder (`$CARNEVIL_WORK/mame/replay` for the tests; game RAM, so on the share

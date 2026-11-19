@@ -287,6 +287,41 @@ class FilesTest(unittest.TestCase):
             self.assertFalse(os.path.exists(out))
 
 
+    def test_conflicting_flags_are_refused(self):
+        # --seed only means something with --write-cases, -o only with --merge
+        for argv in (["vectors", "--merge", "c.json", "r.jsonl", "-o", "x.json", "--seed", "2"],
+                     ["vectors", "--write-cases", "c.json", "-o", "x.json"],
+                     ["vectors", "--merge", "c.json", "r.jsonl"]):
+            with self.subTest(argv=argv):
+                with self.assertRaises(SystemExit) as err:
+                    self._run(*argv)
+                self.assertEqual(err.exception.code, 2)
+
+    def test_merge_refuses_extra_and_duplicate_results(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cases_path = os.path.join(tmp, "cases.json")
+            wanted = [c for c in vectors.cases(1) if not c.no_mame][:3]
+            vectors.write_cases(wanted, cases_path)
+            with open(cases_path) as f:
+                lines = [json.dumps(dict(c, words=None)) for c in json.load(f)["cases"]]
+            out = os.path.join(tmp, "insn.json")
+            results = os.path.join(tmp, "results.jsonl")
+            extra = json.loads(lines[0])
+            extra["name"] = "not.a.case"
+            for bad, why in ((lines + [lines[1]], wanted[1].name + ": more than one result"),
+                             (lines + [json.dumps(extra)], "not.a.case: not a case")):
+                with self.subTest(why=why):
+                    with open(results, "w") as f:
+                        f.write("\n".join(bad) + "\n")
+                    with self.assertRaises(ValueError) as err:
+                        vectors.merge(cases_path, results, out)
+                    self.assertIn(why, str(err.exception))
+                    self.assertFalse(os.path.exists(out))
+            with open(results, "w") as f:
+                f.write("\n".join(lines) + "\n")
+            self.assertEqual(vectors.merge(cases_path, results, out), 3)
+
+
 class RecordedTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

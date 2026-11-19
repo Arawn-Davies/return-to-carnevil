@@ -530,13 +530,18 @@ def main(argv=None):
     vec_mode.add_argument("--merge", nargs=2, metavar=("CASES", "RESULTS"),
                           help="merge the script's results into the vector file (-o)")
     vec.add_argument("-o", "--out", metavar="JSON")
-    vec.add_argument("--seed", type=int, default=1)
+    vec.add_argument("--seed", type=int, help="with --write-cases (default 1)")
     args = parser.parse_args(argv)
 
     if args.command == "vectors":
         if args.merge is not None and args.out is None:
             parser.error("--merge needs -o <file>")
-        return _vectors(args.write_cases, args.merge, args.out, args.seed)
+        if args.merge is not None and args.seed is not None:
+            parser.error("--seed applies to --write-cases only")
+        if args.write_cases is not None and args.out is not None:
+            parser.error("-o applies to --merge only (--write-cases names its own file)")
+        return _vectors(args.write_cases, args.merge, args.out,
+                        1 if args.seed is None else args.seed)
 
     if args.command == "hwcensus":
         if (args.exe is None) == (args.loader is None):

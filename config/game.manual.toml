@@ -7,10 +7,15 @@
 #   never decoded; each call or jump target inside becomes a one-slot "stub" function.
 # [[manual]]: addr: a function start the analysis does not reach.
 # [[jump_table]]: jr_addr, targets (case k is targets[k]): the table of a `jr` the analysis
-#   cannot resolve. Checked when read: the jr is reached code of a function and every
-#   target lies inside that function. Recorded with table_addr = 0.
+#   cannot resolve. Checked when read: the jr is a jr on a register other than ra in reached
+#   code of a function, every target lies inside that function, there is at least one
+#   target and one entry per jr_addr, and the analysis does not resolve that jr by itself
+#   (an entry for a jr it resolves is refused). Recorded with table_addr = 0.
 # [[interpreted]]: addr: a function start left to the interpreter (the recompiler emits a
 #   thunk calling interp_run).
+#
+# Errors, each naming the entry: a top-level table other than these four, an entry without a
+# reason, an entry missing one of its keys, an entry with a key its kind does not take.
 
 [[stub_block]]
 start = 0x800C408C

@@ -22,6 +22,11 @@ BUILD ?= $(CARNEVIL_WORK)/build/$(shell uname -s)-$(shell uname -m)
 PYTHON ?= python3
 JOBS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
 
+# make splits target and prerequisite names at spaces, so these paths must not contain one
+ifneq ($(words $(CARNEVIL_WORK)) $(words $(GENERATED)) $(words $(BUILD)),1 1 1)
+$(error CARNEVIL_WORK, GENERATED and BUILD must not contain a space; use a path without one)
+endif
+
 C_FLAGS := -std=c11 -O2 -ffp-contract=off -frounding-math -fno-strict-aliasing -fwrapv
 RUNTIME_WARNINGS := -Wall -Wextra -Werror
 GENERATED_WARNINGS := -Wall -Werror -Wno-unused-label -Wno-unused-variable \

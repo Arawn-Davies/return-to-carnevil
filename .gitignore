@@ -33,10 +33,25 @@ part[0-9]*
 nvram/
 /mame/
 # MAME captures (tools/mame/firstcall.lua, funcreplay.lua) and the programs that read them
+# (built into the top of the repository only by an explicit BUILD=.)
 capture.txt
 before.diff
 after.diff
 first-loader-call.txt
 funcreplay-log.txt
-smoke
-replay
+/smoke
+/replay
+# Everything else the commands of tools/mame/README.md write, should MAME be run from here
+# rather than from a scratch folder outside the repository, as that page says: the debugger
+# log, MAME's state folders (the CHD's write delta in diff/), the scripts' outputs and inputs
+debug.log
+/cfg/
+/diff/
+*.dif
+/snap/
+insnvec*.jsonl
+insnvec-cases*.json
+voodoo-tap.txt
+hw-tap.txt
+hw-tap-split.txt
+pure-functions.txt

@@ -351,7 +351,8 @@ def capture_dirs():
 @requires_file("part0_files", "GAME.EXE")
 @unittest.skipUnless(work_path(*CAPTURES) is not None,
                      "no function captures under $CARNEVIL_WORK/mame/replay: produce them with "
-                     "tools/mame/funcreplay.lua in the Linux container (tools/mame/README.md)")
+                     "tools/mame/funcreplay.lua on a machine with MAME 0.276 "
+                     "(tools/mame/README.md)")
 class ReplayTest(unittest.TestCase):
     def test_pure_functions_replay(self):
         """Every capture replays clean or is impure at run time: the replay's first bus access

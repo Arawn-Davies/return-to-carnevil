@@ -262,6 +262,9 @@ class _Function:
             nxt, last = (addr + 8 if falls else None), addr + 4
             if addr + 4 in self.labels:  # a branch target: again, under its own label
                 if falls:
+                    # a label added while emitting: safe because addr + 8 is emitted later in
+                    # this loop (words ascend), where `addr in self.labels` places it; when
+                    # addr + 8 is not a word of the function, run_on places it instead
                     self.labels.add(addr + 8)
                     self.lines.append(f"    goto {_label(addr + 8)};")
                 self.lines.append(f"{_label(addr + 4)}:;")

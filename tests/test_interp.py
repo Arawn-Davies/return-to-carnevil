@@ -73,6 +73,22 @@ class InterpTest(unittest.TestCase):
                                      ("bus_write", 0xB6100000, 4, bus)])
         self.assertEqual((got.r[T1], got.r[T2]), (bus, bus))
 
+    def test_byte_and_halfword_bus_accesses(self):
+        # size 1 and 2 reach the bus with their size (the CMOS is read a byte at a time); the
+        # read is masked to the size, then extended as the load says; a store passes its value
+        # masked to the size
+        got = self.run_one(_case(
+            "bus-small", A("lui", rt=T0, imm=0xB610),
+            A("lb", rt=T1, rs=T0, imm=1), A("lbu", rt=T2, rs=T0, imm=2),
+            A("lh", rt=T3, rs=T0, imm=4), A("lhu", rt=V0, rs=T0, imm=6),
+            A("sb", rt=T1, rs=T0, imm=9), A("sh", rt=T3, rs=T0, imm=10)))
+        self.assertEqual(got.calls, [
+            ("bus_read", 0xB6100001, 1), ("bus_read", 0xB6100002, 1),
+            ("bus_read", 0xB6100004, 2), ("bus_read", 0xB6100006, 2),
+            ("bus_write", 0xB6100009, 1, 0xEF), ("bus_write", 0xB610000A, 2, 0xBEEF)])
+        self.assertEqual((got.r[T1], got.r[T2], got.r[T3], got.r[V0]),
+                         (0xFFFFFFEF, 0xEF, 0xFFFFBEEF, 0xBEEF))
+
     def test_ram_aliases(self):
         got = self.run_one(_case(
             "alias", A("lui", rt=T0, imm=0xA020), A("sw", rt=T1, rs=T0, imm=0),
