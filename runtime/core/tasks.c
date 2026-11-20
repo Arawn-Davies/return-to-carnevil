@@ -318,10 +318,20 @@ static void task_entry(void *arg)
             (unsigned)glue_cpu->pc);
 }
 
+static void (*switch_hook)(uint8_t *ram, cpu_t *c, int kind);
+
+void tasks_set_switch_hook(void (*fn)(uint8_t *ram, cpu_t *c, int kind))
+{
+    switch_hook = fn;
+}
+
 void rt_host_switch(uint8_t *ram, cpu_t *c, int kind)
 {
-    uint32_t record = mem_r32(ram, c, GAME_CURRENT_TASK);
+    uint32_t record;
     int i;
+    if (switch_hook)
+        switch_hook(ram, c, kind);
+    record = mem_r32(ram, c, GAME_CURRENT_TASK);
     if (kind < RT_SWITCH_RESUME || kind > RT_SWITCH_EXIT)
         rt_stop(RT_STOP_STATUS, "rt_host_switch: no switch kind %d (pc as last stored 0x%08X, "
                 "exact only in a --trace-pc build)", kind, (unsigned)c->pc);

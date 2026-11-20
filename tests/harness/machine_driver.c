@@ -28,6 +28,10 @@
  *   reload               vclock_reload
  *   atstop               rt_at_stop of two functions that print "at_stop 1" and "at_stop 2"
  *                        on stderr
+ *   stophook             rt_set_stop_hook of a function that prints "stop_hook STATUS MESSAGE"
+ *                        on stderr
+ *   exit STATUS          rt_exit(STATUS) (decimal)
+ *   vbhook               irq_set_vblank_hook of a function that prints "vblank_hook NOW"
  *   run PC               interp_run from PC, then "ran" and the state
  *   break PC CODE        rt_break, then "returned" and the state
  *   raise CODE EPC       exc_raise, then "resume PC" and the state
@@ -142,6 +146,16 @@ static void at_stop_1(void)
 static void at_stop_2(void)
 {
     fputs("at_stop 2\n", stderr);
+}
+
+static void stop_hook(int status, const char *message)
+{
+    fprintf(stderr, "stop_hook %d %s\n", status, message);
+}
+
+static void vblank_hook(void)
+{
+    printf("vblank_hook %" PRIu64 "\n", vclock_now(&cpu));
 }
 
 /* --- input and output -------------------------------------------------------------------- */
@@ -292,6 +306,14 @@ int main(void)
         } else if (strcmp(key, "atstop") == 0) {
             rt_at_stop(at_stop_1);
             rt_at_stop(at_stop_2);
+        } else if (strcmp(key, "stophook") == 0) {
+            rt_set_stop_hook(stop_hook);
+        } else if (strcmp(key, "exit") == 0) {
+            int status = (int)dec();
+            fflush(stdout);
+            rt_exit(status);
+        } else if (strcmp(key, "vbhook") == 0) {
+            irq_set_vblank_hook(vblank_hook);
         } else if (strcmp(key, "run") == 0) {
             interp_run(ram, &cpu, hex());
             puts("ran");

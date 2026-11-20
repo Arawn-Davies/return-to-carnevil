@@ -52,6 +52,15 @@ void loader_reset(void);
 /* loader_set_console_hook: fn (or NULL) is called with every console write (fd and bytes),
  * after the bytes have gone to the host's standard output. */
 void loader_set_console_hook(void (*fn)(int fd, const uint8_t *bytes, uint32_t n));
+/* loader_set_console_echo: whether console writes go to the host's standard output (1, the
+ * value loader_reset gives) or only to the hook (0, the main's --quiet). */
+void loader_set_console_echo(int on);
+
+/* loader_set_call_hook: fn (or NULL) is called by rt_loader for every slot call, with after 0
+ * before the slot runs (the registers as the game passed them) and with after 1 once it has
+ * returned (v0 as the slot set it); a call that stops is seen only before. For the runtime's
+ * trace: fn must not change guest state. loader_reset clears it. */
+void loader_set_call_hook(void (*fn)(cpu_t *c, uint32_t slot, int after));
 
 /* The CMOS (NVRAM, `cmos:`): 32,768 bytes. cmos_load reads them from path, creating the file
  * blank (every byte 0xFF, the fill MAME gives a blank NVRAM: section 1, open question 1) when

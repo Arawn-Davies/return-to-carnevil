@@ -340,8 +340,12 @@ file.**
   the IP line is unmasked and IE set.
 - fn zero: for line 0 it clears bit 7 of 0x17300000 and writes 1 to VBLANK clear; then Status
   &= ~(0x100 << n) (0x80004BBC).
-- Stores fn in the table at 0x800146A0. Returns 8 in v0 on the normal path (a loop bound), not a
-  previous handler.
+- Stores fn in the table at 0x800146A0. Returns line × 4 in v0 for lines 0 to 7, not a previous
+  handler: both ends of the search load 8, but the delay slot of the branch after it
+  (0x800062E0, `sll v0, s1, 2`) replaces it (read). Measured: v0 0 for line 0 and 0xC for line
+  3 (`mame/m2-facts/loader-first.txt`, calls 66 and 70). Correction, 2026-11-20: this entry
+  first said 8, which the stand-in returned until the boot run's comparison with MAME showed
+  the difference.
 - Game: line 0 (VBLANK on IP6) 0x800C6030, line 3 (IOASIC on IP3) 0x8013F678
   (`boot-handoff.md`). So after `main` Status has IM2 (from the loader), IM3 and IM6 set.
 

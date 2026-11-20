@@ -19,6 +19,9 @@
  *   cmosbyte OFF         "cmosbyte V"
  *   inputs P0 P1 P2 P3   ioasic_set_inputs
  *   hook                 loader_set_console_hook of a hook printing "hook FD HEX"
+ *   echo ON              loader_set_console_echo(ON)
+ *   callhook             loader_set_call_hook of a hook printing "callhook AFTER SLOT A0 X",
+ *                        X being a1 before the call and v0 after it
  *   checks K             K check points that do not reach 0 (slice -= K), then "now NOW"
  *   advance NS           ticks as if each slice ran out until vclock_now reaches NS, then
  *                        "now NOW"
@@ -95,6 +98,13 @@ recomp_fn recomp_lookup(uint32_t addr)
 }
 
 /* --- hooks -------------------------------------------------------------------------------- */
+
+static void call_hook(cpu_t *c, uint32_t slot, int after)
+{
+    printf("callhook %d %03" PRIX32 " %08" PRIX32 " %08" PRIX32 "\n", after, slot, c->r[4],
+           after ? c->r[2] : c->r[5]);
+}
+
 
 static void console_hook(int fd, const uint8_t *bytes, uint32_t n)
 {
@@ -247,6 +257,10 @@ int main(void)
             ioasic_set_inputs(ports);
         } else if (strcmp(key, "hook") == 0) {
             loader_set_console_hook(console_hook);
+        } else if (strcmp(key, "echo") == 0) {
+            loader_set_console_echo((int)hex());
+        } else if (strcmp(key, "callhook") == 0) {
+            loader_set_call_hook(call_hook);
         } else if (strcmp(key, "checks") == 0) {
             cpu.slice -= (int32_t)hex();
             printf("now %" PRIu64 "\n", vclock_now(&cpu));

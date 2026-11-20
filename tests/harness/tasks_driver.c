@@ -37,6 +37,9 @@
  *                   r N V           general register N
  *                   run PC          rt_call to PC, then "ran"
  *                   dump ADDR N     "dump W0 .. W(N-1)", N RAM words from ADDR
+ *                   switchhook      tasks_set_switch_hook of a hook printing "switch KIND
+ *                                   RECORD", RECORD the current task word, at every
+ *                                   rt_host_switch
  *
  * Outside guest mode, recomp_lookup knows one function: a native trampoline at 0x8014A930
  * (the address the glue enters a new task at), which runs the scenario's C task body for the
@@ -425,6 +428,11 @@ static void reset(void)
     rt_set_fcsr(&cpu, 0);
 }
 
+static void switch_hook(uint8_t *r, cpu_t *c, int kind)
+{
+    printf("switch %d %08" PRIX32 "\n", kind, mem_r32(r, c, 0x801A3118u));
+}
+
 static void run_guest(void)
 {
     static char key[16];
@@ -444,6 +452,8 @@ static void run_guest(void)
         } else if (strcmp(key, "run") == 0) {
             rt_call(ram, &cpu, hex());
             puts("ran");
+        } else if (strcmp(key, "switchhook") == 0) {
+            tasks_set_switch_hook(switch_hook);
         } else if (strcmp(key, "dump") == 0) {
             uint32_t addr = hex(), n = hex();
             fputs("dump", stdout);

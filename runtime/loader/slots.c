@@ -57,8 +57,16 @@ void ld_put32(uint32_t addr, uint32_t value)
     mem_w32(ld.ram, ld.c, addr, value);
 }
 
+static void (*call_hook)(cpu_t *c, uint32_t slot, int after);
+
+void loader_set_call_hook(void (*fn)(cpu_t *c, uint32_t slot, int after))
+{
+    call_hook = fn;
+}
+
 void loader_reset(void)
 {
+    call_hook = NULL;
     ld_fd_reset();
     ld_con_reset();
     ld_cmos_reset();
@@ -138,8 +146,8 @@ static void s_break6_hook(cpu_t *c)
 }
 
 /* 0x200 irq_set_handler: section 1; for line 0 it also sets (or clears) the board's VBLANK
- * enable, which lets the Voodoo's retrace (runtime/hw) reach IP6; v0 = 8 on the normal
- * path */
+ * enable, which lets the Voodoo's retrace (runtime/hw) reach IP6; v0 = line * 4 (the delay
+ * slot at 0x800062E0, after the 8 of the search) */
 static void s_irq_set_handler(cpu_t *c)
 {
     uint32_t line = c->r[4], fn = c->r[5];
@@ -148,7 +156,7 @@ static void s_irq_set_handler(cpu_t *c)
                 "documented", (unsigned)line);
     irq_set_line((int)line, fn);
     vclock_reload(c); /* a line now unmasked */
-    c->r[2] = 8;
+    c->r[2] = line * 4;
 }
 
 /* --- the PCI configuration slots ---------------------------------------------------------- */
@@ -307,9 +315,13 @@ void rt_loader(uint8_t *ram, cpu_t *c, uint32_t slot)
     struct ld_call outer = ld;
     int i;
     ld = (struct ld_call){ram, c, slot};
+    if (call_hook)
+        call_hook(c, slot, 0);
     i = slot_index(slot);
     if (i < 0)
         ld_stop("not a loader slot (the stub block's 29 are boot-handoff.md's)");
     SLOTS[i].fn(c);
     ld = outer;
+    if (call_hook)
+        call_hook(c, slot, 1);
 }

@@ -8,6 +8,14 @@
 #                    $(BUILD)/smoke: GAME.EXE from its entry to the first loader call
 #   make replay      ... with runtime/stub/replay.c into $(BUILD)/replay: one function
 #                    from a state captured in MAME (tools/mame/README.md)
+#   make carnevil    the program (runtime/main/carnevil.c): the same objects with the whole
+#                    runtime into $(BUILD)/carnevil, with $(GENERATED)/boot_state.h written
+#                    from config/boot_state.toml first
+#   make carnevil-ubsan
+#                    the same with -fsanitize=undefined -fno-sanitize-recover=undefined on
+#                    every file, into $(BUILD)/ubsan/carnevil
+#   make run         $(BUILD)/carnevil --disk $(DISK) --seconds $(SECONDS), and --overlay,
+#                    --nvram and --trace when OVERLAY, NVRAM or TRACE is set
 #   make test        the unit tests
 #
 # Generated C and objects never go in this repository: by default they are on the share.
@@ -62,10 +70,17 @@ LOADER_OBJS := $(patsubst $(ROOT)/runtime/%.c,$(BUILD)/runtime/%.o,$(LOADER_SRCS
 HW_SRCS := $(ROOT)/runtime/core/bus.c $(addprefix $(ROOT)/runtime/hw/,voodoo_null.c \
            voodoo_fb.c voodoo_tmu.c gun.c misc.c dcs_stub.c)
 HW_OBJS := $(patsubst $(ROOT)/runtime/%.c,$(BUILD)/runtime/%.o,$(HW_SRCS))
+# the program's main: options, loading, start-up and the observers and trace
+# (runtime/main/carnevil.c, trace.c); they include $(GENERATED)/boot_state.h
+MAIN_SRCS := $(ROOT)/runtime/main/carnevil.c $(ROOT)/runtime/main/trace.c
+MAIN_OBJS := $(patsubst $(ROOT)/runtime/%.c,$(BUILD)/runtime/%.o,$(MAIN_SRCS))
+SANITIZE := -fsanitize=undefined -fno-sanitize-recover=undefined
+DISK ?= $(CARNEVIL_WORK)/carnevil.raw
+SECONDS ?= 150
 GENERATED_SRCS := $(sort $(wildcard $(GENERATED)/funcs_*.c)) $(GENERATED)/func_table.c
 GENERATED_OBJS := $(patsubst $(GENERATED)/%.c,$(BUILD)/generated/%.o,$(GENERATED_SRCS))
 
-.PHONY: recomp linkcheck smoke replay test
+.PHONY: recomp linkcheck smoke replay carnevil carnevil-ubsan run test
 .DELETE_ON_ERROR:
 
 recomp:
@@ -78,6 +93,20 @@ linkcheck smoke replay:
 	         "recompile output (run make recomp)" >&2; exit 1; }
 	@$(MAKE) --no-print-directory -f "$(ROOT)/Makefile" -j $(JOBS) \
 	    "$(BUILD)/$(if $(filter linkcheck,$@),game_stub,$@)"
+
+carnevil carnevil-ubsan:
+	@test -f "$(GENERATED)/manifest.toml" || { \
+	    echo "error: $(GENERATED)/manifest.toml not found: $(GENERATED) is not a complete" \
+	         "recompile output (run make recomp)" >&2; exit 1; }
+	@$(MAKE) --no-print-directory -f "$(ROOT)/Makefile" "$(GENERATED)/boot_state.h"
+	@$(MAKE) --no-print-directory -f "$(ROOT)/Makefile" -j $(JOBS) \
+	    $(if $(filter carnevil-ubsan,$@),BUILD="$(BUILD)/ubsan" CC="$(CC) $(SANITIZE)") \
+	    "$(BUILD)/$(if $(filter carnevil-ubsan,$@),ubsan/)carnevil"
+
+run: carnevil
+	"$(BUILD)/carnevil" --disk "$(DISK)" --seconds $(SECONDS) \
+	    $(if $(OVERLAY),--overlay "$(OVERLAY)") $(if $(NVRAM),--nvram "$(NVRAM)") \
+	    $(if $(TRACE),--trace "$(TRACE)")
 
 test:
 	cd "$(ROOT)" && $(PYTHON) -W error -m unittest
@@ -92,6 +121,15 @@ $(BUILD)/smoke: $(GENERATED_OBJS) $(CORE_OBJS) $(BUILD)/runtime/stub/smoke.o
 $(BUILD)/replay: $(GENERATED_OBJS) $(filter-out %/call.o,$(CORE_OBJS)) $(BUILD)/runtime/stub/replay.o
 	$(CC) $^ -lm -o $@
 
+# tasks.c's threads end with pthread_exit, so the program links with -pthread
+$(BUILD)/carnevil: $(GENERATED_OBJS) $(CORE_OBJS) $(MACHINE_OBJS) $(TASKS_OBJS) $(DISK_OBJS) \
+                   $(LOADER_OBJS) $(HW_OBJS) $(MAIN_OBJS)
+	$(CC) -pthread $^ -lm -o $@
+
+$(GENERATED)/boot_state.h: $(ROOT)/config/boot_state.toml $(ROOT)/carnevil_tools/bootstate.py
+	cd "$(ROOT)" && $(PYTHON) -m carnevil_tools bootstate "$(ROOT)/config/boot_state.toml" \
+	    -o "$@"
+
 $(BUILD)/runtime/stub/smoke.o $(BUILD)/runtime/stub/replay.o: $(ROOT)/runtime/stub/common.h
 $(DISK_OBJS): $(ROOT)/runtime/disk/disk.h
 $(MACHINE_OBJS): $(INCLUDE)/machine.h
@@ -100,6 +138,10 @@ $(TASKS_OBJS): C_FLAGS += -pthread
 $(LOADER_OBJS): $(ROOT)/runtime/loader/loader.h $(INCLUDE)/machine.h $(ROOT)/runtime/disk/disk.h \
                 $(ROOT)/runtime/hw/hw.h
 $(HW_OBJS): $(ROOT)/runtime/hw/hw.h $(ROOT)/runtime/loader/loader.h $(INCLUDE)/machine.h
+$(MAIN_OBJS): $(GENERATED)/boot_state.h $(ROOT)/runtime/main/trace.h $(INCLUDE)/machine.h \
+              $(ROOT)/runtime/core/tasks.h $(ROOT)/runtime/disk/disk.h \
+              $(ROOT)/runtime/loader/loader.h $(ROOT)/runtime/hw/hw.h
+$(MAIN_OBJS): C_FLAGS += -I "$(GENERATED)"
 
 $(BUILD)/generated/%.o: $(GENERATED)/%.c $(GENERATED)/funcs.h $(INCLUDE)/recomp.h
 	@mkdir -p "$(@D)"

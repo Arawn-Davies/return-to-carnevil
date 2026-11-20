@@ -2,11 +2,15 @@
 
 Reads only committed files, so it runs without the game data.
 """
+import contextlib
 import os
+import subprocess
+import tempfile
 import tomllib
 import unittest
 
-from carnevil_tools import functions, loader
+from carnevil_tools import bootstate, cli, functions, loader
+from tests import charness
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BOOT_STATE = os.path.join(REPO, "config", "boot_state.toml")
@@ -106,6 +110,78 @@ class BootState(unittest.TestCase):
             self.assertTrue(STUB_START <= stub < STUB_END, hex(stub))
             self.assertEqual(stub, STUB_START + c["slot"], hex(stub))
             self.assertEqual(sources.get(stub), {"stub"}, "0x%08X in game.functions.toml" % stub)
+
+
+class BootStateHeader(unittest.TestCase):
+    """carnevil_tools/bootstate.py: boot_state.h for the runtime's main."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def toml(self, text):
+        path = os.path.join(self.tmp.name, "state.toml")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        return path
+
+    def test_state_from_the_config(self):
+        with open(BOOT_STATE, "rb") as f:
+            raw = tomllib.load(f)
+        s = bootstate.read(BOOT_STATE)
+        self.assertEqual((s["entry"], s["status"], s["fcsr"], s["hi"], s["lo"]),
+                         (ENTRY, raw["status"], raw["fcr31"], 0, raw["lo"]))
+        self.assertEqual(len(s["gpr"]), 32)
+        for i, name in enumerate(REGISTERS):
+            self.assertEqual(s["gpr"][i], raw.get(name, 0), name)
+        # the tables are evidence, not state: [first_loader_call]'s sp is not the entry's
+        self.assertEqual(s["gpr"][29], raw["sp"])
+        self.assertNotEqual(s["gpr"][29], raw["first_loader_call"]["sp"])
+
+    def test_header_compiles_with_the_values(self):
+        """The header, included in C and printed back, gives the file's values."""
+        out = os.path.join(self.tmp.name, "boot_state.h")
+        self.assertEqual(cli.main(["bootstate", BOOT_STATE, "-o", out]), 0)
+        self.assertEqual(os.listdir(self.tmp.name), ["boot_state.h"])  # no temporary left
+        src = os.path.join(self.tmp.name, "probe.c")
+        with open(src, "w") as f:
+            f.write('#include <stdio.h>\n#include "boot_state.h"\n'
+                    "static const unsigned gpr[32] = BOOT_GPR;\n"
+                    "int main(void)\n{\n"
+                    '    printf("%X %X %X %X %X", BOOT_ENTRY, BOOT_STATUS, BOOT_FCSR, BOOT_HI, '
+                    "BOOT_LO);\n"
+                    '    for (int i = 0; i < 32; i++)\n        printf(" %X", gpr[i]);\n'
+                    "    return 0;\n}\n")
+        exe = os.path.join(self.tmp.name, "probe")
+        subprocess.run([charness._cc(), *charness.CFLAGS, *charness.RUNTIME_WARNINGS, "-I",
+                        self.tmp.name, src, "-o", exe], check=True)
+        got = [int(x, 16) for x in subprocess.run([exe], capture_output=True, text=True,
+                                                  check=True).stdout.split()]
+        s = bootstate.read(BOOT_STATE)
+        self.assertEqual(got, [s["entry"], s["status"], s["fcsr"], s["hi"], s["lo"]] + s["gpr"])
+
+    def test_refusals(self):
+        base = "entry = 0x800C4000\nstatus = 0x30010401\nfcr31 = 0x01000400\n"
+        for extra, why in (("pc = 1\n", "unknown key 'pc'"), ("zero = 0\n", "r0"),
+                           ("a0 = 0x100000000\n", "not a 32-bit value"),
+                           ("a0 = -1\n", "not a 32-bit value"),
+                           ('a0 = "1"\n', "not a 32-bit value")):
+            with self.subTest(extra=extra):
+                with self.assertRaisesRegex(bootstate.BootStateError, why):
+                    bootstate.read(self.toml(base + extra))
+        with self.assertRaisesRegex(bootstate.BootStateError, "no fcr31"):
+            bootstate.read(self.toml("entry = 0x800C4000\nstatus = 0x30010401\n"))
+        # the tables are ignored; registers not given are 0
+        s = bootstate.read(self.toml(base + "[first_loader_call]\nslot = 0x38\n"))
+        self.assertEqual(s["gpr"], [0] * 32)
+        self.assertIsNone(s["config"])
+
+    def test_cli_error_leaves_no_header(self):
+        out = os.path.join(self.tmp.name, "boot_state.h")
+        bad = self.toml("entry = 0x800C4000\n")
+        with open(os.devnull, "w") as null, contextlib.redirect_stderr(null):
+            self.assertEqual(cli.main(["bootstate", bad, "-o", out]), 1)
+        self.assertFalse(os.path.exists(out))
 
 
 if __name__ == "__main__":

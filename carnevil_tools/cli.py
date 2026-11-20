@@ -3,7 +3,8 @@ import argparse
 import os
 import sys
 
-from carnevil_tools import board, disk, exe, functions, hwcensus, loader, mips, recomp, vectors
+from carnevil_tools import (board, bootstate, disk, exe, functions, hwcensus, loader, mips, recomp,
+                            vectors)
 
 DEFAULT_WORK = "/Volumes/archive/reincarnevilation/work"
 
@@ -468,6 +469,15 @@ def _vectors(write_cases, merge, out, seed):
     return 0
 
 
+def _bootstate(path, out):
+    try:
+        bootstate.write_header(path, out)
+    except (bootstate.BootStateError, OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def _positive_int(text):
     value = int(text)
     if value <= 0:
@@ -539,7 +549,15 @@ def main(argv=None):
                           help="merge the script's results into the vector file (-o)")
     vec.add_argument("-o", "--out", metavar="JSON")
     vec.add_argument("--seed", type=int, help="with --write-cases (default 1)")
+    boot = sub.add_parser("bootstate", help="write boot_state.h, the entry state for the "
+                                            "runtime's main, from config/boot_state.toml")
+    boot.add_argument("toml", nargs="?", default=BOOT_STATE,
+                      help="the boot state (default: config/boot_state.toml)")
+    boot.add_argument("-o", "--out", required=True, metavar="HEADER")
     args = parser.parse_args(argv)
+
+    if args.command == "bootstate":
+        return _bootstate(args.toml, args.out)
 
     if args.command == "vectors":
         if args.merge is not None and args.out is None:

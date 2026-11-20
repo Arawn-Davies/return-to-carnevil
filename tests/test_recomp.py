@@ -1155,6 +1155,28 @@ class RecompileTest(unittest.TestCase):
         self.assertEqual([n for _, n in entries], [recomp.c_name(a) for a in starts])
         self.assertIn("recomp_fn recomp_lookup(uint32_t addr)", text)
 
+    def test_func_table_carries_the_exe_hash(self):
+        """func_table.c defines recomp_exe_sha256, declared in recomp.h, as the manifest's
+        exe_sha256: the runtime's main refuses a GAME.EXE of another hash."""
+        image, analysis = dispatch_analysis(dispatch_asm())
+        sha = "0123456789abcdef" * 4
+        analysis = dataclasses.replace(analysis, exe_sha256=sha)
+        image = dataclasses.replace(image, sha256=sha)
+        out = os.path.join(self.tmp, "gen")
+        manifest = recomp.recompile(image, analysis, out)
+        self.assertEqual(manifest.exe_sha256, sha)
+        with open(os.path.join(out, "func_table.c")) as f:
+            text = f.read()
+        self.assertEqual(re.findall(r'const char recomp_exe_sha256\[\] = "([^"]*)";', text),
+                         [sha])
+        with open(os.path.join(charness.INCLUDE, "recomp.h")) as f:
+            self.assertIn("extern const char recomp_exe_sha256[];", f.read())
+        # a hash that is not 64 lowercase hex digits (or empty) is not written into C
+        bad = dataclasses.replace(analysis, exe_sha256='x"; int y; "')
+        with self.assertRaisesRegex(ValueError, "SHA-256"):
+            recomp.recompile(dataclasses.replace(image, sha256=bad.exe_sha256), bad,
+                             os.path.join(self.tmp, "gen2"))
+
     def test_interpreted_function_is_a_thunk(self):
         p = dispatch_asm()
         image, analysis = dispatch_analysis(p)

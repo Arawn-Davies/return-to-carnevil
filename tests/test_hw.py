@@ -458,15 +458,18 @@ class BusTest(HwTestCase):
         self.stops([rd(1, 0xB6120000)], "0xB6120000", "physical 0x16120000")
 
     def test_gun(self):
-        """The gun's eight byte registers read the measured no-input values; byte writes of
-        offsets 0 and 4 are accepted; any other offset or size stops."""
+        """The gun's eight byte registers read the measured no-input values; the two writes
+        the game makes are accepted: offset 0 with sw (0x800D5430, the only writer of offset 0
+        in mame/hw-tap/hw-tap.txt) and offset 4 with sb (0x800D50C0); any other offset or
+        size stops."""
         out, _ = self.drive([rd(1, 0xB6800000 + off) for off in sorted(GUN)]
-                            + [wr(1, 0xB6800000, 0), wr(1, 0xB6800004, 0x10), rd(1, 0x96800004)])
+                            + [wr(4, 0xB6800000, 0), wr(1, 0xB6800004, 0x10), rd(1, 0x96800004)])
         self.assertEqual(self.rds(out), [GUN[off] for off in sorted(GUN)] + [0x48])
         self.stops([wr(1, 0xB6800008, 0)], "physical 0x16800008", "write")
         self.stops([rd(4, 0xB6800004)], "physical 0x16800004", "4 bytes")
         self.stops([rd(1, 0xB6800001)], "physical 0x16800001")
-        self.stops([wr(4, 0xB6800000, 0)], "physical 0x16800000", "4 bytes")
+        self.stops([wr(1, 0xB6800000, 0)], "physical 0x16800000", "1 byte ")
+        self.stops([wr(4, 0xB6800004, 0)], "physical 0x16800004", "4 bytes")
 
     def test_sound_fifo(self):
         """Word writes of the sound FIFO are counted and dropped; a read, another size or

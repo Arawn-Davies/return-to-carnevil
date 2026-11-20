@@ -428,6 +428,37 @@ class TasksTest(unittest.TestCase):
                     # each task's last saved sp is its frame below the stack top
                     self.assertEqual(a[2], STACK_A - 16)
 
+    def test_switch_hook(self):
+        """tasks_set_switch_hook: the hook sees every host switch of the guest scheduler, its
+        kind and the current task word, before the switch, and changes nothing: the records
+        end as test_guest_scheduler's do. Every resume of a task ends in a yield of it or,
+        once, B's exit."""
+        words, labels = guest_program()
+        path, _ = guest_c(words, labels)
+        exe = build_driver([path])
+        load = [f"mem {TRAMPOLINE + 4 * i:08X} {w:08X}" for i, w in enumerate(words)]
+        load += [f"mem {a:08X} {v:08X}" for a, v in sorted(guest_records().items())]
+        load += ["switchhook", f"r {SP:X} {SCHED_STACK:08X}", f"r {RA:X} 80001000",
+                 f"run {labels['sched']:08X}", f"dump {REC_A:08X} 6", f"dump {REC_B:08X} 6"]
+        out, _ = self.drive(["guest", "recomp"], stdin="\n".join(["reset"] + load) + "\n",
+                            exe=exe)
+        lines = [line.split() for line in out.splitlines()]
+        switches = [(int(k), int(r, 16)) for key, k, r in
+                    (line for line in lines if line[0] == "switch")]
+        resume, yield_, exit_ = 0, 1, 2
+
+        def count(kind, rec):
+            return switches.count((kind, rec))
+        # A never exits; B ends in the exit, which sees the exiting task's predecessor (A) as
+        # the current task, as the game's free leaves it
+        self.assertEqual(count(resume, REC_A), count(yield_, REC_A))
+        self.assertEqual(count(resume, REC_B), count(yield_, REC_B) + 1)
+        self.assertEqual([k for k, _ in switches].count(exit_), 1)
+        self.assertIn((exit_, REC_A), switches)
+        dumps = [[int(x, 16) for x in line[1:]] for line in lines if line[0] == "dump"]
+        self.assertEqual([dumps[0][i] for i in (0, 3, 4, 5)], [REC_B, 1, PASSES, 0])
+        self.assertEqual([dumps[1][i] for i in (0, 3, 4, 5)], [0, 0, 3, 3])
+
     def test_guest_scheduler(self):
         """A synthetic guest scheduler with the three host-switch shapes (a scheduler loop
         resuming two task records by `jr ra`, tasks that yield through a `j`, one that exits)

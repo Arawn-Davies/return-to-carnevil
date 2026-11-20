@@ -10,7 +10,7 @@
  */
 #include <stdio.h>
 
-#include "hw.h"
+#include "../hw/hw.h"
 #include "loader.h"
 #include "machine.h"
 

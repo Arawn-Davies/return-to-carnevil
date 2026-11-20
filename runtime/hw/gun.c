@@ -4,10 +4,11 @@
  * docs/analysis/hardware-usage.md: "GAME.EXE" ("CarnEvil gun": byte reads of all eight
  * registers, P1 X low, X high, Y low, Y high at offsets 0x00 to 0x0C and P2 at 0x10 to 0x1C,
  * and writes of offsets 0 and 4) and "Measured values the runtime answers with" (the value
- * every read returned with no input, from mame/m2-facts/inputs.txt, and the writes being
- * `sb`). There is no state: the reads return the measured values and the two writes are
- * accepted without effect, since what they do on the board was not measured. Every other
- * offset or size stops. Gun input is not modelled yet.
+ * every read returned with no input, from mame/m2-facts/inputs.txt; offset 0 written by the
+ * `sw` at 0x800D5430, offset 4 by the `sb` at 0x800D50C0). There is no state: the reads
+ * return the measured values and the two writes are accepted without effect, since what they
+ * do on the board was not measured. Every other offset or size stops. Gun input is not
+ * modelled yet.
  */
 #include "hw.h"
 
@@ -24,7 +25,7 @@ uint32_t gun_read(cpu_t *c, uint32_t off, int size)
 
 void gun_write(cpu_t *c, uint32_t off, int size, uint32_t value)
 {
-    if (size != 1 || (off != 0 && off != 4))
-        hw_stop(c, GUN_PHYS + off, size, 1, value, "the game writes the gun only with sb at "
-                "offsets 0 and 4 (hardware-usage.md, \"CarnEvil gun\")");
+    if (!(off == 0 && size == 4) && !(off == 4 && size == 1))
+        hw_stop(c, GUN_PHYS + off, size, 1, value, "the game writes the gun only with sw at "
+                "offset 0 and sb at offset 4 (hardware-usage.md, \"CarnEvil gun\")");
 }

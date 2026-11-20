@@ -20,6 +20,9 @@
 #define TASKS_H
 
 #include <stddef.h>
+#include <stdint.h>
+
+#include "recomp.h"
 
 typedef struct task_ctx task_ctx;
 
@@ -55,5 +58,10 @@ int ctx_count(void);
  * glue's map from task records to contexts, so that nothing of a previous run is left (for
  * test harnesses that run independent cases in one process). */
 void tasks_reset(void);
+
+/* tasks_set_switch_hook: fn (or NULL) is called at the start of every rt_host_switch, before
+ * the switch, with its guest state and kind (RT_SWITCH_*): for the runtime's trace, so fn
+ * must not change guest state. tasks_reset leaves it as it is. */
+void tasks_set_switch_hook(void (*fn)(uint8_t *ram, cpu_t *c, int kind));
 
 #endif

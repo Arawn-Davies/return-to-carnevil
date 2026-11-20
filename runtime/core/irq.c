@@ -318,6 +318,14 @@ uint32_t exc_raise(uint8_t *ram, cpu_t *c, int code, uint32_t epc)
  * callback is the board's VBLANK interrupt); its times are the card's (runtime/hw). */
 void vblank_raise(void)
 {
-    if (machine.vblank_enable)
-        irq_raise(6);
+    if (!machine.vblank_enable)
+        return;
+    irq_raise(6);
+    if (machine.vblank_hook)
+        machine.vblank_hook();
+}
+
+void irq_set_vblank_hook(void (*fn)(void))
+{
+    machine.vblank_hook = fn;
 }

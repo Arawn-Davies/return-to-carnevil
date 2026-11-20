@@ -592,6 +592,42 @@ class ClockIrqTest(unittest.TestCase):
         self.assertTrue(lines[0].startswith("carnevil: stop: "), err)
         self.assertEqual(lines[1:], ["at_stop 1", "at_stop 2"])
 
+    def test_stop_hook_gets_the_message(self):
+        """rt_set_stop_hook: the hook gets the status and the message rt_stop prints, after
+        the message and before the at-stop functions."""
+        _out, err = self.stops(["stophook", "atstop", "break 80100024 407"], "0x80100024")
+        lines = err.splitlines()
+        message = lines[0][len("carnevil: stop: "):]
+        self.assertEqual(lines[1:], [f"stop_hook 3 {message}", "at_stop 1", "at_stop 2"])
+        # machine_reset forgets the hook
+        _out, err = self.stops(["stophook", "reset", "break 80100024 407"], "0x80100024")
+        self.assertEqual(len(err.splitlines()), 1, err)
+
+    def test_exit_runs_the_at_stop_functions(self):
+        """rt_exit: the at-stop functions in order, then the status, with no stop message and
+        no stop hook call."""
+        res = subprocess.run([self.exe], input="reset\nstophook\natstop\nexit 0\n",
+                             capture_output=True, text=True, timeout=120)
+        self.assertEqual((res.returncode, res.stderr), (0, "at_stop 1\nat_stop 2\n"))
+        res = subprocess.run([self.exe], input="reset\nexit 5\n", capture_output=True,
+                             text=True, timeout=120)
+        self.assertEqual((res.returncode, res.stderr), (5, ""))
+
+    def test_vblank_hook_counts_raised_vblanks(self):
+        """irq_set_vblank_hook: called at each vblank_raise that raises IP6 (the VBLANK
+        enable set by line 0's handler), not at a retrace with the enable clear."""
+        handler = asm(ret(1))
+        out, _ = self.drive(place(MAIN, LOOP) + place(H, handler) + ["vbhook", f"vblank {P}"]
+                            + run_main(2 * P // NS_PER_CHECK + 50) + [f"line 0 {H:08X}"]
+                            + run_main(3 * P // NS_PER_CHECK))
+        # the first two retraces (at 0.1 and 0.2 ms) come before line 0 is installed, the
+        # next three (0.3 to 0.5 ms) after it
+        hooks = [int(t[0]) for t in out.all("vblank_hook")]
+        self.assertEqual(len(hooks), 3, out.lines)
+        for k, t in enumerate(hooks):
+            self.assertGreaterEqual(t, (k + 3) * P)
+            self.assertLess(t, (k + 3) * P + 10 * NS_PER_CHECK)
+
 
 if __name__ == "__main__":
     unittest.main()

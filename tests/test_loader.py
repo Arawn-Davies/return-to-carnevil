@@ -445,6 +445,32 @@ class LoaderTest(LoaderTestCase):
         self.assertEqual(lines[3:5], ["xyz", "hook 1 78797A0A"])
         self.stops([ioctl(0, 0x6602)], "0x6602", f"ra 0x{CALLER_RA:08X}")
 
+    def test_console_echo_off(self):
+        """loader_set_console_echo(0) (the main's --quiet): a console write still returns n
+        and reaches the hook, but nothing goes to standard output; loader_reset turns the echo
+        back on."""
+        out, _ = self.drive(["hook", "echo 0"] + data(DATA, b"abc\n")
+                            + [call(0x0C0, 1, DATA, 4), "reset", "hook"] + data(DATA, b"abc\n")
+                            + [call(0x0C0, 1, DATA, 4)])
+        self.assertEqual(out.v0s(), [4, 4])
+        lines = out.text.splitlines()
+        self.assertEqual([line for line in lines if not line.startswith(("ret", "hook"))],
+                         ["abc"])
+        self.assertEqual(out.all("hook"), [["1", "6162630A"], ["1", "6162630A"]])
+
+    def test_call_hook(self):
+        """loader_set_call_hook: the hook sees every slot call before it runs (the arguments
+        as the game passed them) and after it (v0 as returned), with the slot; nothing it
+        does changes the call; loader_reset clears it."""
+        out, _ = self.drive(["callhook"] + open_("pci:", 2) + [call(0x0E0, 1), "reset",
+                                                                call(0x0E0, 1)])
+        self.assertEqual(out.v0s(), [6, 1, 1])
+        self.assertEqual(out.all("callhook"), [
+            ["0", "088", f"{NAME:08X}", "00000002"],
+            ["1", "088", f"{NAME:08X}", "00000006"],
+            ["0", "0E0", "00000001", "00000000"],
+            ["1", "0E0", "00000001", "00000001"]])
+
     def test_unknown_requests_stop(self):
         """Slot 0x048 (not one of the 29), ioctl(4, 0x690B) and ioctl(5, 0x7400) each stop
         with a message naming the slot or command, the arguments and ra; none returns."""
@@ -558,7 +584,8 @@ class LoaderTest(LoaderTestCase):
 
     def test_irq_set_handler(self):
         """irq_set_handler (slot 0x200): line 0 sets the board's VBLANK enable (a second
-        registration changes nothing) and ORs IM6 and IE into Status, line 3 IM3; v0 is 8;
+        registration changes nothing) and ORs IM6 and IE into Status, line 3 IM3; v0 is
+        line x 4 (measured: 0 and 0xC, mame/m2-facts/loader-first.txt calls 66 and 70);
         fn 0 masks the line again. No VBLANK arrives before the Voodoo's video timing is
         programmed, then one at each retrace start of MAME's rule (tests/voodoo_timing.py);
         fn 0 for line 0 clears the enable, and none arrives after it; a line no IP maps to
@@ -570,7 +597,7 @@ class LoaderTest(LoaderTestCase):
                                "handlers", "advance 40000000"] + timing
                             + ["advance 300000000", call(0x200, 3, 0), "state",
                                call(0x200, 0, 0), "state", "advance 600000000"])
-        self.assertEqual(out.v0s(), [8, 8, 8, 8, 8])
+        self.assertEqual(out.v0s(), [0, 0, 0xC, 0xC, 0])
         ms = out.all("m")
         self.assertEqual(int(ms[0][0], 16), STATUS | IM6)
         self.assertEqual(int(ms[0][5]), 1)

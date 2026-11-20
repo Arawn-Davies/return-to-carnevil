@@ -558,7 +558,12 @@ The code cites the paragraph of each constant.
 one value: 0x00 at 0x16800000 (7,788 reads), 0x48 at 0x16800004 (38,940), 0x00 at
 0x16800008 (7,788), 0x02 at 0x1680000C (7,788), 0x00 at 0x16800010 (7,788), 0x48 at
 0x16800014 (31,152), 0x00 at 0x16800018 (7,788) and 0x02 at 0x1680001C (7,788). The reads are
-`lbu` (0x800D4FE0 and on) and the writes `sb` (0x800D50C0, read).
+`lbu` (0x800D4FE0 and on). The writes of offset 4 are the `sb` at 0x800D50C0, and those of
+offset 0 the `sw` of 0 at 0x800D5430 (read; measured: every offset-0 write in the M0 hardware
+tap, `mame/hw-tap/hw-tap.txt`, has the next pc 0x800D5434, and the offset-4 writes 0x800D50C4
+and 0x800D528C, the `sb` in the delay slot of a branch-likely to 0x800D528C). Correction,
+2026-11-20: this paragraph first called both writes `sb`, and the gun model refused the `sw`
+when the boot run reached it.
 
 **0x17F00000** (measured, `inputs.txt` and the raw `debug.log` of facts-A2). The game read it
 once with `lb` at 0x800D4BA0 and got 0x0E, then wrote it once with `sb` at 0x800D4BC4 with

@@ -43,8 +43,8 @@ A control transfer in a delay slot, or an instruction outside the reached census
 `recompile(image, analysis, out_dir)` writes the whole image: `funcs.h` (one prototype per
 function), `funcs_000.c` ... (FUNCTIONS_PER_FILE functions each, in address order, each file
 including recomp.h and funcs.h), `func_table.c` (`recomp_lookup`, a binary search over every
-function start, stub slots and interpreted functions included, and `rt_switch_kind`, over
-the host-switch points) and, last, `manifest.toml`.
+function start, stub slots and interpreted functions included, `rt_switch_kind`, over
+the host-switch points, and `recomp_exe_sha256`, the EXE's SHA-256) and, last, `manifest.toml`.
 Everything goes to a working folder this run creates next to out_dir, renamed to out_dir
 when complete, so a folder with a manifest is always a complete output. The only path
 `recompile` ever deletes that it did not create is out_dir itself, and only when it holds a
@@ -53,6 +53,7 @@ output is left as it was.
 """
 import dataclasses
 import os
+import re
 import shutil
 import tempfile
 
@@ -363,6 +364,9 @@ def _sources(image, analysis, trace_pc=False):
     """{file name: text} of every C file, and the Manifest. Raises RecompileError."""
     fns = sorted(analysis.functions, key=lambda f: f.addr)
     sha = analysis.exe_sha256
+    if not re.fullmatch(r"(?:[0-9a-f]{64})?", sha):
+        raise ValueError(f"exe_sha256 {sha!r} is not a SHA-256 (64 lowercase hex digits) or "
+                         "empty")
     texts, unresolved = [], 0
     for fn in fns:
         emitted = _Function(image, analysis, fn, trace_pc)
@@ -393,7 +397,9 @@ def _sources(image, analysis, trace_pc=False):
          "            return table[mid].fn;",
          "    }",
          "    return NULL;",
-         "}", "", *_switch_kind(analysis)]) + "\n"
+         "}", "", *_switch_kind(analysis), "",
+         "/* the SHA-256 of the EXE this code was generated from (manifest.toml's exe_sha256) */",
+         f'const char recomp_exe_sha256[] = "{sha}";']) + "\n"
     stubs = sum(any(lo <= f.addr < hi for lo, hi in analysis.stub_blocks) for f in fns)
     manifest = Manifest(MANIFEST_FORMAT, sha, len(fns),
                         -(-len(fns) // FUNCTIONS_PER_FILE), stubs, len(analysis.interpreted),

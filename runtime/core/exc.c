@@ -14,22 +14,44 @@
 
 /* --- stopping --------------------------------------------------------------------------- */
 
-_Noreturn void rt_stop(int status, const char *fmt, ...)
+static void run_at_stop(void)
 {
-    va_list ap;
-    fflush(stdout);
-    fputs("carnevil: stop: ", stderr);
-    va_start(ap, fmt);
-    vfprintf(stderr, fmt, ap);
-    va_end(ap);
-    fputc('\n', stderr);
-    fflush(stderr);
     if (!machine.stopping) { /* a stop from a stop function does not run them again */
         machine.stopping = 1;
         for (int i = 0; i < machine.n_at_stop; i++)
             machine.at_stop[i]();
     }
+}
+
+_Noreturn void rt_stop(int status, const char *fmt, ...)
+{
+    char message[RT_STOP_MESSAGE_MAX];
+    va_list ap;
+    fflush(stdout);
+    va_start(ap, fmt);
+    vsnprintf(message, sizeof message, fmt, ap);
+    va_end(ap);
+    fprintf(stderr, "carnevil: stop: %s\n", message);
+    fflush(stderr);
+    if (machine.stop_hook && !machine.stopping) {
+        void (*hook)(int, const char *) = machine.stop_hook;
+        machine.stop_hook = NULL; /* a stop inside the hook does not call it again */
+        hook(status, message);
+    }
+    run_at_stop();
     exit(status);
+}
+
+_Noreturn void rt_exit(int status)
+{
+    fflush(stdout);
+    run_at_stop();
+    exit(status);
+}
+
+void rt_set_stop_hook(void (*fn)(int status, const char *message))
+{
+    machine.stop_hook = fn;
 }
 
 void rt_at_stop(void (*fn)(void))

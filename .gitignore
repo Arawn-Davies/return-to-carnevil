@@ -9,9 +9,15 @@ funcs_[0-9]*.c
 func_table.c
 funcs.h
 manifest.toml
+boot_state.h
 /build/
 *.o
 game_stub
+/carnevil
+# the program's run files: the disk overlay, the NVRAM and traces
+*.overlay
+*.nvram
+trace*.txt
 *.chd
 *.raw
 *.EXE

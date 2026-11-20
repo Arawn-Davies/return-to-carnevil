@@ -108,6 +108,10 @@ uint32_t exc_raise(uint8_t *ram, cpu_t *c, int code, uint32_t epc);
  * source (runtime/hw/voodoo_null.c drives it from the card's video timing): raises IP6 if
  * the board's VBLANK enable is set (loader-services.md section 1, slot 0x200). */
 void vblank_raise(void);
+/* irq_set_vblank_hook: fn (or NULL) is called at every vblank_raise that raises IP6, after
+ * raising it: the count of VBLANK interrupts, for the runtime's trace and its --frames limit.
+ * It must not change guest state; machine_reset clears it. */
+void irq_set_vblank_hook(void (*fn)(void));
 
 /* --- stopping (exc.c) ------------------------------------------------------------------- */
 
@@ -115,6 +119,14 @@ void vblank_raise(void);
  * rt_at_stop in the order they were given, and exits with status. */
 _Noreturn void rt_stop(int status, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 void rt_at_stop(void (*fn)(void));
+/* rt_set_stop_hook: fn (or NULL) is called by rt_stop with its status and its message (as
+ * printed, without the prefix, at most RT_STOP_MESSAGE_MAX - 1 bytes), after printing it and
+ * before the at-stop functions; for the runtime's trace. machine_reset clears it.
+ * rt_exit: the end of a run that did not stop: runs the at-stop functions as rt_stop does,
+ * prints nothing, and exits with status. */
+void rt_set_stop_hook(void (*fn)(int status, const char *message));
+_Noreturn void rt_exit(int status);
+#define RT_STOP_MESSAGE_MAX 2048
 #define RT_STOP_STATUS 3 /* every stop of the clock, interrupt and exception code */
 #define RT_AT_STOP_MAX 16
 
@@ -152,6 +164,9 @@ typedef struct machine {
     void (*at_stop[RT_AT_STOP_MAX])(void);
     int n_at_stop;
     int stopping;
+    void (*stop_hook)(int status, const char *message);
+    /* observers (machine_reset clears them) */
+    void (*vblank_hook)(void);
 } machine_t;
 
 extern machine_t machine;

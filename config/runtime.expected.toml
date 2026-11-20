@@ -1,0 +1,12 @@
+# What a run of `carnevil` in attract mode is expected to do outside the runtime's models, each
+# with a reason that holds on the real board (tests/test_boot.py, test_nothing_unexplained):
+#
+#   [[interp]]       addr = the address the interpreter is entered at (a trace "interp" line),
+#                    reason = why that code cannot be recompiled
+#   [[tolerated]]    request = a trace "tolerated" line's text, reason = why answering it as
+#                    the runtime does is what the board does
+#
+# The runtime never answers a request it does not model by guessing (it stops, naming it), so
+# this list is the only exception, and it is empty: the generated code has no interpreted
+# function (manifest.toml, interpreted = 0) and no request is tolerated. An entry is added only
+# with a ruling, never to get past a stop; one the run does not use fails the test.

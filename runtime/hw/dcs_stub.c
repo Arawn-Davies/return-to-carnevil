@@ -21,7 +21,7 @@
 #include <string.h>
 
 #include "hw.h"
-#include "loader.h"
+#include "../loader/loader.h"
 #include "machine.h"
 
 /* --- the measured constants ------------------------------------------------------------- */

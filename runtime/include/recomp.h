@@ -116,6 +116,12 @@ int rt_switch_kind(uint32_t pc);
  * interpreter use it to choose between recompiled code and interp_run. */
 recomp_fn recomp_lookup(uint32_t addr);
 
+/* recomp_exe_sha256: the SHA-256 of the EXE the code was generated from, as 64 lowercase hex
+ * digits (empty for an analysis made without one): manifest.toml's exe_sha256. The generated
+ * func_table.c provides it; the runtime's main (runtime/main/carnevil.c) refuses to run a
+ * GAME.EXE of another hash. */
+extern const char recomp_exe_sha256[];
+
 /* --- provided by runtime/core --------------------------------------------------------- */
 
 /* rt_call: a call to addr (jalr, a jal to an address that is no known function start, the
