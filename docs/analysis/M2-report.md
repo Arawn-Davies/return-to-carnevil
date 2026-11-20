@@ -811,6 +811,33 @@ the whole-branch review" below) removed the items it closed: the three it marked
 (ruling 12's pc, the overlay's commit point, the NVRAM's fsync) and the cheap ones it fixed.
 The rest stay, as triaged.
 
+**Left open by the re-check of the fix wave (2026-11-20).** The re-check
+(`final-fix-rereview.md`, beside the review) found everything in the wave's scope addressed
+but one case of ruling 12's pc, and four small things the wave itself introduced. All go to
+M3's first task:
+
+- An FP divide in a branch's delay slot stores the slot's own address, in both modes, and
+  `exc_raise` never sets Cause bit 31 (BD). The R5000 records the branch's address with BD
+  set. 35 of GAME.EXE's 320 FP divides are in delay slots (0x800CE524, 0x800D401C, 0x80167A10
+  among them), the game enables the divide-by-zero trap, and its catch-all writes Cause and
+  the resume pc into the CMOS crash audit: a divide by zero at one of those sites would put a
+  value the board never writes into the saved NVRAM. Not reached in attract mode; not
+  measured. `tests/test_interp.py` (`slot-one-by-zero`) pins the slot address and has to
+  change with the fix. A `break` in a delay slot has the same missing BD (older than the
+  wave).
+- `carnevil_tools/cli.py` prints `wrote []` in place of the output path after writing the
+  functions file (the name `out` is reused); the file itself is right.
+- A stop inside the stop hook during an at-stop function leaves a flag set, so a later stop
+  skips the trace's stop line (`runtime/core/exc.c`).
+- `--frames`, and a run with no limit, can pass the Voodoo clock's wrap; that ends in a named
+  stop. Only `--seconds` is capped.
+- `test_interrupted_boot` depends on wall-clock time; the reset step of the unseen-commands
+  test asserts nothing after the reset; `runtime/stub/replay.c` has one 120-column line.
+- The sound responder's acceptance of the five later commands relies on the replies being
+  read in order; stopping a SOUNDIN read while a command is unseen would remove that
+  reliance.
+- The sync after every new overlay record costs about 13 s on a first boot on ZFS (the Linux container).
+
 **M3's first clean-up task.** Left by the fix wave on purpose, for the start of M3: the
 review's minor findings M5 (one `le.h` for the duplicated `get32`/`put32`/`hex` helpers and
 one stop wrapper for the four), M6 (the layering between `core`, `hw` and `loader`: devices
