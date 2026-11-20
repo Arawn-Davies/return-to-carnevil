@@ -748,8 +748,8 @@ class BootTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
 
     def test_interrupted_boot(self):
-        """A run without a limit sent SIGTERM after 4 s of wall time (final review I1): exit
-        130; its trace up to the "end interrupted SIGTERM" line is the shared 150 s run's
+        """A run without a limit sent SIGTERM after 10 s of wall time (final review I1; 10 s
+        so that a slow host is past the 25 console lines too): exit 130; its trace up to the "end interrupted SIGTERM" line is the shared 150 s run's
         trace up to there, and the totals follow; its NVRAM is what the game wrote up to the
         signal: the NVRAM of a run ended by --frames at the VBLANK before the signal or the
         one after (the game rewrites a running count in the CMOS about once a second, so the
@@ -759,7 +759,7 @@ class BootTest(unittest.TestCase):
         folder = os.path.join(_game["tmp"], "sigterm")
         os.makedirs(folder)
         res = interrupted(game_program(), files_in(folder, work_path("carnevil.raw")),
-                          signal.SIGTERM, 4.0)
+                          signal.SIGTERM, 10.0)
         self.assertEqual(res.returncode, 130, res.stderr[-2000:])
         with open(os.path.join(folder, "trace.txt"), encoding="latin-1") as f:
             lines = f.read().splitlines()
