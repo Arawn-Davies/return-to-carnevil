@@ -537,6 +537,31 @@ class ClockIrqTest(unittest.TestCase):
         self.assertEqual(out.all("event"), [["1", "2000"], ["4", "2000"], ["2", "2000"],
                                             ["5", "3000"]])
 
+    def test_vclock_advance(self):
+        """vclock_advance(c, ns): the checks used so far are accounted, time moves by exactly
+        ns, the events due inside the interval run once each, in time order, each at its own
+        time (one an event schedules at its time too), a later one waits, and the slice is
+        reloaded for it."""
+        out, _ = self.drive(["checks 5", "event 1 1000", "chain 2 1500", "event 4 5000",
+                             "advanceby 2000", "checks 3", "advance 6000"])
+        self.assertEqual(out.all("now"), [["500"], ["2800"]])
+        self.assertEqual(out.all("event"), [["1", "1000"], ["2", "1500"], ["3", "1500"],
+                                            ["4", "5000"]])
+        self.assertEqual(out.all("advancedby"), [["2500", "25"]])
+
+    def test_vclock_advance_delivers_nothing(self):
+        """An interrupt raised by an event inside vclock_advance is pending afterwards, with
+        the slice at 1, and is delivered by the next check point's tick, not inside."""
+        out, _ = self.drive([f"line 0 {PROBE:08X}", "vblank 1000",
+                             "advanceby 3500", "state", "tick", "state"])
+        keys = [line[0] for line in out.lines]
+        self.assertLess(keys.index("m"), keys.index("probe"), keys)  # none inside the advance
+        self.assertEqual(out.all("advancedby"), [["3500", "1"]])
+        self.assertTrue(int(out.all("m")[0][1], 16) & 0x4000)  # IP6 pending after it
+        probes = out.probes()
+        self.assertEqual(len(probes), 1)
+        self.assertEqual((probes[0]["a0"], probes[0]["now"]), (0x4000, 3600))
+
     # --- stops -----------------------------------------------------------------------------
 
     def test_stop_paths(self):

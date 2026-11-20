@@ -726,8 +726,9 @@ timing), `voodoo_fb.c` (frame buffer, LFB, fastfill, triangles, swap) and `voodo
 Voodoo Graphics. That is MAME 0.276 (tag `mame0276`, BSD-3-Clause), read, not built: the
 files `src/devices/video/voodoo.cpp`, `voodoo.h`, `voodoo_regs.h`, `voodoo_render.cpp`,
 `voodoo_render.h`, `voodoo_pci.cpp`, `voodoo_pci.h` and `poly.h`, plus `src/emu/screen.cpp`,
-`src/mame/midway/seattle.cpp` and `src/lib/util/palette.h`. The runtime's code is written
-fresh. The dither matrices and the alternate register order are reproduced as data, as facts
+`src/mame/midway/seattle.cpp` and `src/lib/util/palette.h`, and for the hold of the
+writer `src/devices/machine/gt64xxx.cpp` (the GT64010's DMA and its PCI stall). The
+runtime's code is written fresh. The dither matrices and the alternate register order are reproduced as data, as facts
 about the card. Each rule below is marked "from MAME's model", "measured", "read" or
 "inferred". Where the two disagree, the capture wins; no disagreement was found.
 
@@ -877,9 +878,48 @@ Every one of its 274,967 reads returns the value MAME returned (`tests/test_vood
   - bits 10 and 11: the displayed buffer;
   - bits 12 to 27: memory FIFO free writes, 0xFFFF when it is off;
   - bits 28 to 30: swaps pending.
-- Where MAME would hold the writer (fbiInit0 bit 4, with the PCI FIFO at its low-water mark
-  or the memory FIFO at its high-water mark) or lose a write (a full FIFO), the model stops.
-  See "Known gaps in the card model".
+- Where MAME would lose a write (a full FIFO), the model stops.
+
+**Holding the writer** (from MAME's model: voodoo.cpp's `stall_cpu` and
+`check_stalled_cpu`, gt64xxx.cpp's `pci_stall`, `master_mem0_w` and `perform_dma`).
+- With fbiInit0 bit 4 set, a queued write that leaves the memory FIFO at its high-water mark
+  (2 × 32 × fbiInit0 bits 14 to 24 entries, two per write) or the PCI FIFO's free entries at
+  twice its low-water mark (fbiInit0 bits 6 to 10) makes the card hold its writer. The write
+  itself is queued.
+- The hold ends when, with the memory FIFO on, it is below its high-water mark, or, with it
+  off, the PCI FIFO has more than its low-water mark free, or when the card is idle. MAME
+  checks at the running command's end and at a swap; the model checks at the earlier of the
+  two.
+- A CPU store returns only when the hold ends: virtual time passes in the store
+  (`vclock_advance`, machine.h) while the card runs its queue. The clock's events run on the
+  way at their own times, so the retrace raises VBLANK during a long hold. The interrupt is
+  delivered at the next check point, after the store.
+- The GT64010's DMA channel is held instead of the CPU: it moves no word while the card holds,
+  polls the card at the next time the hold may end, and goes on from the word it stopped at.
+  The CPU runs meanwhile. Cause bit 4 is raised at the measured completion time (`dma0.txt`,
+  the fit above), or when the last word goes in, if that is later.
+- Measured agreement (the 150 s attract run, `tests/test_boot.py`): the card held the CPU 187
+  times, for 3.38 s of virtual time in all, most of them behind a swap that waits for the
+  retrace. It held the DMA channel 3,273 times, once in each chain of the movie shape (130
+  small records and 256 of 0x640 bytes). No chain finished later than its measured
+  completion: every chain of every shape completed within 5 ns of MAME's times.
+- A DMA enable while a chain is still being delivered or its cause bit 4 is pending stops.
+  MAME's model ignores the enable of an active channel and does not queue it (read,
+  gt64xxx.cpp); the game never makes one.
+
+**The DMA's completion time stays measured** (read and measured). MAME's GT64010 moves up to
+32 words of the current record every 64 PCI clocks (1,939.39 ns at 33 MHz). It fetches the
+next record when one ends and raises the completion at the end of the chain, and it moves
+nothing while the card holds the bus. Without holds, those rules give a chain's time as its
+bursts × 1,939.39 ns. Against `dma0.txt` that is short by 2,662 to 2,669 ns for every
+small-record shape. That is 4.7% of the 28-record chain's 56,966 ns, and 0.24% of the
+576-record chain's. For the movie shape it is short by 489,449 to 489,456 ns, 6.8%: about one
+extra burst per large record, which MAME's holds during the frame-buffer writes would have to
+supply. Neither difference comes within 1%, so the fitted delay above remains the completion
+time. The hold acts only on the card's side: when the words arrive, and a completion that
+would come before the last word. The constant part is inferred to be one burst period plus
+the loader's dispatch from the interrupt to the game's handler, which MAME's times include
+and the runtime does not run.
 
 **Swaps** (from MAME's model).
 - A swapbufferCMD write counts as a pending swap at once.
@@ -938,16 +978,11 @@ fastfillCMD and 7,159 nopCMD.
   as a machine_reset without hw_reset makes it do, the next access stops.
 
 **Known gaps in the card model.**
-- The DMA delivers a chain at one instant. dev_sysctrl.c copies every record at the enable
-  write, where on the board, and in MAME, the card holds the GT64010's DMA (pci_stall) while
-  its FIFO is at the water marks.
-  - A chain written while the card is busy can therefore reach a water mark at once, for
-    example behind a swapbufferCMD that waits for the retrace. The model then stops rather
-    than report a FIFO the card would never show.
-  - What would show it: a stop naming the PCI FIFO low-water mark or the memory FIFO
-    high-water mark at a DMA enable (ioctl 0x7301). In MAME the status reads after such a
-    chain show the FIFOs draining over time; in the captures, values such as 0x0F1217B8 and
-    0x1F1737AA after 11.13 s.
+- A held DMA chain's words go in at once up to the hold and then as the card releases it,
+  not 32 words every 1,939.39 ns as in MAME (see "Holding the writer"). Writes arrive at the
+  card earlier than MAME delivers them, and the completion time is the measured one, not
+  derived. Correction, 2026-11-20: until the hold was modelled, a chain reaching a water mark
+  stopped the run.
   - The 253 reads of 0x0FFFF47F after 11.18 s (swaps by DMA) cannot be replayed, because
     the DMA's data was not captured. For those the model is from MAME's model.
 - MAME's memory FIFO lives in frame-buffer memory. From 6.5678 s that is rows 192 to 511, over

@@ -32,6 +32,8 @@
  *                        on stderr
  *   exit STATUS          rt_exit(STATUS) (decimal)
  *   vbhook               irq_set_vblank_hook of a function that prints "vblank_hook NOW"
+ *   advanceby NS         vclock_advance(c, NS) (decimal), then "advancedby NOW SLICE"
+ *   state                the state
  *   run PC               interp_run from PC, then "ran" and the state
  *   break PC CODE        rt_break, then "returned" and the state
  *   raise CODE EPC       exc_raise, then "resume PC" and the state
@@ -312,6 +314,11 @@ int main(void)
             int status = (int)dec();
             fflush(stdout);
             rt_exit(status);
+        } else if (strcmp(key, "state") == 0) {
+            print_state();
+        } else if (strcmp(key, "advanceby") == 0) {
+            vclock_advance(&cpu, dec());
+            printf("advancedby %" PRIu64 " %" PRId32 "\n", vclock_now(&cpu), cpu.slice);
         } else if (strcmp(key, "vbhook") == 0) {
             irq_set_vblank_hook(vblank_hook);
         } else if (strcmp(key, "run") == 0) {

@@ -8,20 +8,28 @@
  * issues 0x7300. A chain is a list of 16-byte records {byte count, source, destination, next}
  * at physical addresses in RAM, ending with next = 0; the completion is GT64010 cause bit 4.
  *
- * Here the enable write walks the chain at once, copying each record in order through the
- * guest-memory helpers (so a destination in the Voodoo's range reaches bus_write and the
- * sink), and schedules cause bit 4 on the virtual clock after dma0_delay_ns of the chain.
- * Records of whole aligned words are copied as words (mem_r32/mem_w32), the size of every
- * measured record; others byte by byte. Only the measured requests are served: the three
- * control values, the next-record pointer and the enable; a record outside RAM, a chain that
- * loops or runs past CHAIN_MAX records, a start while a chain is pending, 0x7300 and every
- * other offset or value stop.
+ * Here the enable write walks the chain at once, checking every record, and then delivers
+ * it: each record's data is copied, in order, through the guest-memory helpers (so a
+ * destination in the Voodoo's range reaches bus_write and the card), as words
+ * (mem_r32/mem_w32) for records of whole aligned words, the size of every measured record,
+ * otherwise byte by byte. The card can hold the channel (hw.h, voodoo_holding; from MAME's
+ * model: gt64xxx.cpp's perform_dma moves no data while the card asserts pci_stall): before
+ * each word the channel asks, and while held it waits on the virtual clock, polling the card
+ * at the next time the hold may end, and goes on from that word; the CPU runs meanwhile.
+ * Cause bit 4 is raised dma0_delay_ns of the chain after the enable write, the measured
+ * completion time, or at once when the last word goes in later than that (a held chain).
+ * Only the measured requests are served: the three control values, the next-record pointer
+ * and the enable; a record outside RAM, a chain that loops or runs past CHAIN_MAX records, a
+ * start while a chain is still being delivered or its cause bit 4 is pending (MAME's model
+ * ignores an enable of an active channel; the game never makes one), 0x7300 and every other
+ * offset or value stop.
  *
  * open, close: the shared return-0 routine (the sysctrl init flag is set at the hand-off,
  * section 2); read and write are not documented (NULL: they stop).
  */
 #include <string.h>
 
+#include "../hw/hw.h"
 #include "loader.h"
 #include "machine.h"
 
@@ -44,18 +52,43 @@ static struct {
     uint32_t next;    /* 0x830: the next record pointer */
     uint32_t ctrl;    /* 0x840 as last written */
     int pending;      /* a chain started whose cause bit 4 has not been raised yet */
+    /* the chain being delivered: its records (count, source, destination as kseg1
+     * addresses), the next to copy and the byte offset in it, when bit 4 is due */
+    uint8_t *ram;
+    cpu_t *c;
+    uint32_t n, at, off, n_other;
+    uint64_t due, start, lfb_bytes;
+    uint64_t last;    /* when the delivery last went on: the start, or the poll that did */
+    uint64_t raise;   /* when cause bit 4 is due: the later of due and the last word */
 } gt;
+
+static void (*dma_hook)(uint32_t records, uint32_t n_other, uint64_t lfb_bytes,
+                        uint64_t delay_ns);
+
+void loader_set_dma_hook(void (*fn)(uint32_t records, uint32_t n_other, uint64_t lfb_bytes,
+                                    uint64_t delay_ns))
+{
+    dma_hook = fn;
+}
+
+static struct {
+    uint32_t count, src, dst;
+} chain[CHAIN_MAX];
 
 /* one bit per word of RAM: the records of the chain being walked, to see a loop */
 static uint8_t visited[RAM_SIZE / 4 / 8];
 
 static void dma0_done(void *arg);
+static void dma0_resume(void *arg);
 
 void ld_sysctrl_reset(void)
 {
     vclock_cancel(dma0_done, NULL);
-    gt.next_set = 0, gt.next = 0, gt.ctrl = 0, gt.pending = 0;
+    vclock_cancel(dma0_resume, NULL);
+    memset(&gt, 0, sizeof gt);
     memset(visited, 0, sizeof visited);
+    voodoo_dma_writer(0);
+    dma_hook = NULL;
 }
 
 /* dma0_delay_ns: fitted to dma0.txt (open question 8, measured): the time from the enable
@@ -78,6 +111,8 @@ static void dma0_done(void *arg)
     (void)arg;
     gt.pending = 0;
     gt_cause_raise(DMA0_CAUSE_BIT);
+    if (dma_hook)
+        dma_hook(gt.n, gt.n_other, gt.lfb_bytes, gt.raise - gt.start);
 }
 
 /* A physical address as a kseg1 address for the guest-memory helpers; RAM and the devices
@@ -95,7 +130,54 @@ static uint32_t ram_word(uint32_t phys)
     return mem_r32(ld.ram, ld.c, 0xA0000000u | phys);
 }
 
-/* The enable write: walk and copy the chain from gt.next, then schedule the completion. */
+/* Copies the chain from where it stopped until it ends or the card holds the channel; at the
+ * end, cause bit 4 at its due time (or now, if that has passed). */
+static void dma0_deliver(void)
+{
+    uint64_t now;
+    voodoo_dma_writer(1);
+    while (gt.at < gt.n) {
+        uint32_t count = chain[gt.at].count, s = chain[gt.at].src, d = chain[gt.at].dst;
+        int words = ((count | s | d) & 3u) == 0;
+        while (gt.off < count) {
+            if (voodoo_holding()) {
+                voodoo_dma_writer(0);
+                gt.last = voodoo_hold_check_ns();
+                vclock_at(gt.last, dma0_resume, NULL);
+                return;
+            }
+            if (words) {
+                mem_w32(gt.ram, gt.c, d + gt.off, mem_r32(gt.ram, gt.c, s + gt.off));
+                gt.off += 4;
+            } else {
+                mem_w8(gt.ram, gt.c, d + gt.off, mem_r8(gt.ram, gt.c, s + gt.off));
+                gt.off++;
+            }
+        }
+        gt.at++;
+        gt.off = 0;
+    }
+    voodoo_dma_writer(0);
+    now = vclock_now(gt.c);
+    gt.raise = gt.due > gt.last ? gt.due : gt.last;
+    if (gt.due > now)
+        vclock_at(gt.due, dma0_done, NULL);
+    else
+        dma0_done(NULL);
+}
+
+/* A held chain's poll: the card brought up to now; still held, the next poll; else on. */
+static void dma0_resume(void *arg)
+{
+    (void)arg;
+    voodoo_poll(gt.c);
+    if (voodoo_holding())
+        vclock_at(gt.last = voodoo_hold_check_ns(), dma0_resume, NULL);
+    else
+        dma0_deliver();
+}
+
+/* The enable write: walk and check the chain from gt.next, then deliver it. */
 static void dma0_start(void)
 {
     uint32_t rec = gt.next, n = 0, n_other = 0, walked[CHAIN_MAX];
@@ -123,13 +205,9 @@ static void dma0_start(void)
         if (count == 0 || count > 0xFFFFu)
             ld_stop("DMA channel 0: record 0x%08X has byte count 0x%X (the measured records "
                     "have 4 to 0x640)", (unsigned)rec, (unsigned)count);
-        uint32_t s = guest(src, "source", rec), d = guest(dst, "destination", rec);
-        if (((count | src | dst) & 3u) == 0)
-            for (uint32_t i = 0; i < count; i += 4)
-                mem_w32(ld.ram, ld.c, d + i, mem_r32(ld.ram, ld.c, s + i));
-        else
-            for (uint32_t i = 0; i < count; i++)
-                mem_w8(ld.ram, ld.c, d + i, mem_r8(ld.ram, ld.c, s + i));
+        chain[n - 1].count = count;
+        chain[n - 1].src = guest(src, "source", rec);
+        chain[n - 1].dst = guest(dst, "destination", rec);
         if (dst >= LFB_FIRST && dst < LFB_END)
             lfb_bytes += count;
         else
@@ -140,8 +218,14 @@ static void dma0_start(void)
         visited[walked[i] / 32] = 0;
     gt.next = 0; /* the channel has followed the chain to its end (inferred) */
     gt.pending = 1;
-    vclock_at(vclock_now(ld.c) + dma0_delay_ns(n_other, lfb_bytes), dma0_done, NULL);
-    vclock_reload(ld.c); /* so the event is seen in time (machine.h, irq_raise) */
+    gt.ram = ld.ram, gt.c = ld.c;
+    gt.n = n, gt.at = 0, gt.off = 0;
+    gt.start = vclock_now(ld.c);
+    gt.n_other = n_other, gt.lfb_bytes = lfb_bytes;
+    gt.due = gt.start + dma0_delay_ns(n_other, lfb_bytes);
+    gt.last = gt.start;
+    dma0_deliver();
+    vclock_reload(ld.c); /* so the events are seen in time (machine.h, irq_raise) */
 }
 
 /* ioctl: section 3, `pci:` */

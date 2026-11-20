@@ -35,6 +35,13 @@
 uint64_t vclock_now(cpu_t *c);
 void vclock_at(uint64_t t_ns, void (*fn)(void *), void *arg);
 void vclock_cancel(void (*fn)(void *), void *arg);
+/* vclock_advance: time passing with no check point, for a device that holds the CPU (the
+ * Voodoo holding a store at its FIFO's water marks): accounts the checks used so far, moves
+ * the time forward by exactly ns, running every event that falls due on the way in time order
+ * at its own time (events those schedule inside the interval too), then reloads the slice.
+ * It delivers nothing: an interrupt raised on the way is pending, and the next check point
+ * delivers it, as a CPU released from a hold takes it. Not from inside a clock event. */
+void vclock_advance(cpu_t *c, uint64_t ns);
 
 /* --- interrupts (irq.c) ----------------------------------------------------------------- */
 
@@ -148,6 +155,7 @@ typedef struct machine {
     int n_events;
     uint64_t event_seq;
     int vblank_enable;      /* interrupt enable 0x17300000 bit 7: VBLANK reaches IP6 */
+    int advancing;          /* inside vclock_advance's events */
     /* CP0 and the board's interrupt state */
     uint32_t status;
     uint32_t cause_ip;      /* the pending IP bits, as Cause holds them (bits 8 to 15) */

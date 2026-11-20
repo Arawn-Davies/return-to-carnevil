@@ -69,6 +69,27 @@ void vclock_cancel(void (*fn)(void *), void *arg)
     machine.n_events = j;
 }
 
+/* vclock_advance (machine.h): the clock steps to each due event's time and runs it, so an
+ * event sees its own time and one it schedules inside the interval runs too. Nothing here
+ * delivers: only rt_tick does, at a check point. */
+void vclock_advance(cpu_t *c, uint64_t ns)
+{
+    uint64_t end;
+    if (machine.advancing)
+        rt_stop(RT_STOP_STATUS, "vclock_advance called from inside a clock event");
+    vclock_account(c);
+    end = machine.now + ns;
+    machine.advancing = 1;
+    while (machine.n_events > 0 && machine.events[0].t <= end) {
+        if (machine.events[0].t > machine.now)
+            machine.now = machine.events[0].t;
+        vclock_run_due();
+    }
+    machine.advancing = 0;
+    machine.now = end;
+    vclock_reload(c);
+}
+
 void vclock_run_due(void)
 {
     while (machine.n_events > 0 && machine.events[0].t <= machine.now) {

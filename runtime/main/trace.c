@@ -8,10 +8,16 @@
  *   T open MODE FD NAME          an open (slot 0x088): a1 as the game passed it, v0, the name
  *                                as it was in RAM before the call (escaped the same way)
  *   T loader N SLOT IRQ A0 A1 A2 A3 SP V0
- *                                a loader call, written when it returns: N its number in call
- *                                order (decimal, from 1), IRQ 1 when made inside an
- *                                exception (Status EXL), a0 to a3 and sp at the call, v0 at
- *                                the return; a call that stops is not written (the stop is)
+ *                                one of the first LOADER_LINES loader calls, written when it
+ *                                returns: N its number in call order (decimal, from 1), IRQ 1
+ *                                when made inside an exception (Status EXL), a0 to a3 and sp
+ *                                at the call, v0 at the return; a call that stops is not
+ *                                written (the stop is); the later calls only in the totals
+ *   T dma RECORDS N_OTHER LFB DELAY
+ *                                a DMA channel 0 chain's cause bit 4 (loader.h,
+ *                                loader_set_dma_hook), decimal
+ *   T spin N                     the spin count of a scheduler wait (below), when it differs
+ *                                from the one before
  *   T switch KIND RECORD FN      a host switch (resume, yield or exit): the current task word
  *                                0x801A3118 and the function at its record + 0x24
  *   T task create|exit RECORD FN a change of the game's task list (below)
@@ -25,9 +31,14 @@
  *   T count spin_max N           the largest VBLANK-wait spin count (below)
  *   T count tasks_max N          the most tasks on the game's list at once
  *   T count loader_calls N
+ *   T count slot SLOT N          loader calls per slot
+ *   T count ioctl CMD N          ioctl (slot 0x0C8) calls per command (a1)
  *   T count voodoo_reg REG N     writes per Voodoo register number by the standard map
  *   T count voodoo_alt REG N     ... through the alternate map (both only where N > 0)
  *   T count voodoo_tex N         texture memory writes
+ *   T count hold_cpu N, hold_cpu_ns N, hold_dma N
+ *                                the card's holds of the CPU (and the time they took) and of
+ *                                the DMA channel (hw.h, voodoo_hold_counts)
  *   T count dropped I N WHY      draws dropped for reason I (hw.h, DROP_*), every reason
  *   T count sndfifo N            sound FIFO writes
  *   T count dcs_data N           words the sound board took as block data
@@ -67,13 +78,17 @@
 #define TASKS_SEEN 64
 #define CALL_DEPTH 64
 #define NAME_MAX_BYTES 64
+#define LOADER_LINES 2000u /* the comparisons with MAME need the first 400 */
+#define SLOTS 0x240u
+#define IOCTL_CMDS 0x10000u
 
 static FILE *out;
 static uint8_t *g_ram;
 static cpu_t *g_cpu;
 static uint64_t frame_limit;
 
-static uint64_t vblanks, spin_max, loader_calls;
+static uint64_t vblanks, spin_max, spin_last, loader_calls;
+static uint64_t per_slot[SLOTS / 8], per_ioctl[IOCTL_CMDS], other_ioctls;
 static int tasks_max;
 
 /* --- helpers ------------------------------------------------------------------------------ */
@@ -136,6 +151,14 @@ static void on_call(cpu_t *c, uint32_t slot, int after)
     struct call *k;
     if (!after) {
         loader_calls++;
+        if (slot < SLOTS)
+            per_slot[slot / 8]++;
+        if (slot == 0x0C8) {
+            if (c->r[5] < IOCTL_CMDS)
+                per_ioctl[c->r[5]]++;
+            else
+                other_ioctls++;
+        }
         if (depth < CALL_DEPTH) {
             k = &calls[depth];
             *k = (struct call){.n = loader_calls, .slot = slot,
@@ -156,10 +179,12 @@ static void on_call(cpu_t *c, uint32_t slot, int after)
     if (!out || depth >= CALL_DEPTH)
         return; /* deeper than kept: not written (the game nests at most twice) */
     k = &calls[depth];
-    line_head("loader");
-    fprintf(out, " %" PRIu64 " 0x%03" PRIX32 " %" PRIu32 " 0x%08" PRIX32 " 0x%08" PRIX32
-            " 0x%08" PRIX32 " 0x%08" PRIX32 " 0x%08" PRIX32 " 0x%08" PRIX32 "\n", k->n, k->slot,
-            k->irq, k->a[0], k->a[1], k->a[2], k->a[3], k->sp, c->r[2]);
+    if (k->n <= LOADER_LINES) {
+        line_head("loader");
+        fprintf(out, " %" PRIu64 " 0x%03" PRIX32 " %" PRIu32 " 0x%08" PRIX32 " 0x%08" PRIX32
+                " 0x%08" PRIX32 " 0x%08" PRIX32 " 0x%08" PRIX32 " 0x%08" PRIX32 "\n", k->n,
+                k->slot, k->irq, k->a[0], k->a[1], k->a[2], k->a[3], k->sp, c->r[2]);
+    }
     if (slot == 0x088) {
         line_head("open");
         fprintf(out, " 0x%08" PRIX32 " 0x%08" PRIX32 " ", k->a[1], c->r[2]);
@@ -239,8 +264,15 @@ static void on_switch(uint8_t *ram, cpu_t *c, int kind)
     uint32_t record = 0, fn = 0, spin;
     (void)ram, (void)c;
     scan_tasks();
-    if (kind == RT_SWITCH_RESUME && ram_word(SPIN_COUNT, &spin) && spin > spin_max)
-        spin_max = spin;
+    if (kind == RT_SWITCH_RESUME && ram_word(SPIN_COUNT, &spin)) {
+        if (spin > spin_max)
+            spin_max = spin;
+        if (spin != spin_last && out) {
+            line_head("spin");
+            fprintf(out, " %" PRIu32 "\n", spin);
+        }
+        spin_last = spin;
+    }
     if (!out)
         return;
     if (ram_word(TASK_CURRENT, &record))
@@ -273,6 +305,15 @@ static void on_stop(int status, const char *message)
     }
     line_head("stop");
     fprintf(out, " %d %s\n", status, message);
+}
+
+static void on_dma(uint32_t records, uint32_t n_other, uint64_t lfb_bytes, uint64_t delay)
+{
+    if (!out)
+        return;
+    line_head("dma");
+    fprintf(out, " %" PRIu32 " %" PRIu32 " %" PRIu64 " %" PRIu64 "\n", records, n_other,
+            lfb_bytes, delay);
 }
 
 static void on_vblank(void)
@@ -317,6 +358,20 @@ void trace_close(void)
     fprintf(out, " tasks_max %d\n", tasks_max);
     line_head("count");
     fprintf(out, " loader_calls %" PRIu64 "\n", loader_calls);
+    for (uint32_t i = 0; i < SLOTS / 8; i++)
+        if (per_slot[i]) {
+            line_head("count");
+            fprintf(out, " slot 0x%03" PRIX32 " %" PRIu64 "\n", i * 8, per_slot[i]);
+        }
+    for (uint32_t i = 0; i < IOCTL_CMDS; i++)
+        if (per_ioctl[i]) {
+            line_head("count");
+            fprintf(out, " ioctl 0x%04" PRIX32 " %" PRIu64 "\n", i, per_ioctl[i]);
+        }
+    if (other_ioctls) {
+        line_head("count");
+        fprintf(out, " ioctl_other %" PRIu64 "\n", other_ioctls);
+    }
     for (uint32_t r = 0; r < NREGS_VOODOO; r++) {
         if (voodoo_reg_writes(r)) {
             line_head("count");
@@ -329,6 +384,16 @@ void trace_close(void)
     }
     line_head("count");
     fprintf(out, " voodoo_tex %" PRIu64 "\n", voodoo_tex_writes());
+    {
+        uint64_t cpu, cpu_ns, dma;
+        voodoo_hold_counts(&cpu, &cpu_ns, &dma);
+        line_head("count");
+        fprintf(out, " hold_cpu %" PRIu64 "\n", cpu);
+        line_head("count");
+        fprintf(out, " hold_cpu_ns %" PRIu64 "\n", cpu_ns);
+        line_head("count");
+        fprintf(out, " hold_dma %" PRIu64 "\n", dma);
+    }
     for (int i = 0; i < DROP_COUNT; i++) {
         line_head("count");
         fprintf(out, " dropped %d %" PRIu32 " %s\n", i, vfb_dropped(i), vfb_drop_name(i));
@@ -364,6 +429,7 @@ void trace_attach(uint8_t *ram, cpu_t *c, uint64_t frames, int quiet)
     end_quiet = quiet;
     loader_set_console_hook(on_console);
     loader_set_call_hook(on_call);
+    loader_set_dma_hook(on_dma);
     tasks_set_switch_hook(on_switch);
     rt_log_unrecompiled = on_interp;
     rt_set_stop_hook(on_stop);

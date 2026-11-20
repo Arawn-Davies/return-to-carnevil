@@ -18,6 +18,7 @@ Two groups of tests:
 The trace has one line per event, "TIME KIND FIELDS...", TIME the virtual time in ns since
 GAME.EXE's entry (carnevil.c's top comment lists the kinds).
 """
+import collections
 import dataclasses
 import os
 import shutil
@@ -78,7 +79,7 @@ class Trace:
     def __init__(self, path):
         self.console, self.opens, self.loader, self.switches, self.tasks = [], [], [], [], []
         self.interp, self.tolerated, self.stops, self.alive = [], [], [], []
-        self.pending = []
+        self.pending, self.dma, self.spins = [], [], []
         self.counts, self.end = {}, None
         with open(path, encoding="latin-1") as f:
             for line in f:
@@ -119,10 +120,14 @@ class Trace:
             self.alive.append((int(record, 16), int(fn, 16)))
         elif kind == "count":
             f = rest.split()
-            if f[0] in ("voodoo_reg", "voodoo_alt", "dropped"):  # NAME KEY N [WHY]
+            if f[0] in ("voodoo_reg", "voodoo_alt", "dropped", "slot", "ioctl"):  # NAME KEY N
                 self.counts[(f[0], int(f[1], 0))] = int(f[2])
             else:
                 self.counts[f[0]] = int(f[1])
+        elif kind == "dma":
+            self.dma.append(tuple(int(x) for x in rest.split()))
+        elif kind == "spin":
+            self.spins.append(int(rest))
         elif kind == "end":
             self.end = rest
         else:
@@ -506,6 +511,46 @@ class BootTest(unittest.TestCase):
             self.assertEqual(r.stderr, untraced.stderr)
         self.assertRegex(untraced.stderr, r"carnevil: ran [0-9]+ ns of guest time; RAM "
                                           r"SHA-256 [0-9a-f]{64}\n$")
+
+    def test_dma_completion_matches_mame(self):
+        """Every DMA channel 0 chain of the run completes (cause bit 4 due, from the enable
+        write) within 5 ns of every completion MAME measured for its shape (records not
+        writing the frame buffer, bytes of those that do: dma0.txt), held chains included:
+        the card's hold of the channel never pushes a chain past the measured time."""
+        mame, cur = collections.defaultdict(set), None
+        for row in facts("dma0.txt"):
+            f = row.split()
+            if f[1] == "chain":
+                cur = [0, 0]
+            elif f[1] == "rec":
+                count, dest = int(f[3], 16), int(f[5], 16)
+                if 0x08400000 <= dest < 0x08800000:
+                    cur[1] += count
+                else:
+                    cur[0] += 1
+            elif f[1] == "b4" and f[2] != "-":
+                mame[tuple(cur)].add(int(f[2]))
+        port = collections.defaultdict(set)
+        for _records, n_other, lfb, delay in self.trace().dma:
+            port[(n_other, lfb)].add(delay)
+        self.assertTrue(port)
+        self.assertLessEqual(set(port), set(mame), "chain shapes MAME did not measure")
+        for shape, delays in sorted(port.items()):
+            worst = max(abs(d - m) for d in delays for m in mame[shape])
+            with self.subTest(shape=shape):
+                self.assertLessEqual(worst, 5, (sorted(delays), sorted(mame[shape])))
+
+    def test_frames(self):
+        """--frames 100 ends the run at the 100th VBLANK interrupt with status 0."""
+        game_program()
+        frames_dir = os.path.join(_game["tmp"], "frames100")
+        os.makedirs(frames_dir)
+        res = run(game_program(), files_in(frames_dir, work_path("carnevil.raw"))
+                  + ["--frames", "100"], SHORT_TIMEOUT)
+        self.assertEqual(res.returncode, 0, res.stderr[-2000:])
+        trace = Trace(os.path.join(frames_dir, "trace.txt"))
+        self.assertEqual(trace.end, "frames 100")
+        self.assertEqual(trace.counts["vblank"], 100)
 
     def test_spin_counter_sane(self):
         spin = self.trace().counts["spin_max"]

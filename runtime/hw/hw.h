@@ -47,6 +47,22 @@ _Noreturn void hw_stop(cpu_t *c, uint32_t phys, int size, int write, uint32_t va
 uint32_t voodoo_read(cpu_t *c, uint32_t off, int size);
 void voodoo_write(cpu_t *c, uint32_t off, int size, uint32_t value);
 
+/* The card holding its writer (hardware-usage.md, "The Voodoo model", "Holding the writer";
+ * from MAME's model): a queued write that takes the memory FIFO to its high-water mark, or
+ * the PCI FIFO to its low-water mark, with fbiInit0 bit 4 set, holds the writer until the card
+ * has drained below the mark (or is idle). A CPU store returns only then: virtual time passes
+ * (vclock_advance) while the card runs its queue. The GT64010's DMA (runtime/loader's
+ * dev_sysctrl.c) marks its writes with voodoo_dma_writer(1) and is held instead: it asks
+ * voodoo_holding after each word, and while held polls the card (voodoo_poll, which brings it
+ * up to the virtual time now) at voodoo_hold_check_ns, the next time the hold may end. */
+void voodoo_dma_writer(int on);
+int voodoo_holding(void);
+uint64_t voodoo_hold_check_ns(void);
+void voodoo_poll(cpu_t *c);
+/* voodoo_hold_counts: holds of the CPU, the virtual time they took (ns), holds of the DMA,
+ * since hw_reset; for the report. */
+void voodoo_hold_counts(uint64_t *cpu, uint64_t *cpu_ns, uint64_t *dma);
+
 /* Writes per register number (offset & 0x3FC, / 4) by the standard map, and through the
  * alternate map (address bit 21, counted by the raw number before it is renumbered);
  * texture memory writes. For the later report. */

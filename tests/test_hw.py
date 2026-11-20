@@ -272,6 +272,93 @@ def dac_cmds(seq):
     return [rd(4, VOODOO + FBIINIT2) if w is None else wr(4, VOODOO + DACDATA, w) for w in seq]
 
 
+# The game's FIFO configuration (measured, voodoo-ramp.txt, from 6.5678 s): PCI initEnable
+# bits 0 and 1, fbiInit4 0x07FCC05F (memory FIFO rows 192 to 511), fbiInit0 0x6C403B51 (stall
+# enabled, PCI FIFO low-water mark 13, LFB and texture writes through the memory FIFO, which is
+# on, high-water mark 256: 8,192 entries).
+FIFO_SETUP = cfg_write(0x40, 3) + [wr(4, VOODOO + 0x200, 0x07FCC05F),
+                                   wr(4, VOODOO + 0x210, 0x6C403B51)]
+# a 100 x 100 fastfill (5,000 clocks at two pixels a clock, 100 us at 50 MHz), as in
+# test_voodoo_status
+FILL = [wr(4, VOODOO + 0x110, 0x200), wr(4, VOODOO + 0x118, 100), wr(4, VOODOO + 0x11C, 100),
+        wr(4, VOODOO + 0x148, 0)]
+TEX_WORDS = 9000
+
+
+def tex_writes(n, first=0):
+    return [wr(4, 0xA8800000 + 4 * i, i) for i in range(first, first + n)]
+
+
+class HoldTest(HwTestCase):
+    """The card holding the writer at its FIFO's water marks (hardware-usage.md, "The Voodoo
+    model", from MAME's model: voodoo.cpp's stall_cpu and check_stalled_cpu, gt64xxx.cpp's
+    pci_stall)."""
+
+    def test_cpu_store_held_until_the_card_drains(self):
+        """Texture writes behind a fastfill queue in the memory FIFO; the write that takes it
+        to the high-water mark holds the CPU: the virtual clock jumps to the fastfill's end,
+        when the card has drained the queue, and every write reaches the card."""
+        out, _ = self.drive(FIFO_SETUP + FILL + ["at 100000", wr(4, VOODOO + 0x124, 0),
+                                                 "checks 0"] + tex_writes(8000)
+                            + ["checks 0"] + tex_writes(TEX_WORDS - 8000, 8000)
+                            + ["checks 0", rd(4, VOODOO), "counts 0"])
+        nows = [int(n[0]) for n in out.all("now")]
+        self.assertEqual(nows[:2], [100000, 100000])  # below the mark: no hold
+        self.assertEqual(nows[2], 200000)              # the fastfill's end
+        self.assertEqual(self.rds(out), [STATUS_IDLE])
+        self.assertEqual(out.all("counts")[0][2], str(TEX_WORDS))
+
+    def test_hold_lets_the_retrace_interrupt_wait(self):
+        """Behind a swapbufferCMD that waits for the retrace, the hold lasts until the
+        retrace start swaps; the VBLANK interrupt raised then is delivered after the store,
+        at the next check point, not inside it."""
+        first, _, _ = vt.retrace_after(1000 * 1000 + vt.ENTRY_PS)
+        on = vt.to_ns(first)
+        out, _ = self.drive(["at 1000"] + vt.timing_writes(wr) + [call(0x200, 0, PROBE)]
+                            + FIFO_SETUP + [wr(4, VOODOO + 0x128, 1), "at 2000", "checks 0"]
+                            + tex_writes(TEX_WORDS) + ["checks 0", f"advance {on + 1000}"])
+        keys = [line.split()[0] for line in out.text.splitlines()]
+        nows = [int(n[0]) for n in out.all("now")]
+        self.assertEqual(nows[0], 2000)
+        self.assertGreaterEqual(nows[1], on)
+        self.assertLess(nows[1], on + 1000)
+        # (advance runs whole slices, so it also reaches the next retrace, a frame later)
+        probes = out.all("probe")
+        self.assertGreater(keys.index("probe"), keys.index("now") + 1, out.text)
+        self.assertTrue(nows[1] <= int(probes[0][3]) < on + 1000, (nows, probes))
+        self.assertGreater(int(probes[1][3]), on + 18_000_000)
+
+    def test_dma_chain_held_in_pieces(self):
+        """A DMA chain of 3 x 4,096 texture words against a card held behind a vsync swap: the
+        channel, not the CPU, is held (the ioctl returns at once, the clock unchanged): the
+        words up to the high-water mark go in at once, the rest when the retrace start swaps
+        and the card drains, and cause bit 4 is raised after the last word, past the fitted
+        delay of the chain."""
+        first, _, _ = vt.retrace_after(1000 * 1000 + vt.ENTRY_PS)
+        on = vt.to_ns(first)
+        recs = []
+        for i in range(3):
+            nxt = (CHAIN + 0x10 * (i + 1)) & 0x1FFFFFFF if i < 2 else 0
+            recs += mem(CHAIN + 0x10 * i, 0x4000, 0x00300000, 0x08800000 + 0x4000 * i, nxt)
+        out, _ = self.drive(["at 1000"] + vt.timing_writes(wr) + FIFO_SETUP + recs
+                            + open_("pci:", 2) + [call(0x1E0, 4, PROBE),
+                                                  wr(4, VOODOO + 0x128, 1), "at 2000",
+                                                  "dmahook"]
+                            + start_chain(CHAIN & 0x1FFFFFFF)
+                            + ["checks 0", "counts 0", f"advance {on + 1000}", "counts 0"])
+        nows = [int(n[0]) for n in out.all("now")]
+        self.assertEqual(nows[0], 2000)
+        tex = [int(c[2]) for c in out.all("counts")]
+        self.assertTrue(8192 <= tex[0] < 3 * 4096, tex)
+        self.assertEqual(tex[1], 3 * 4096)
+        probes = out.all("probe")
+        self.assertEqual(len(probes), 1, out.text)
+        self.assertTrue(on <= int(probes[0][3]) < on + 1000, (on, probes))
+        [dma] = out.all("dma")
+        self.assertEqual(dma[:3], ["3", "3", "0"])
+        self.assertEqual(int(dma[3]), on - 2000)  # the last word at the retrace, past the fit
+
+
 class DacTest(HwTestCase):
     def test_dac_readback(self):
         """dacData stores its byte in the DAC register of bits 8 to 10 without the read flag
@@ -306,7 +393,7 @@ class DmaTest(HwTestCase):
         handler runs once after dma0_delay_ns of the chain, with a0 = 1."""
         recs = mem(CHAIN, 4, 0x002375D0, 0x0800010C, 0x002375E0, 0x12345678) + \
             mem(CHAIN + 0x20, 4, 0x002375F0, 0x001B31B8, 0, 0xCAFEF00D)
-        out, _ = self.drive(recs + open_("pci:", 2) + [call(0x1E0, 4, PROBE)]
+        out, _ = self.drive(recs + open_("pci:", 2) + ["dmahook", call(0x1E0, 4, PROBE)]
                             + start_chain(0x002375C0)
                             + [rd(4, VOODOO + 0x10C), "dump 801B31B8 1", "state",
                                "delay 2 0", "advance 1000000", "advance 3000000", "state"])
@@ -314,6 +401,8 @@ class DmaTest(HwTestCase):
         self.assertEqual(out.dumps(), [[0xCAFEF00D]])
         [delay] = [int(d[0]) for d in out.all("delay")]
         self.assertTrue(6000 < delay < 7000, delay)
+        # the chain hook: 2 records, neither to the frame buffer, completed at the fit
+        self.assertEqual(out.all("dma"), [["2", "2", "0", str(delay)]])
         probes = out.all("probe")
         self.assertEqual(len(probes), 1, out.text)
         a0, _, _, now = probes[0]

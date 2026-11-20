@@ -171,6 +171,15 @@ int ld_open(uint32_t name, uint32_t mode);
 #define LD_PART_TABLE 0x800B7160u
 #define LD_DISK_CALLBACK_RA 0x800124D4u
 
+/* loader_set_dma_hook: fn (or NULL) is called as each DMA channel 0 chain raises cause bit 4,
+ * with its record count, the records not writing the frame buffer, the bytes of those that
+ * do, and the time from its enable write to the bit's due time (ns: the measured completion
+ * time, or the card's release that let the last word in, if later); for the runtime's
+ * trace. loader_reset clears
+ * it. */
+void loader_set_dma_hook(void (*fn)(uint32_t records, uint32_t n_other, uint64_t lfb_bytes,
+                                    uint64_t delay_ns));
+
 /* dma0_delay_ns: the time from the start of a GT64010 DMA channel 0 chain to its completion
  * interrupt (dev_sysctrl.c gives the model and its fit), for a chain of n_other records that
  * do not write the frame buffer and lfb_bytes bytes of records that do. */

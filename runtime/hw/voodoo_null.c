@@ -28,7 +28,8 @@
  * (and the memory FIFO behind it) and run when the card is free, in order. The card is
  * brought up to date lazily, at each access, by running what has come due in time order:
  * queued writes and retrace starts (where a pending swap happens). The retrace also raises
- * the board's VBLANK interrupt (irq.c, vblank_raise) through a clock event.
+ * the board's VBLANK interrupt (irq.c, vblank_raise) through a clock event. At the FIFOs'
+ * water marks the card holds its writer (hw.h, "Holding the writer" in hardware-usage.md).
  */
 #include <string.h>
 
@@ -172,6 +173,10 @@ static struct {
     int armed;
     uint64_t retrace_next, retrace_len, irq_next;
     uint64_t last_ps;          /* the latest card time an access brought */
+    /* the hold (MAME's stall_cpu, STALLED_UNTIL_FIFO_LWM) */
+    int stalled;               /* the card is holding its writer */
+    int dma_writer;            /* the writes now come from the GT64010's DMA, not the CPU */
+    uint64_t holds_cpu, hold_cpu_ns, holds_dma; /* for the report */
 } v;
 
 uint32_t voodoo_reg(uint32_t n)
@@ -362,11 +367,56 @@ static void mem_fifo_configure(void)
     v.n_mem = 0;
 }
 
-/* A write the busy card queues (add_to_fifo), with the stops for what MAME would do and the
- * model does not: hold the writer (stall) or lose the write (full). */
+static void card_advance(cpu_t *c, uint64_t now);
+
+/* check_stalled_cpu: the hold ends when the memory FIFO (if it is on) is below its high-water
+ * mark, or else the PCI FIFO has more than its low-water mark free, or the card is idle */
+static void check_release(void)
+{
+    uint32_t i0 = v.reg[REG_FBIINIT0];
+    if (!v.stalled)
+        return;
+    if (!v.op_end)
+        v.stalled = 0;
+    else if (i0 & 0x2000u)
+        v.stalled = 2 * v.n_mem >= 2 * 32 * ((i0 >> 14) & 0x7FFu);
+    else
+        v.stalled = pci_space() <= 2 * ((i0 >> 6) & 0x1Fu);
+}
+
+/* The next card time the hold may end: the running command's end (MAME's stall resume
+ * timer), or the retrace start that does a waiting swap (swap_buffers checks the stall too),
+ * whichever is first. */
+static uint64_t hold_check_ps(void)
+{
+    uint64_t t = v.op_end;
+    if (v.swap_waiting && v.armed && (!t || v.retrace_next < t))
+        t = v.retrace_next;
+    return t;
+}
+
+/* The CPU held by its store (MAME: gt64xxx's pci_stall spins the CPU until the card
+ * releases it): virtual time passes, with the clock's events on the way, until the card has
+ * drained to the point of release. The store itself is already queued. */
+static void hold(cpu_t *c, uint32_t phys, int size, uint32_t value)
+{
+    while (v.stalled) {
+        uint64_t t = to_ns(hold_check_ps()), now = vclock_now(c);
+        if (t > now) {
+            vclock_advance(c, t - now);
+            v.hold_cpu_ns += t - now;
+        }
+        card_advance(c, card_now(c, phys, size, 1, value));
+    }
+}
+
+/* A write the busy card queues (add_to_fifo): at a water mark the card holds its writer
+ * (hw.h; a CPU store is held here, the DMA by dev_sysctrl.c); a write MAME's model would lose
+ * (a full FIFO) stops. */
 static void enqueue(cpu_t *c, uint32_t phys, int size, struct entry e)
 {
     uint32_t i0 = v.reg[REG_FBIINIT0], i4 = v.reg[REG_FBIINIT4];
+    int hold_now = 0;
     if (2 * (n_pci() + 1) > PCI_FIFO_ENTRIES - 1)
         hw_stop(c, phys, size, 1, e.value, "a Voodoo write with the PCI FIFO full (MAME "
                 "asserts; the card would have held the writer before)");
@@ -383,16 +433,19 @@ static void enqueue(cpu_t *c, uint32_t phys, int size, struct entry e)
             v.n_mem++;
         }
         if ((i0 & 0x10u) && 2 * v.n_mem >= 2 * 32 * ((i0 >> 14) & 0x7FFu))
-            hw_stop(c, phys, size, 1, e.value, "the Voodoo's memory FIFO reached its high-water "
-                    "mark (fbiInit0 bits 14 to 24): the card would hold the writer until it "
-                    "drains, which the model does not do (hardware-usage.md, \"Known gaps in "
-                    "the card model\")");
+            hold_now = 1; /* the memory FIFO at its high-water mark (fbiInit0 bits 14 to 24) */
     }
     if ((i0 & 0x10u) && pci_space() <= 2 * ((i0 >> 6) & 0x1Fu))
-        hw_stop(c, phys, size, 1, e.value, "the Voodoo's PCI FIFO reached its low-water mark "
-                "(fbiInit0 bits 6 to 10): the card would hold the writer until it drains, "
-                "which the model does not do (hardware-usage.md, \"Known gaps in the card "
-                "model\")");
+        hold_now = 1; /* the PCI FIFO at its low-water mark (fbiInit0 bits 6 to 10) */
+    if (hold_now && !v.stalled) {
+        v.stalled = 1;
+        if (v.dma_writer)
+            v.holds_dma++;
+        else
+            v.holds_cpu++;
+    }
+    if (v.stalled && !v.dma_writer)
+        hold(c, phys, size, e.value);
 }
 
 /* --- executing a write ------------------------------------------------------------------------ */
@@ -551,6 +604,7 @@ static void card_advance(cpu_t *c, uint64_t now)
                     run_fifo(c, at);
             }
         } else {
+            check_release();
             return;
         }
     }
@@ -713,6 +767,31 @@ void voodoo_write(cpu_t *c, uint32_t off, int size, uint32_t value)
         enqueue(c, phys, size, e);
     else
         execute(c, &e, now);
+}
+
+void voodoo_dma_writer(int on)
+{
+    v.dma_writer = on;
+}
+
+int voodoo_holding(void)
+{
+    return v.stalled;
+}
+
+uint64_t voodoo_hold_check_ns(void)
+{
+    return to_ns(hold_check_ps());
+}
+
+void voodoo_hold_counts(uint64_t *cpu, uint64_t *cpu_ns, uint64_t *dma)
+{
+    *cpu = v.holds_cpu, *cpu_ns = v.hold_cpu_ns, *dma = v.holds_dma;
+}
+
+void voodoo_poll(cpu_t *c)
+{
+    card_advance(c, card_now(c, VOODOO_PHYS, 4, 0, 0));
 }
 
 uint32_t voodoo_reg_writes(uint32_t regnum)

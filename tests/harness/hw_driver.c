@@ -29,6 +29,8 @@
  *   dropped              "dropped N0 .. N(DROP_COUNT-1)": vfb_dropped per reason
  *   state                "m STATUS CAUSE_IP GT_CAUSE GT_MASK NOW"
  *   delay N BYTES        "delay NS": dma0_delay_ns(N, BYTES), N and BYTES decimal
+ *   dmahook              loader_set_dma_hook of a hook printing "dma RECORDS N_OTHER LFB_BYTES
+ *                        DELAY_NS" (decimal) at each chain's cause bit 4
  *   counts REG           "counts STD ALT TEX FIFO": voodoo_reg_writes(REG),
  *                        voodoo_alt_writes(REG), voodoo_tex_writes(), sndfifo_writes()
  *   dcs                  "dcs QUEUED DATA RAISES CAUSE_IP": dcs_queued(), dcs_data_words(),
@@ -131,6 +133,12 @@ static uint8_t *ram_at(uint32_t addr, uint32_t n)
     if (!mem_is_ram(addr, n ? n : 1))
         die("not a RAM range", NULL);
     return ram + (addr & 0x1FFFFFFFu);
+}
+
+static void dma_hook(uint32_t records, uint32_t n_other, uint64_t lfb_bytes, uint64_t delay)
+{
+    printf("dma %" PRIu32 " %" PRIu32 " %" PRIu64 " %" PRIu64 "\n", records, n_other,
+           lfb_bytes, delay);
 }
 
 static void reset(void)
@@ -398,6 +406,8 @@ int main(void)
             printf("m %08" PRIX32 " %08" PRIX32 " %08" PRIX32 " %08" PRIX32 " %" PRIu64 "\n",
                    m_status(), machine.cause_ip, machine.gt_cause, machine.gt_mask,
                    vclock_now(&cpu));
+        } else if (strcmp(key, "dmahook") == 0) {
+            loader_set_dma_hook(dma_hook);
         } else if (strcmp(key, "delay") == 0) {
             uint64_t n = dec(), bytes = dec();
             if (n > UINT32_MAX)
