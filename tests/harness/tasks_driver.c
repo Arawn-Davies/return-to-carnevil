@@ -21,7 +21,13 @@
  *   misuse KIND   one misuse of rt_host_switch, which stops (status 3): yield or exit on
  *                 the scheduler's context, resume with EXL set, resume on a task context
  *                 (resume-in-task), resume of a record with no context (no-context), a 65th
- *                 context (full), resume after tasks_reset forgot the record (reset).
+ *                 context (full), resume after tasks_reset forgot the record (reset), an
+ *                 exit on a task context the glue has no record for (exit-unmapped).
+ *   reuse         the game frees a suspended task and reuses its record: record A is run at
+ *                 the trampoline and yields, then resumed at the trampoline again while its
+ *                 first context is parked, then resumed normally. Prints "run gen G" at each
+ *                 body's start, "resumed gen G" when a body comes back from a yield, and
+ *                 "live N" (ctx_count) after each resume.
  *   guest MODE    commands on standard input run guest code, in the interpreter (MODE
  *                 interp) or through the recompiled functions a linked generated file
  *                 registers (MODE recomp, where any entry into the interpreter prints
@@ -218,6 +224,26 @@ static void body_resume_in_task(uint32_t record)
     resume(REC_B, TRAMPOLINE);
 }
 
+static int reuse_gen;
+
+static void body_reuse(uint32_t record)
+{
+    int me = ++reuse_gen;
+    (void)record;
+    printf("run gen %d\n", me);
+    for (;;) {
+        yield();
+        printf("resumed gen %d\n", me);
+    }
+}
+
+static void exit_unmapped_entry(void *arg)
+{
+    (void)arg;
+    cpu.pc = 0x80151B78u;
+    rt_host_switch(ram, &cpu, RT_SWITCH_EXIT);
+}
+
 /* --- scenarios on the generic contexts --------------------------------------------------- */
 
 static int ping_last = -1, ping_sched_seen;
@@ -360,10 +386,24 @@ static void misuse(const char *kind)
         resume(REC_A, TRAMPOLINE);
         tasks_reset();
         resume(REC_A, 0x80100000u);
+    } else if (strcmp(kind, "exit-unmapped") == 0) {
+        ctx_switch_to(ctx_spawn(exit_unmapped_entry, NULL, HOST_STACK));
     } else {
         die("unknown misuse", kind);
     }
     puts("returned");
+}
+
+static void reuse(void)
+{
+    native_body = body_reuse;
+    resume(REC_A, TRAMPOLINE);
+    printf("live %d\n", ctx_count());
+    resume(REC_A, TRAMPOLINE);
+    printf("live %d\n", ctx_count());
+    resume(REC_A, 0x80100000u);
+    printf("live %d\n", ctx_count());
+    tasks_reset();
 }
 
 /* --- guest mode -------------------------------------------------------------------------- */
@@ -438,6 +478,8 @@ int main(int argc, char **argv)
         stop();
     } else if (strcmp(argv[1], "misuse") == 0 && argc == 3) {
         misuse(argv[2]);
+    } else if (strcmp(argv[1], "reuse") == 0) {
+        reuse();
     } else if (strcmp(argv[1], "guest") == 0 && argc == 3) {
         guest = 1;
         guest_recomp = strcmp(argv[2], "recomp") == 0;

@@ -41,7 +41,7 @@ STOP_STATUS = 3
 
 A = vectors.assemble
 NOP = 0
-T0, T1, S0, S1, K1, SP, RA = 8, 9, 16, 17, 27, 29, 31
+T0, T1, T2, T3, S0, S1, K1, SP, RA = 8, 9, 10, 11, 16, 17, 27, 29, 31
 
 # The glue's guest addresses (docs/analysis/task-switch.md).
 TRAMPOLINE = 0x8014A930
@@ -171,7 +171,10 @@ def guest_program():
       counter reaches the record's limit, otherwise `jal yield` and again.
     - `yield`: saves ra and s0 below sp, stores sp at record + 8, swaps sp and k1, `j` to the
       restore path (yield).
-    - `exit`: clears the record's alive word, swaps, `j` to the restore path (exit)."""
+    - `exit`: clears the record's alive word and, as the game's free routine does, makes the
+      exiting task's predecessor in the list current (0 for the head), swaps, `j` to the
+      restore path (exit). So the current task word no longer names the exiting task when the
+      glue sees the exit."""
     items = [
         "tramp",
         ("j", "jal", "task"), NOP,
@@ -226,6 +229,15 @@ def guest_program():
         A("lui", rt=T0, imm=CURRENT_TASK >> 16),
         A("lw", rt=T0, rs=T0, imm=CURRENT_TASK & 0xFFFF),
         A("sw", rt=0, rs=T0, imm=0xC),
+        # t2 = the predecessor of t0 in the list from REC_A (0 for the head)
+        A("or", rd=T2, rs=0, rt=0), A("lui", rt=T1, imm=REC_A >> 16),
+        "pred",
+        ("b", "beq", T1, T0, "pred_found"), NOP,
+        A("or", rd=T2, rs=T1, rt=0), A("lw", rt=T1, rs=T1, imm=0),
+        ("b", "bne", T1, 0, "pred"), NOP,
+        "pred_found",
+        A("lui", rt=T3, imm=CURRENT_TASK >> 16),
+        A("sw", rt=T2, rs=T3, imm=CURRENT_TASK & 0xFFFF),
         *swap_sp_k1(),
         "exit_j",
         ("j", "j", "restore"), LAST_XOR,
@@ -355,6 +367,9 @@ class TasksTest(unittest.TestCase):
             ("reset", r"^carnevil: stop: rt_host_switch: resume of a record with no "
                       r"context, and ra 0x80100000 is not the trampoline 0x8014A930 "
                       r"\(record 0x80180000, pc as last stored 0x80151E88"),
+            ("exit-unmapped", r"^carnevil: stop: rt_host_switch: exit on a task context the "
+                              r"glue holds no record for \(record 0x80180000, pc as last "
+                              r"stored 0x80151B78"),
         ]
         for kind, message in cases:
             with self.subTest(kind=kind):
@@ -369,6 +384,19 @@ class TasksTest(unittest.TestCase):
         """A YIELD on the scheduler's context stops with a message naming the kind, the record
         and the pc; so does every other misuse the glue refuses."""
         self.check_misuse_stops()
+
+    def check_record_reuse(self, exe=None):
+        out, _ = self.drive(["reuse"], exe=exe)
+        self.assertEqual(out.splitlines(), [
+            "run gen 1", "live 1",
+            "run gen 2", "live 1",       # the first context was retired, not resumed
+            "resumed gen 2", "live 1"])  # the normal resume runs the new context
+
+    def test_record_reuse(self):
+        """The game frees a suspended task and reuses its record: a resume at the trampoline
+        while the record still holds a parked context retires that context (it never runs
+        again), runs the new one, and leaves one live context."""
+        self.check_record_reuse()
 
     # --- the guest scheduler -------------------------------------------------------------
 
@@ -423,6 +451,7 @@ class TasksTest(unittest.TestCase):
         self.check_stop_from_task(exe)
         self.check_fcsr_follows_cpu(exe)
         self.check_misuse_stops(exe)
+        self.check_record_reuse(exe)
         self.check_guest_scheduler(TSAN)
 
 

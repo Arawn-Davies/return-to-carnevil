@@ -20,6 +20,10 @@
  *   cancel ID            vclock_cancel of event ID
  *   irqraise IP          irq_raise
  *   gtraise BIT          gt_cause_raise
+ *   cause V              the pending IP bits (machine.cause_ip) set to V, bypassing irq_raise
+ *   intctl V             IOASIC INTCTL set to V
+ *   tick                 rt_tick as if the slice ran out (slice 0 first)
+ *   reload               vclock_reload
  *   atstop               rt_at_stop of two functions that print "at_stop 1" and "at_stop 2"
  *                        on stderr
  *   run PC               interp_run from PC, then "ran" and the state
@@ -34,7 +38,7 @@
  *   dump ADDR N          "dump W0 .. W(N-1)", N RAM words from ADDR
  *   handlers             "handlers F0 .. F15", the exception table
  * The state is the lines "r R0 .. R31", "hilo HI LO", "fpr F0 .. F31", "fcsr X" (as cfc1
- * reads it) and "m STATUS CAUSE_IP INTCTL GT_CAUSE NOW SLICE".
+ * reads it) and "m STATUS CAUSE_IP INTCTL GT_CAUSE NOW SLICE PC".
  *
  * PROBE (0x80300000) prints "probe A0 A1 A2 SP STATUS NOW" and returns, changing nothing.
  */
@@ -168,9 +172,9 @@ static void print_state(void)
     printf("hilo %08" PRIX32 " %08" PRIX32 "\n", cpu.hi, cpu.lo);
     put_words("fpr", cpu.fpr, 32);
     printf("fcsr %08" PRIX32 "\n", rt_get_fcsr(&cpu));
-    printf("m %08" PRIX32 " %08" PRIX32 " %08" PRIX32 " %08" PRIX32 " %" PRIu64 " %" PRId32 "\n",
-           m_status(), machine.cause_ip, machine.intctl, machine.gt_cause, vclock_now(&cpu),
-           cpu.slice);
+    printf("m %08" PRIX32 " %08" PRIX32 " %08" PRIX32 " %08" PRIX32 " %" PRIu64 " %" PRId32
+           " %08" PRIX32 "\n", m_status(), machine.cause_ip, machine.intctl, machine.gt_cause,
+           vclock_now(&cpu), cpu.slice, cpu.pc);
     fflush(stdout);
 }
 
@@ -259,6 +263,15 @@ int main(void)
             irq_raise((int)hex());
         } else if (strcmp(key, "gtraise") == 0) {
             gt_cause_raise((int)hex());
+        } else if (strcmp(key, "cause") == 0) {
+            machine.cause_ip = hex();
+        } else if (strcmp(key, "intctl") == 0) {
+            machine.intctl = hex();
+        } else if (strcmp(key, "tick") == 0) {
+            cpu.slice = 0;
+            rt_tick(ram, &cpu);
+        } else if (strcmp(key, "reload") == 0) {
+            vclock_reload(&cpu);
         } else if (strcmp(key, "atstop") == 0) {
             rt_at_stop(at_stop_1);
             rt_at_stop(at_stop_2);

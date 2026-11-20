@@ -243,6 +243,15 @@ int ctx_is_scheduler(void)
     return self == &scheduler;
 }
 
+int ctx_count(void)
+{
+    int n = 0;
+    need_scheduler("ctx_count");
+    for (const task_ctx *t = live; t; t = t->next)
+        n++;
+    return n;
+}
+
 /* ===================================================================================== */
 /* The game glue: GAME.EXE's task switch on the contexts above.                         */
 /* ===================================================================================== */
@@ -356,8 +365,9 @@ void rt_host_switch(uint8_t *ram, cpu_t *c, int kind)
     /* the exit: the context is this one, whatever record the current task word now holds
      * (the game's free makes the exiting task's predecessor current) */
     i = map_find(0, self);
-    if (i >= 0)
-        map_drop(i);
+    if (i < 0)
+        refuse(c, kind, record, "on a task context the glue holds no record for");
+    map_drop(i);
     ctx_end();
 }
 

@@ -178,7 +178,7 @@ class Out:
     def m(self):
         f = self.last("m")
         return dict(status=int(f[0], 16), cause=int(f[1], 16), intctl=int(f[2], 16),
-                    gtcause=int(f[3], 16), now=int(f[4]), slice=int(f[5]))
+                    gtcause=int(f[3], 16), now=int(f[4]), slice=int(f[5]), pc=int(f[6], 16))
 
     def dump(self, i=-1):
         return [int(x, 16) for x in self.all("dump")[i]]
@@ -285,6 +285,9 @@ class ClockIrqTest(unittest.TestCase):
         self.assertGreaterEqual(m["now"], 10 * P)
         self.assertEqual(m["status"], STATUS)
         self.assertEqual(m["cause"], 0x4000)  # pending, masked
+        # INTCTL as machine_reset leaves it: the value measured at the game's entry
+        # (loader-services.md, open question 1)
+        self.assertEqual(m["intctl"], 0x4000)
         want = list(r)
         want[T0] = 0
         self.assertEqual(out.regs(), want)
@@ -355,6 +358,8 @@ class ClockIrqTest(unittest.TestCase):
         m = out.m()
         self.assertEqual(m["status"], STATUS)
         self.assertTrue(m["intctl"] & 0x4000)
+        # the pc follows the resume pc, so a later trap does not record the handler's
+        self.assertEqual(m["pc"], epc + 4)
 
     def test_gt_cause(self):
         out, _ = self.drive(place(MAIN, LOOP) + place(H, asm(call_probe(4), ret(7)))
@@ -363,6 +368,79 @@ class ClockIrqTest(unittest.TestCase):
         self.assertEqual((p["a0"], p["sp"], p["a2"]), (1, EXC_SP, 4))
         m = out.m()
         self.assertEqual((m["gtcause"], m["cause"]), (0, 0))
+
+    def test_raise_outside_event_delivered_next_check(self):
+        # A line raised outside a clock event (as a loader slot or a bus access raises one),
+        # followed by vclock_reload, is delivered at the very next check point, not when the
+        # current slice of up to 1,000,000 checks runs out.
+        out, _ = self.drive(place(MAIN, LOOP) + place(H, asm(call_probe(1), ret(1)))
+                            + [f"line 0 {H:08X}", "tick", "irqraise 6", "reload"]
+                            + run_main(10))
+        [p] = out.probes()
+        # delivered at main's entry check; the probe also sees the handler's entry check
+        self.assertEqual(p["now"], 2 * NS_PER_CHECK)
+
+    def test_pending_after_exception_delivered_next_check(self):
+        # A VBLANK that comes due while a break hook runs (EXL set) is delivered at the first
+        # check after the exception returns: exc_raise reloads the slice once EXL is clear.
+        hook = asm(A("lw", rt=T0, base=A1, imm=0x110), A("addiu", rt=T0, rs=T0, imm=4),
+                   A("sw", rt=T0, base=A1, imm=0x110),
+                   A("ori", rt=T2, rs=0, imm=3 * P // NS_PER_CHECK // 2),  # 1,500 checks
+                   "busy", A("addiu", rt=T2, rs=T2, imm=-1), ("bne", T2, 0, "busy"), NOP,
+                   call_probe(2), ret(0))
+        main = [A("break", code=0x1C00)] + LOOP
+        out, _ = self.drive(place(MAIN, main) + place(H, asm(call_probe(1), ret(1)))
+                            + place(H2, hook)
+                            + [f"line 0 {H:08X}", f"hook 7 {H2:08X}", f"vblank {P}"]
+                            + run_main(100))
+        probes = out.probes()
+        self.assertEqual([p["a2"] for p in probes], [2, 1])
+        self.assertGreater(probes[0]["now"], P)  # the VBLANK came due inside the hook
+        self.assertLess(probes[1]["now"] - probes[0]["now"], 10 * NS_PER_CHECK)
+
+    def test_ip3_default_lowers_the_line(self):
+        # the default IP3 work clears INTCTL bit 0 and the pending IP3 bit, so one raise is
+        # one delivery
+        out, _ = self.drive(place(MAIN, LOOP) + place(H, asm(call_probe(3), ret(1)))
+                            + [f"line 3 {H:08X}", "intctl 4001", "irqraise 3"]
+                            + run_main(100))
+        self.assertEqual(len(out.probes()), 1)
+        m = out.m()
+        self.assertEqual(m["cause"], 0)
+        self.assertEqual(m["intctl"], 0x4000)
+
+    def test_ip_order(self):
+        # VBLANK (IP6) and a GT64010 cause bit (IP2) pending at once: IP2's work first
+        out, _ = self.drive(place(MAIN, LOOP) + place(H, asm(call_probe(1), ret(1)))
+                            + place(H2, asm(call_probe(4), ret(0)))
+                            + [f"line 0 {H:08X}", f"gt 4 {H2:08X}", "gtraise 4", "irqraise 6"]
+                            + run_main(10))
+        self.assertEqual([p["a2"] for p in out.probes()], [4, 1])
+        self.assertEqual(out.m()["cause"], 0)
+
+    def test_long_vblank_handler_absorbs(self):
+        # The board's VBLANK path: the game's line-0 handler returns 1, so the default work
+        # acknowledges. A first call that runs for three periods is entered once; the VBLANKs
+        # that came due during it are absorbed by its acknowledgement, and the next delivery
+        # is the first VBLANK that comes due after it returned.
+        handler = asm(call_probe(1), li(T0, FLAG), A("lw", rt=T1, base=T0, imm=0),
+                      ("bne", T1, 0, "quick"), NOP,
+                      A("ori", rt=T1, rs=0, imm=1), A("sw", rt=T1, base=T0, imm=0),
+                      A("ori", rt=T2, rs=0, imm=3 * P // NS_PER_CHECK + 1),  # 3,001 checks
+                      "busy", A("addiu", rt=T2, rs=T2, imm=-1), ("bne", T2, 0, "busy"), NOP,
+                      "quick", call_probe(2), ret(1))
+        out, _ = self.drive(place(MAIN, LOOP) + place(H, handler)
+                            + [f"line 0 {H:08X}", f"vblank {P}"] + run_main(10200))
+        probes = out.probes()
+        self.assertEqual([p["a2"] for p in probes], [1, 2] * (len(probes) // 2))
+        entries = [p["now"] for p in probes if p["a2"] == 1]
+        exits = [p["now"] for p in probes if p["a2"] == 2]
+        self.assertTrue(P <= entries[0] < P + 1000, entries)
+        self.assertGreaterEqual(exits[0] - entries[0], 3 * P)
+        self.assertEqual(entries[1] // P, exits[0] // P + 1)
+        self.assertLess(entries[1] % P, 1000)
+        for k, t in enumerate(entries[1:]):
+            self.assertEqual(t // P, entries[1] // P + k)
 
     # --- break and FP exceptions -----------------------------------------------------------
 
@@ -465,7 +543,12 @@ class ClockIrqTest(unittest.TestCase):
              ["0x80100040", "code 13"]),
             (["raise 9 80100040"], ["0x80100040", "code 9"]),
             (["break 80100000 409", "pc 80100050", "fptrap 8000"],
-             ["0x80100050", "pc as last stored", "0x8000"]),
+             ["0x80100050", "pc as last stored", "exact only in a --trace-pc build",
+              "0x8000"]),
+            (place(H, ret(0)) + [f"fpe 3 {H:08X}", "break 80100000 409", "pc 80100050",
+                                 "fptrap 8000"],
+             ["0x80100050", "pc as last stored", "exact only in a --trace-pc build",
+              "0x8000"]),
             (["badtarget 9FC00000"], ["reset vector", "0x9FC00000"]),
             (["badtarget 10000000"], ["0x10000000"]),
             (place(MAIN, LOOP) + place(H, moves) + [f"line 0 {H:08X}", f"vblank {P}"]
@@ -473,11 +556,17 @@ class ClockIrqTest(unittest.TestCase):
              [f"0x{LOOP_EPC:08X}", f"0x{LOOP_EPC + 8:08X}"]),
             (place(MAIN, LOOP) + place(H, ret(1)) + [f"line 2 {H:08X}", "irqraise 4"]
              + run_main(10), ["IP4"]),
+            # the interrupted pc is named: the frame's resume pc
+            (["irqraise 4", "raise 0 80100040"], ["IP4", "0x80100040"]),
+            (["cause 100", "raise 0 80100040"], ["IP0", "0x80100040"]),
+            (["cause 200", "raise 0 80100040"], ["IP1", "0x80100040"]),
+            (["cause 8000", "raise 0 80100040"], ["IP7", "0x80100040"]),
             (["irqraise 7"], ["IP7"]),
             (["irqraise 1"], ["IP1"]),
             (["vblank 0"], ["VBLANK period 0"]),
             ([f"event {i:X} 1000" for i in range(65)], ["events"]),
-            (["fptrap 8000"], ["0x8000"]),  # before the runtime was given RAM
+            # before the runtime was given RAM
+            (["fptrap 8000"], ["0x8000", "exact only in a --trace-pc build"]),
             (["slice 5", "checks 0"], ["slice"]),
             ([f"hook 5 {H:08X}"], ["break hook 5"]),
         ]

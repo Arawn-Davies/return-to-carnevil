@@ -41,6 +41,9 @@ void rt_at_stop(void (*fn)(void))
 
 /* --- exceptions other than interrupts --------------------------------------------------- */
 
+/* What an FP trap's stop messages say about the pc they name (see rt_fp_trap). */
+#define FP_PC_NOTE " (pc as last stored, exact only in a --trace-pc build)"
+
 /* After exc_raise for what (a description) at epc: returns when the resume pc is epc + 4. */
 static void resume_next(const char *what, uint32_t epc, const char *pc_note, uint32_t resume)
 {
@@ -82,8 +85,7 @@ void exc_other(uint8_t *ram, cpu_t *c, int code, uint32_t cause, uint32_t epc)
                 continue;
             if (!machine.fpe_fn[b - 12])
                 rt_stop(RT_STOP_STATUS, "floating-point exception: FCSR cause bit 0x%X at pc "
-                        "0x%08X (pc as last stored) has no FPU handler", 1u << b,
-                        (unsigned)epc);
+                        "0x%08X" FP_PC_NOTE " has no FPU handler", 1u << b, (unsigned)epc);
             c->r[4] = EXC_FRAME;
             exc_call(ram, c, machine.fpe_fn[b - 12]);
             frame_w32(ram, 0x31C, frame_r32(ram, 0x31C) & ~(1u << b));
@@ -146,13 +148,13 @@ void rt_fp_trap(cpu_t *c, uint32_t cause_bit)
     char what[64];
     uint32_t epc = c->pc, resume;
     if (!machine.ram)
-        rt_stop(RT_STOP_STATUS, "floating-point exception (FCSR cause 0x%X) at pc 0x%08X (pc "
-                "as last stored) before the runtime was given RAM", (unsigned)cause_bit,
+        rt_stop(RT_STOP_STATUS, "floating-point exception (FCSR cause 0x%X) at pc 0x%08X"
+                FP_PC_NOTE " before the runtime was given RAM", (unsigned)cause_bit,
                 (unsigned)epc);
     c->fcsr |= cause_bit;
     resume = exc_raise(machine.ram, c, 15, epc);
     snprintf(what, sizeof what, "floating-point exception (FCSR cause 0x%X)", (unsigned)cause_bit);
-    resume_next(what, epc, " (pc as last stored)", resume);
+    resume_next(what, epc, FP_PC_NOTE, resume);
 }
 
 /* rt_bad_target (recomp.h): the game's crash handler ends at the reset vector, which on the

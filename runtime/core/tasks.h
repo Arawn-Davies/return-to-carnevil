@@ -48,6 +48,9 @@ void ctx_retire(task_ctx *t);
 /* ctx_is_scheduler: 1 on the scheduler's context, 0 on a task context. */
 int ctx_is_scheduler(void);
 
+/* ctx_count, on the scheduler's context: the contexts spawned and not yet released. */
+int ctx_count(void);
+
 /* tasks_reset, on the scheduler's context: retires every live context and forgets the game
  * glue's map from task records to contexts, so that nothing of a previous run is left (for
  * test harnesses that run independent cases in one process). */

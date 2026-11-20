@@ -54,6 +54,9 @@ void vclock_cancel(void (*fn)(void *), void *arg);
 /* IOASIC INTCTL (bus word 8): bit 14 is set after every exception, bit 0 is cleared by the
  * default IP3 work. */
 #define INTCTL_AFTER_EXCEPTION 0x4000u
+/* INTCTL at the game's entry, which machine_reset gives it (measured: loader-services.md,
+ * open question 1). */
+#define INTCTL_AT_ENTRY 0x4000u
 
 /* VBLANK until M3 derives it from the Voodoo's timing registers: 1e9 / 54.15 ns, the
  * refresh rate of MAME's screen. */
@@ -61,7 +64,14 @@ void vclock_cancel(void (*fn)(void *), void *arg);
 
 /* irq_raise, irq_clear: the level of CPU interrupt line IP2 to IP6 (Cause bit 8 + ip). A
  * line raised twice before it is served is one pending bit. Delivery happens only in rt_tick,
- * when Status has IE set and EXL clear and a pending line is unmasked (Status IM). */
+ * when Status has IE set and EXL clear and a pending line is unmasked (Status IM).
+ *
+ * A line raised from a clock event is delivered at the next check point by itself. Code
+ * that holds a cpu_t and changes what is deliverable outside an event (a loader slot, a bus
+ * access: irq_raise, gt_cause_raise, irq_set_gt, a Status write) calls vclock_reload(c)
+ * afterwards, so that the line is delivered at the next check point rather than when the
+ * current slice (up to VCLOCK_MAX_SLICE checks) runs out; exc_raise does so itself once EXL
+ * is clear. */
 void irq_raise(int ip);
 void irq_clear(int ip);
 /* m_status: Status. m_status_set: Status = (Status & ~clear) | set. */
@@ -91,9 +101,10 @@ void exc_set_break_hook(int which, uint32_t fn);
 
 /* exc_raise: the exception code (0 for an interrupt) at epc, dispatched as the loader does:
  * the frame at EXC_FRAME is written, EXL set, the handlers called through rt_call on
- * EXC_STACK, then every register but k0, Status and FCSR come back from the frame. Returns
- * the resume pc (frame + 0x110), which the caller must honour or refuse; the caller never
- * resumes anywhere else. An exception while EXL is set stops (the board reboots). */
+ * EXC_STACK, then every register but k0, Status and FCSR come back from the frame, c->pc
+ * becomes the resume pc and the slice is reloaded (vclock_reload). Returns the resume pc
+ * (frame + 0x110), which the caller must honour or refuse; the caller never resumes anywhere
+ * else. An exception while EXL is set stops (the board reboots). */
 uint32_t exc_raise(uint8_t *ram, cpu_t *c, int code, uint32_t epc);
 
 /* vblank_start: from now on, VBLANK (IP6) is raised every period_ns. */
@@ -147,7 +158,7 @@ typedef struct machine {
 extern machine_t machine;
 
 /* machine_reset: every piece of state above to power-on values (Status ST_POWER_ON, Cause
- * 0, time 0, no handlers, no events, INTCTL 0). */
+ * 0, time 0, no handlers, no events, INTCTL INTCTL_AT_ENTRY). */
 void machine_reset(void);
 
 /* --- between runtime/core's files ------------------------------------------------------- */

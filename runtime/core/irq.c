@@ -15,7 +15,7 @@ machine_t machine;
 
 void machine_reset(void)
 {
-    machine = (machine_t){.status = ST_POWER_ON};
+    machine = (machine_t){.status = ST_POWER_ON, .intctl = INTCTL_AT_ENTRY};
 }
 
 /* The loader's line map 0x800146C0: the line of each IP bit, -1 for none (IP0, IP1, IP7). */
@@ -216,7 +216,12 @@ static void default_work(uint8_t *ram, cpu_t *c, int n)
         irq_clear(6);
         return;
     case 3:
-        machine.intctl &= ~1u; /* IOASIC: clears INTCTL bit 0 */
+        /* IOASIC: clears INTCTL bit 0. Nothing models the IOASIC's interrupt output yet, so
+         * the pending IP3 bit is lowered here too (otherwise a raised, unmasked IP3 would be
+         * delivered at every check for ever); the sound-board task derives the IP3 level
+         * from the IOASIC model instead. */
+        machine.intctl &= ~1u;
+        irq_clear(3);
         return;
     case 5:
         fputs("carnevil: Hilink/NSS/Widget Interrupt - must be handled\n", stderr);
@@ -242,7 +247,8 @@ static void default_work(uint8_t *ram, cpu_t *c, int n)
     }
     default: /* 4 */
         rt_stop(RT_STOP_STATUS, "IP4 (IDE) default interrupt work, the loader's disk "
-                "completion service 0x80012158, is not modelled yet");
+                "completion service 0x80012158, is not modelled yet (interrupted pc 0x%08X)",
+                (unsigned)frame_r32(ram, 0x110));
     }
 }
 
@@ -256,7 +262,8 @@ static void irq_loop(uint8_t *ram, cpu_t *c, uint32_t cause)
             continue;
         if (IP_LINE[n] < 0) /* no source drives IP0, IP1 or IP7 here */
             rt_stop(RT_STOP_STATUS, "interrupt on IP%d, which has no line: the board enters "
-                    "its debug entry", n);
+                    "its debug entry (interrupted pc 0x%08X)", n,
+                    (unsigned)frame_r32(ram, 0x110));
         fn = machine.line_fn[IP_LINE[n]];
         if (fn) {
             c->r[4] = bit; /* a1 is not set: the frame on the first call, then left over */
@@ -283,7 +290,10 @@ uint32_t exc_raise(uint8_t *ram, cpu_t *c, int code, uint32_t epc)
     machine.status |= ST_EXL;
     frame_save(ram, c, cause, epc);
     machine.intctl &= ~INTCTL_AFTER_EXCEPTION;
-    vclock_reload(c); /* the handlers start with a fresh slice, so rt_tick is not re-entered */
+    /* The handlers start with a fresh slice. A handler that runs longer than a slice
+     * re-enters rt_tick; EXL is what makes that safe: it advances time and runs events but
+     * delivers nothing. */
+    vclock_reload(c);
     c->r[4] = cause;
     c->r[5] = EXC_FRAME;
     if (code == 0)
@@ -291,7 +301,11 @@ uint32_t exc_raise(uint8_t *ram, cpu_t *c, int code, uint32_t epc)
     else
         exc_other(ram, c, code, cause, epc);
     resume = frame_restore(ram, c);
+    c->pc = resume; /* so a later trap or interrupt does not record a handler's pc */
     machine.intctl |= INTCTL_AFTER_EXCEPTION;
+    /* EXL is clear again: a line that became pending while the handlers ran (a VBLANK that
+     * came due, a line a slot raised) is delivered at the next check point */
+    vclock_reload(c);
     return resume;
 }
 
