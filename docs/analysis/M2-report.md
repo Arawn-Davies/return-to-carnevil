@@ -31,7 +31,7 @@ Every fact below carries its basis, as in the [M1 report](M1-report.md):
   runtime/*/*.h | wc -l`), 7,665 of them in files new in M2 (static, `git diff --name-only
   --diff-filter=A 4cc16c4 e50f325 -- runtime | xargs cat | wc -l`). The milestone is 24
   commits from the plan (`4cc16c4`) to `e50f325`, plus
-  this report. The whole-branch review's fix wave added 9 commits (2026-11-20, from
+  this report. The whole-branch review's fix wave added 12 commits (2026-11-20, from
   `2a4a95f`), after which `runtime/` holds 9,806 lines (static, the same command).
 - **The run**: `carnevil --disk carnevil.raw --seconds 150` exits 0 after 150 s of virtual
   time on the Mac (Apple clang, arm64). Task 9 also ran it in the Linux container (GCC 14.2, x86-64) and
