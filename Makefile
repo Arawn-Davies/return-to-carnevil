@@ -49,12 +49,18 @@ MACHINE_OBJS := $(patsubst $(ROOT)/runtime/%.c,$(BUILD)/runtime/%.o,$(MACHINE_SR
 # for the runtime; compiled with -pthread, and a program linking them links with -pthread
 TASKS_SRCS := $(ROOT)/runtime/core/tasks.c
 TASKS_OBJS := $(patsubst $(ROOT)/runtime/%.c,$(BUILD)/runtime/%.o,$(TASKS_SRCS))
-# the loader's stand-ins: descriptors, files, console, CMOS, PIC, timers, IOASIC and the
-# handler registrations (runtime/loader/loader.h), for the runtime; they need DISK_OBJS and
-# MACHINE_OBJS
+# the loader's stand-ins: descriptors, files, console, CMOS, PIC, timers, IOASIC, the
+# GT64010 and its DMA channel 0, the PCI and disk slots and the handler registrations
+# (runtime/loader/loader.h), for the runtime; they need DISK_OBJS, MACHINE_OBJS and HW_OBJS
 LOADER_SRCS := $(addprefix $(ROOT)/runtime/loader/,slots.c fd.c dev_file.c dev_con.c \
-               dev_cmos.c dev_pic.c dev_timer.c dev_ioasic.c)
+               dev_cmos.c dev_pic.c dev_timer.c dev_ioasic.c dev_sysctrl.c diskslots.c)
 LOADER_OBJS := $(patsubst $(ROOT)/runtime/%.c,$(BUILD)/runtime/%.o,$(LOADER_SRCS))
+# the bus and the hardware GAME.EXE touches directly: the Voodoo sink, the gun, the sound
+# FIFO and 0x17F00000 (runtime/hw/hw.h), for the runtime; they need LOADER_OBJS (cmos_byte)
+# and MACHINE_OBJS
+HW_SRCS := $(ROOT)/runtime/core/bus.c $(addprefix $(ROOT)/runtime/hw/,voodoo_null.c gun.c \
+           misc.c)
+HW_OBJS := $(patsubst $(ROOT)/runtime/%.c,$(BUILD)/runtime/%.o,$(HW_SRCS))
 GENERATED_SRCS := $(sort $(wildcard $(GENERATED)/funcs_*.c)) $(GENERATED)/func_table.c
 GENERATED_OBJS := $(patsubst $(GENERATED)/%.c,$(BUILD)/generated/%.o,$(GENERATED_SRCS))
 
@@ -90,7 +96,9 @@ $(DISK_OBJS): $(ROOT)/runtime/disk/disk.h
 $(MACHINE_OBJS): $(INCLUDE)/machine.h
 $(TASKS_OBJS): $(INCLUDE)/machine.h $(ROOT)/runtime/core/tasks.h
 $(TASKS_OBJS): C_FLAGS += -pthread
-$(LOADER_OBJS): $(ROOT)/runtime/loader/loader.h $(INCLUDE)/machine.h $(ROOT)/runtime/disk/disk.h
+$(LOADER_OBJS): $(ROOT)/runtime/loader/loader.h $(INCLUDE)/machine.h $(ROOT)/runtime/disk/disk.h \
+                $(ROOT)/runtime/hw/hw.h
+$(HW_OBJS): $(ROOT)/runtime/hw/hw.h $(ROOT)/runtime/loader/loader.h $(INCLUDE)/machine.h
 
 $(BUILD)/generated/%.o: $(GENERATED)/%.c $(GENERATED)/funcs.h $(INCLUDE)/recomp.h
 	@mkdir -p "$(@D)"

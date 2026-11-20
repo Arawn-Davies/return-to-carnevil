@@ -1,6 +1,5 @@
 /* fd.c: the descriptor table, the name table and open's resolution, the descriptor slots
- * (close, creat, open, read, write, ioctl with its generic commands, isatty), and the
- * placeholder `pci:` driver.
+ * (close, creat, open, read, write, ioctl with its generic commands, isatty).
  *
  * docs/analysis/loader-services.md section 2 ("Descriptor table", "Descriptors open at the
  * hand-off", "Name table and open resolution") and the slot entries of section 1.
@@ -218,15 +217,3 @@ void ld_slot_isatty(cpu_t *c)
     struct ldesc *d = ld_desc(c->r[4]);
     c->r[2] = d && d->dev == &ld_con;
 }
-
-/* --- `pci:`, the sysctrl driver, until the next task ------------------------------------- */
-
-/* open succeeds, since the sysctrl init flag is set at the hand-off (section 2); read and
- * write are not documented */
-static int pci_ioctl(int fd, uint32_t cmd, uint32_t arg)
-{
-    ld_stop("ioctl(fd %d, 0x%04X, 0x%X) on pci: (the sysctrl driver) is not implemented yet",
-            fd, (unsigned)cmd, (unsigned)arg);
-}
-
-const struct ldev ld_pci = {"pci:", ld_ret0_open, ld_ret0_close, NULL, NULL, pci_ioctl};

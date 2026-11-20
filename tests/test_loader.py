@@ -26,15 +26,20 @@ REPO = charness.REPO
 CORE = os.path.join(REPO, "runtime", "core")
 DISK_DIR = os.path.join(REPO, "runtime", "disk")
 LOADER_DIR = os.path.join(REPO, "runtime", "loader")
+HW_DIR = os.path.join(REPO, "runtime", "hw")
 LOADER_SOURCES = [os.path.join(LOADER_DIR, f) for f in (
     "slots.c", "fd.c", "dev_file.c", "dev_con.c", "dev_cmos.c", "dev_pic.c", "dev_timer.c",
-    "dev_ioasic.c")]
+    "dev_ioasic.c", "dev_sysctrl.c", "diskslots.c")]
+HW_SOURCES = [os.path.join(CORE, "bus.c")] + \
+             [os.path.join(HW_DIR, f) for f in ("voodoo_null.c", "gun.c", "misc.c")]
 SOURCES = [os.path.join(CORE, f) for f in ("call.c", "fpu.c", "clock.c", "irq.c", "exc.c")] + \
           [os.path.join(REPO, "runtime", "interp", "interp.c")] + \
-          [os.path.join(DISK_DIR, f) for f in ("image.c", "fs.c", "sha256.c")] + LOADER_SOURCES
+          [os.path.join(DISK_DIR, f) for f in ("image.c", "fs.c", "sha256.c")] + \
+          LOADER_SOURCES + HW_SOURCES
 DRIVER = os.path.join(REPO, "tests", "harness", "loader_driver.c")
 HEADERS = [os.path.join(charness.INCLUDE, h) for h in ("recomp.h", "machine.h")] + \
-          [os.path.join(DISK_DIR, "disk.h"), os.path.join(LOADER_DIR, "loader.h")]
+          [os.path.join(DISK_DIR, "disk.h"), os.path.join(LOADER_DIR, "loader.h"),
+           os.path.join(HW_DIR, "hw.h")]
 CACHE = os.path.join(tempfile.gettempdir(), "carnevil-loader-driver")
 TIMEOUT = 120
 
@@ -69,32 +74,33 @@ A_DATA = pattern(A_SIZE, 5)
 A_TIME, A_DATE = 0x7BEE, 0x254E  # fs_partition's date/time word 0x254E7BEE
 
 
-def build_driver():
-    """Path of the loader driver binary. Raises unittest.SkipTest without `cc`."""
+def build_driver(driver=DRIVER, name="loader_driver"):
+    """Path of the binary of `driver` (the loader driver by default) linked with SOURCES.
+    Raises unittest.SkipTest without `cc`."""
     cc = charness._cc()
     flags = charness.CFLAGS + charness.RUNTIME_WARNINGS + charness.SANITIZE
-    includes = ("-I", charness.INCLUDE, "-I", DISK_DIR, "-I", LOADER_DIR)
+    includes = ("-I", charness.INCLUDE, "-I", DISK_DIR, "-I", LOADER_DIR, "-I", HW_DIR)
     h = hashlib.sha256()
     st = os.stat(os.path.realpath(cc))
-    h.update(f"{os.path.realpath(cc)}\0{st.st_size}\0{st.st_mtime_ns}\0".encode())
+    h.update(f"{os.path.realpath(cc)}\0{st.st_size}\0{st.st_mtime_ns}\0{name}\0".encode())
     h.update("\0".join(flags).encode())
-    for path in SOURCES + [DRIVER] + HEADERS:
+    for path in SOURCES + [driver] + HEADERS:
         with open(path, "rb") as f:
             h.update(path.encode() + b"\0" + hashlib.sha256(f.read()).digest())
     out = os.path.join(CACHE, h.hexdigest()[:32])
-    exe = os.path.join(out, "loader_driver")
+    exe = os.path.join(out, name)
     if os.path.exists(exe):
         return exe
     os.makedirs(CACHE, exist_ok=True)
     tmp = tempfile.mkdtemp(dir=CACHE, prefix="build-")
     try:
         objs = []
-        for i, src in enumerate(SOURCES + [DRIVER]):
+        for i, src in enumerate(SOURCES + [driver]):
             obj = os.path.join(tmp, f"{i}-{os.path.basename(src)}.o")
             charness._cc_run([cc, *flags, *includes, "-c", src, "-o", obj])
             objs.append(obj)
         charness._cc_run([cc, *charness.SANITIZE, *objs, "-lm",
-                          "-o", os.path.join(tmp, "loader_driver")])
+                          "-o", os.path.join(tmp, name)])
         try:
             os.rename(tmp, out)
         except OSError:  # another process built the same key first
@@ -231,12 +237,10 @@ class LoaderTest(LoaderTestCase):
 
     def test_open_pci_is_6(self):
         """open("pci:", 2) at the hand-off returns 6 with v1 = 4 * fd (sections 1 and 8,
-        measured in loader-calls.md); its ioctl is the next task's placeholder."""
+        measured in loader-calls.md); its ioctls are tests/test_hw.py's."""
         out, _ = self.drive(open_("pci:", 2) + ["desc 6"])
         self.assertEqual(out.rets(), [(6, 24)])
         self.assertEqual(out.all("desc"), [["03"]])
-        self.stops(open_("pci:", 2) + [ioctl(6, 0x7301, BUF)], "not implemented yet",
-                   "0x7301", f"ra 0x{CALLER_RA:08X}")
 
     def test_open_nosuchfile(self):
         """open("nosuchfile", 0) returns -1, leaves the descriptor free, and upper-cases the
@@ -451,13 +455,6 @@ class LoaderTest(LoaderTestCase):
         self.stops([ioctl(5, 0x7400, BUF)], "0x7400", "fd 5", f"ra 0x{CALLER_RA:08X}")
         self.stops([call(0x0C9)], "0x0C9", "not a loader slot")
         self.stops([call(0x240)], "0x240", "not a loader slot")
-
-    def test_next_task_slots(self):
-        """The 9 slots of the next task stop with a placeholder message naming the slot."""
-        for slot in (0x0F0, 0x0F8, 0x108, 0x110, 0x118, 0x128, 0x158, 0x1D8, 0x220):
-            with self.subTest(slot=hex(slot)):
-                self.stops([call(slot, 1, 2, 3, 4)], f"slot 0x{slot:03X}",
-                           "is not implemented yet", f"ra 0x{CALLER_RA:08X}")
 
     def test_exit_exec(self):
         """_exit (slot 0x0D8) stops naming the status; exec (0x198) stops naming the file."""

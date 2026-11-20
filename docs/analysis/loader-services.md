@@ -1106,9 +1106,11 @@ file in `mame/m2-facts/` on the share.
    from the enable write that depends only on the chain's shape (to within one cycle): 8,545
    cycles for 28 records, 37,054 for 126, 57,127 for 195, 81,563 for 279, 167,963 for 576 and
    1,079,381 (7.20 ms) for the 386-record chain. These fit about 400 cycles plus 291 per record
-   for the small records, plus about 2.36 cycles per byte of the large ones (inferred from the
-   fit; MAME's GT64010 DMA timing was not read). The descriptors are logged; the source data
-   they copy is not.
+   for the small records, plus about 2.54 cycles per byte of the large ones (inferred from the
+   fit; MAME's GT64010 DMA timing was not read; corrected from 2.36 on 2026-11-20, which left
+   about 74,000 cycles of the 386-record chain unexplained, and given in nanoseconds with its
+   error in `hardware-usage.md`, "Measured values the runtime answers with"). The descriptors
+   are logged; the source data they copy is not.
 9. **Break hooks.** Breakpoints on 0x800C4DA0 and 0x800C4E68 (were they ever hit? run 3 did not
    say) and, if hit, the frame + 0x110 before and after. Settles whether the hooks advance the
    PC or reboot.

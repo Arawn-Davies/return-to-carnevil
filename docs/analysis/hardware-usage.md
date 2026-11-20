@@ -540,6 +540,86 @@ This is a result: the runtime must give it readable CMOS at 0xB6100000 with one 
 word (Recommendation 1). Everything else matches the static census's negatives, for attract
 mode.
 
+## Measured values the runtime answers with
+
+The values the runtime's bus and loader stand-ins give the game (`runtime/hw`,
+`runtime/core/bus.c`, `runtime/loader/slots.c` and `dev_sysctrl.c`), each from a file of
+`mame/m2-facts/` on the share (run A of `tools/mame/README.md`, "M2 facts": facts-A2, blank
+NVRAM, no input; the Voodoo file covers the first 15 s after the entry, the others 150 s).
+The code cites the paragraph of each constant.
+
+**Gun** (measured, `inputs.txt`). With no input every byte read of a gun register returned
+one value: 0x00 at 0x16800000 (7,788 reads), 0x48 at 0x16800004 (38,940), 0x00 at
+0x16800008 (7,788), 0x02 at 0x1680000C (7,788), 0x00 at 0x16800010 (7,788), 0x48 at
+0x16800014 (31,152), 0x00 at 0x16800018 (7,788) and 0x02 at 0x1680001C (7,788). The reads are
+`lbu` (0x800D4FE0 and on) and the writes `sb` (0x800D50C0, read).
+
+**0x17F00000** (measured, `inputs.txt` and the raw `debug.log` of facts-A2). The game read it
+once with `lb` at 0x800D4BA0 and got 0x0E, then wrote it once with `sb` at 0x800D4BC4 with
+0x1E, the value read with bit 4 set (`ori` 0x10 at 0x800D4BBC, read); both at frame 620. The
+watchpoint's pcs, 0x800D4BA4 and 0x800D4BC8, are the next pcs, which is how the read and the
+write are told apart.
+
+**Sound FIFO** (read). The game's 512 writes (measured above) are the `sw` at 0x8013FF98.
+
+**PCI configuration** (measured, `voodoo-reads.txt`, the 44 PCI slot calls). Device 8 read
+0x0001121A for configuration word 0 (byte offsets 0 and 2, twice), 0x00000002 for word 2
+(twice) and 0x08000008 for word 4, BAR0, once, after slot 0x110 had written 0x08000000 there.
+No other word of any device was read through slot 0x0F0. The game wrote word 1 (2, twice),
+the words at byte offsets 0x44, 0x48 and 0xE0 (0 each), 0xC0 (1, later 0) and 0x40,
+initEnable (1 once, then 3 six times and 5 five times, alternating). The vendor probes of
+devices 6, 7 and 9 returned 0. Inferred: word 4 reads back the base with the memory BAR's
+type bits (bit 3, prefetchable); this is the one point measured.
+
+**Voodoo registers the game read** (measured, `voodoo-reads.txt`), and the kind of each in the
+runtime's sink:
+- status (0x000), 604,082 reads, kind 2 (computed). 596,461 returned 0x0FFFF03F (PCI FIFO
+  free 0x3F, memory FIFO free 0xFFFF, not busy, no swap pending) and 5,815 0x0FFFF07F (the
+  same with bit 6, vertical retrace); the remaining 1,806 showed busy or swap-pending
+  states (0x0FFFF3BD, 0x0F1217B8, 0x1F1217B7 and others). The sink answers 0x0FFFF03F, with
+  bit 6 for the first 252,737 ns of each VBLANK period. That length is measured: in the
+  148 frames from 6.58 s to 9.30 s, which the game polled densely, the bit stayed set at
+  least 251,354 ns (first to last set read) and at most 254,120 ns (the clear reads either
+  side); the sink takes the middle. Those frames were 18,476,186 to 18,476,194 ns apart,
+  0.05% longer than the runtime's VBLANK period (inferred: the card's own video timing; the
+  sink follows the runtime's VBLANK so that a wait for the bit agrees with the interrupt).
+- fbzColorPath 0x104, fogMode 0x108, alphaMode 0x10C, fbzMode 0x110, lfbMode 0x114,
+  clipLeftRight 0x118, clipLowYHighY 0x11C, stipple 0x140, color0 0x144, color1 0x148: one
+  read each at 9.29 s (0x80161AF0 to 0x80161BC4), returning 0, 0, 0, 0x4200, 0, 0x190, 0x100,
+  0, 0, 0. Kind 1 (storage; inferred from their being plain mode registers the game wrote
+  earlier). Their values before any write are not measured.
+- fbiInit4 0x200 (5 reads), fbiInit0 0x210 (22), fbiInit1 0x214 (30), fbiInit3 0x21C (9):
+  kind 1. The first reads returned 0x00000001, 0x00000410, 0x00201102 and 0x001E4000; the
+  sink starts them there (inferred: no game write came before them; fbiInit1's and
+  fbiInit3's came before the game set initEnable). Later reads returned values consistent
+  with the game's read-modify-write sequences (for example fbiInit0 0x410, 0x416, 0x412).
+- fbiInit2 0x218 (36 reads): kind 1 while initEnable bit 2 is clear (27 reads, the first
+  0x80000040, which the sink starts it at), kind 3 while it is set: exactly the 9 reads made
+  between an initEnable write of 5 and the next of 3 returned single bytes, 0x79, 0x79, 0x55,
+  0x55, 0x71, 0x71 and three of 0x00, and no other register was read in those windows.
+  Inferred: bit 2 remaps fbiInit2 onto the DAC's read data, which depends on the game's
+  dacData writes. Those writes are not in any capture, so the sink does not model the DAC
+  and such a read stops; for want of evidence, so does a read of fbiInit3 while bit 2 is set.
+
+**Voodoo frame buffer reads** (measured, `voodoo-reads.txt`). Of the 8,237 LFB reads, 9 read
+back the memory-test patterns the game had written with 16-bit LFB writes (0xFFFF at
+0x08432100, 0xDEAD at 0x08432064, 0xAA55 at 0x084DA164, three times each); the other 8,228
+were word reads of 0x08400000, 0x08400004, 0x08400800, 0x08400804, 0x08401000, 0x08401004,
+0x08401800 and 0x08401804 (0x8015B384 to 0x8015B954, from 6.55 s) that returned colour ramps
+(0x00000000, 0x00200000, 0x08210020 and on) no LFB write had stored. Inferred: pixels the card
+drew and the game read back. The sink draws nothing, so a read of an LFB byte never written
+stops.
+
+**GT64010 DMA channel 0** (measured, `dma0.txt`; the fit is inferred). Every one of the
+1,376,343 records of the 3,580 chains has a word count and word-aligned addresses; 575,067
+write Voodoo registers (275,872 of them through address bit 21, the alternate register map),
+797,696 the frame buffer (0x640 bytes each) and 3,580 RAM. The time from the enable write to
+the cause-bit-4 handler is, to within 5 ns (0.002%) for every start, 2,663.890 ns plus
+1,939.399 ns per record that does not write the frame buffer plus 16.946 ns per frame-buffer
+byte: a least-squares fit to the eight chain shapes (28, 126, 195, 279, 564, 571 and 576
+small records, and 130 small with 256 large). The data cannot tell a cost per large record
+from one per large byte, since every large record has 0x640 bytes.
+
 ## Constants that are not addresses
 
 Every KSEG0/KSEG1 constant at or above physical 0x08000000 in reached code either classifies

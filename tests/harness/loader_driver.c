@@ -27,7 +27,8 @@
  *   state                "m STATUS CAUSE_IP INTCTL NOW FCSR VBLANK_PERIOD"
  *   handlers             "handlers LINE0 .. LINE7 GT4 FPE0 .. FPE5 BREAK7 BREAK6 GTMASK"
  *   atstop               rt_at_stop of a function that prints "at_stop" on stderr
- * The bus stops (rt_stop) naming the address: a guest pointer outside RAM ends the run there.
+ * The bus is the runtime's (runtime/core/bus.c, with runtime/hw): a guest pointer outside RAM
+ * and outside the devices it models stops (rt_stop) naming the address.
  *
  * recomp_lookup knows two functions: PROBE (0x80300000), which prints "probe A0 A1 A2 SP
  * STATUS NOW" and returns, and the stub thunk of slot 0x0C8 (ioctl, at 0x800C4154), whose
@@ -56,19 +57,6 @@ static _Noreturn void die(const char *what, const char *detail)
 }
 
 /* --- what the runtime needs that it does not provide ------------------------------------- */
-
-uint32_t bus_read(cpu_t *c, uint32_t addr, int size)
-{
-    (void)c;
-    rt_stop(RT_STOP_STATUS, "bus read of %d bytes at 0x%08" PRIX32, size, addr);
-}
-
-void bus_write(cpu_t *c, uint32_t addr, int size, uint32_t value)
-{
-    (void)c;
-    rt_stop(RT_STOP_STATUS, "bus write of %d bytes at 0x%08" PRIX32 " (0x%" PRIX32 ")", size,
-            addr, value);
-}
 
 void rt_host_switch(uint8_t *r, cpu_t *c, int kind)
 {

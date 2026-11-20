@@ -10,8 +10,10 @@
  * The files: slots.c (rt_loader and the slot table, the handler registrations), fd.c (the
  * descriptor table, the name table, open/close/read/write/ioctl/isatty and the generic
  * ioctls), dev_file.c (the file driver and the file slots: find-first, unlink, rename,
- * lseek), and one file per device driver: dev_con.c, dev_cmos.c, dev_pic.c, dev_timer.c,
- * dev_ioasic.c.
+ * lseek), diskslots.c (the partition and raw sector slots and the disk hooks), and one file
+ * per device driver: dev_con.c, dev_cmos.c, dev_pic.c, dev_timer.c, dev_ioasic.c,
+ * dev_sysctrl.c (`pci:`, the GT64010 and its DMA channel 0). The PCI configuration slots are
+ * in slots.c, over the Voodoo's configuration space (runtime/hw/hw.h).
  *
  * Every request the documents do not show the game making (a slot that is not one of the
  * 29, an ioctl command section 3 does not list, a command on a driver that does not have it,
@@ -42,8 +44,9 @@
 /* loader_reset: descriptors 0 to 5 open as at the hand-off (section 7) and the rest free,
  * every file handle closed, the CMOS blank (every byte 0xFF) at position 0xB6100000 with no
  * file behind it, timers 1 to 3 not started, the input ports at their no-input values, no
- * console hook. For tests and
- * for the start of a run; machine_reset does not call it. */
+ * console hook, the GT64010 DMA channel idle with no register written, partition 1
+ * selected, no disk callback and no disk hooks. For tests and for the start of a run;
+ * machine_reset does not call it, and it does not call hw_reset. */
 void loader_reset(void);
 
 /* loader_set_console_hook: fn (or NULL) is called with every console write (fd and bytes),
@@ -144,8 +147,25 @@ void ld_slot_findfirst(cpu_t *c);
 void ld_slot_unlink(cpu_t *c);
 void ld_slot_rename(cpu_t *c);
 void ld_slot_lseek(cpu_t *c);
+/* The disk slots (diskslots.c): 0x118, 0x128, 0x158, 0x1D8, 0x220. */
+void ld_slot_disk_select(cpu_t *c);
+void ld_slot_disk_table(cpu_t *c);
+void ld_slot_disk_read(cpu_t *c);
+void ld_slot_disk_callback(cpu_t *c);
+void ld_slot_disk_info(cpu_t *c);
 /* open as slot 0x088 does it, for creat too: the fd, or -1. */
 int ld_open(uint32_t name, uint32_t mode);
+
+/* The partition table copy slot 0x128 hands out (diskslots.c says why this address), and the
+ * return address the disk callbacks are called with (the loader's IDE completion path, where
+ * MAME showed them returning to: loader-services.md, open question 5). */
+#define LD_PART_TABLE 0x800B7160u
+#define LD_DISK_CALLBACK_RA 0x800124D4u
+
+/* dma0_delay_ns: the time from the start of a GT64010 DMA channel 0 chain to its completion
+ * interrupt (dev_sysctrl.c gives the model and its fit), for a chain of n_other records that
+ * do not write the frame buffer and lfb_bytes bytes of records that do. */
+uint64_t dma0_delay_ns(uint32_t n_other, uint64_t lfb_bytes);
 
 /* Each driver's state to its start-up value, for loader_reset. */
 void ld_fd_reset(void);
@@ -153,5 +173,7 @@ void ld_con_reset(void);
 void ld_cmos_reset(void);
 void ld_timer_reset(void);
 void ld_ioasic_reset(void);
+void ld_sysctrl_reset(void);
+void ld_disk_reset(void);
 
 #endif
