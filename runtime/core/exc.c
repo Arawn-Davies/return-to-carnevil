@@ -64,7 +64,7 @@ void rt_at_stop(void (*fn)(void))
 /* --- exceptions other than interrupts --------------------------------------------------- */
 
 /* What an FP trap's stop messages say about the pc they name (see rt_fp_trap). */
-#define FP_PC_NOTE " (pc as last stored, exact only in a --trace-pc build)"
+#define FP_PC_NOTE " (the dividing instruction)"
 
 /* After exc_raise for what (a description) at epc: returns when the resume pc is epc + 4. */
 static void resume_next(const char *what, uint32_t epc, const char *pc_note, uint32_t resume)
@@ -160,11 +160,12 @@ void rt_break(uint8_t *ram, cpu_t *c, uint32_t pc, uint32_t code)
     }
 }
 
-/* rt_fp_trap (recomp.h): FP exception, code 15, at c->pc. c->pc is exact only in the
- * interpreter and in generated code built with --trace-pc; elsewhere it is the pc last
- * stored, which the messages say. A handler that skips the instruction lets the division go
- * on with its IEEE result, where the board would leave the destination unwritten; the game's
- * catch-all never returns, so that difference is not reached. */
+/* rt_fp_trap (recomp.h): FP exception, code 15, at c->pc, which is the dividing instruction's
+ * address in both modes: the interpreter stores every instruction's pc, and the generated
+ * code stores it before each FP divide (carnevil_tools/recomp.py). A handler that skips the
+ * instruction lets the division go on with its IEEE result, where the board would leave the
+ * destination unwritten; the game's catch-all never returns, so that difference is not
+ * reached. */
 void rt_fp_trap(cpu_t *c, uint32_t cause_bit)
 {
     char what[64];

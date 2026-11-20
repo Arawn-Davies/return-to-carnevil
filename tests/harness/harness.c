@@ -26,9 +26,9 @@
  *   call bus_write ADDR SIZE VALUE
  *   call loader SLOT
  *   call break PC CODE
- *   call tick R0 .. R31    rt_tick, with the general registers at the check point
+ *   call tick PC R0 .. R31 rt_tick, with c->pc and the general registers at the check point
  *   call host_switch KIND SP
- *   call fp_trap CAUSE
+ *   call fp_trap CAUSE PC  rt_fp_trap, with c->pc (the dividing instruction's address)
  *   unrecompiled ADDR      rt_log_unrecompiled
  *   then the state after the case:
  *   r R0 .. R31
@@ -205,7 +205,7 @@ static int32_t slice_reload = HARNESS_SLICE;
 void rt_tick(uint8_t *ram, cpu_t *c)
 {
     (void)ram;
-    fputs("call tick", stdout);
+    printf("call tick %08" PRIX32, c->pc);
     for (int i = 0; i < 32; i++)
         printf(" %08" PRIX32, c->r[i]);
     putchar('\n');
@@ -220,8 +220,7 @@ void rt_host_switch(uint8_t *ram, cpu_t *c, int kind)
 
 void rt_fp_trap(cpu_t *c, uint32_t cause_bit)
 {
-    (void)c;
-    printf("call fp_trap %08" PRIX32 "\n", cause_bit);
+    printf("call fp_trap %08" PRIX32 " %08" PRIX32 "\n", cause_bit, c->pc);
 }
 
 /* Returning lets the interpreter stop with its own message naming the address. */

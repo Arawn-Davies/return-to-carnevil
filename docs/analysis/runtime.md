@@ -102,8 +102,11 @@ of the same image give byte-identical traces (`tests/test_boot.py`, `test_determ
 
 - The unit is the check point. The generated code runs `RT_CHECK` at every function entry and
   before every backward branch inside a function ([recompiler](recompiler.md)); `RT_CHECK`
-  decrements `c->slice` and calls `rt_tick` when it reaches 0. Each check is worth
-  `VCLOCK_NS_PER_CHECK` = 100 ns (`machine.h`).
+  decrements `c->slice` and, when it reaches 0, stores the check point's address in `c->pc`
+  (the function's address at an entry, the target at a back edge) and calls `rt_tick`, so an
+  interrupt delivered there records that address as its resume pc and EPC, the same in
+  generated code and in the interpreter. Each check is worth `VCLOCK_NS_PER_CHECK` = 100 ns
+  (`machine.h`).
 - `machine.now` is the time at the last accounting. `vclock_now(c)` adds the checks of the
   current slice used so far, so a device reads the exact time of the access.
 - Events (`vclock_at`, `vclock_cancel`) are kept sorted by time, then by the order they were
@@ -178,8 +181,11 @@ the game's own code, called through `rt_call`.
 - **`rt_fp_trap`**: an FP divide by zero with the FCSR enable set (the game sets it through
   slot 0x1E8) raises code 15 at `c->pc`, and the default calls the FPU handler of each FCSR
   cause bit. The game's catch-all then jumps to the reset vector, and `rt_bad_target` stops:
-  "game jumped to the reset vector". `c->pc` is exact only in a build made with
-  `--trace-pc`; elsewhere it is the pc last stored, and every message that names it says so.
+  "game jumped to the reset vector". `c->pc` is there the dividing instruction's address in
+  every build: the generated code stores it before each FP divide, and the interpreter at
+  every instruction. Where the pc is still only as last stored (a bus access, a loader call, a
+  host switch, a transfer outside RAM in generated code built without `--trace-pc`), the
+  message that names it says so.
   In MAME's attract and play runs the break hooks and the catch-all never ran (measured,
   `breaks.txt`).
 

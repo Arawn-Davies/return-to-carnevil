@@ -111,10 +111,12 @@ void rt_tick(uint8_t *ram, cpu_t *c)
     vclock_account(c);
     vclock_run_due();
     if (irq_deliverable()) {
+        /* c->pc is the check point's own address, stored by RT_CHECK just before this call
+         * (recomp.h): where the interrupted code goes on, the frame's resume pc and EPC */
         uint32_t epc = c->pc, resume = exc_raise(ram, c, 0, epc);
         if (resume != epc)
-            rt_stop(RT_STOP_STATUS, "an interrupt handler moved the resume pc from 0x%08X to "
-                    "0x%08X (pc as last stored): the runtime resumes only where it was "
+            rt_stop(RT_STOP_STATUS, "an interrupt handler moved the resume pc from 0x%08X (the "
+                    "interrupted check point) to 0x%08X: the runtime resumes only where it was "
                     "interrupted", (unsigned)epc, (unsigned)resume);
         vclock_account(c);
         vclock_run_due();

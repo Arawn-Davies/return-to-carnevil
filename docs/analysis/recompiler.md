@@ -27,11 +27,14 @@ writes:
   `jr`s left to `rt_jump`.
 
 That is 248,732 lines and 7,991,703 bytes of C in all (M1 left 2 functions to the interpreter
-and wrote 248,659 lines and 7,987,844 bytes). Two runs give identical bytes.
+and wrote 248,659 lines and 7,987,844 bytes). Two runs give identical bytes. Since the check
+points carry their address and the FP divides store the pc (below; the whole-branch review of
+M2, finding I3), the `*.c` files and `funcs.h` hold 249,055 lines and 8,041,049 bytes.
 
 `--trace-pc` (off by default) adds `c->pc = <address>;` before each load and store and before
 the call of each `jal` and `jalr`, so a runtime can name the guest instruction that made a bus
-access or a call. Without it the output is what it was before the option existed.
+access or a call. Without it the only stores of `c->pc` are the two every build has: on the
+slow path of each check point, and before each FP divide.
 
 Each MIPS function becomes one C function, `void fn_<ADDR>(uint8_t *ram, cpu_t *c)`, named
 after its address in eight upper-case hexadecimal digits, with the analysis name in a comment.
@@ -63,8 +66,10 @@ The generated C, the interpreter and any runtime share one header.
 - **The CPU** (`cpu_t`): 32 general registers of 32 bits (reached code has no 64-bit integer
   instruction), `hi`, `lo`, 32 FP register halves (FR = 0: a single is one half; a double in
   even register n is half n, low word, and half n + 1), FCSR without its condition bits, the 8
-  condition bits apart in `fcc`, the PC (kept by the interpreter, and by generated code built
-  with `--trace-pc`), `slice`, the check points left until the runtime's clock is next
+  condition bits apart in `fcc`, the PC (kept at every instruction by the interpreter; in
+  generated code stored at a check point that ticks and before an FP divide, and at loads,
+  stores and calls only when built with `--trace-pc`), `slice`, the check points left until
+  the runtime's clock is next
   advanced (below), and a pointer for the runtime's own data.
 - **Memory**: `mem_r8`, `mem_r16`, `mem_r32` (zero-extended; the caller sign-extends) and
   `mem_w8`, `mem_w16`, `mem_w32`. An access is RAM when it lies in kseg0 (0x80000000) or kseg1
@@ -102,8 +107,10 @@ The generated C, the interpreter and any runtime share one header.
   environment is the process's (per thread), and only `rt_set_fcsr` sets it, so a runtime
   that loads a state or switches host context or thread re-applies it with
   `rt_set_fcsr(c, rt_get_fcsr(c))`.
-- **`RT_CHECK(ram, c)`**: `if (--c->slice <= 0) rt_tick(ram, c);`. Time is counted in check
-  points: the runtime's clock advances by the checks used whenever `slice` runs out.
+- **`RT_CHECK(ram, c, at)`**: `if (--c->slice <= 0) { c->pc = at; rt_tick(ram, c); }`. Time
+  is counted in check points: the runtime's clock advances by the checks used whenever
+  `slice` runs out. `at` is the address execution goes on at after the check (below); it is
+  stored only on the slow path, so the fast path is what it was.
 
 Every C file is built with `-std=c11 -O2 -ffp-contract=off -frounding-math
 -fno-strict-aliasing -fwrapv`, never `-ffast-math`. `-ffp-contract=off` stops the compiler
@@ -158,6 +165,9 @@ and runs all 152 function captures through it (both modes for the impure ones).
 - **FP divide**: `div.s`, `div.d` and `recip.s` call `rc_div_s` or `rc_div_d`, which call
   `rt_fp_trap(c, 1 << 15)` (the FCSR cause bit of divide by zero) when the divisor is zero, the
   dividend finite and non-zero and the FCSR enable bit 10 set, then return the IEEE result.
+  The generated code stores the instruction's address in `c->pc` before each of them (320
+  stores in the game's code), as the interpreter does at every instruction, so the trap is
+  raised with the dividing instruction's address in both modes.
 - **Interrupt check points**: `RT_CHECK` at the entry of every function but the stub thunks
   (and of `interp_run`), and before a backward transfer that stays inside the current
   function: a `goto` to an address at or below the transferring instruction (3,161 checks in
@@ -168,7 +178,15 @@ and runs all 152 function captures through it (both modes for the impure ones).
   calls (a branch to it, a fall-through off the end, a jump to a start the interpreter's
   lookup does not know): there the C makes one more check, the callee's entry. Each check
   counts one unit of the runtime's clock; an interrupt is delivered at the check where `slice`
-  reaches 0, so it is only ever delayed to a check point, never lost.
+  reaches 0, so it is only ever delayed to a check point, never lost. A check that ticks
+  stores the address execution goes on at in `c->pc` first, the same in both modes: the
+  function's address at an entry check, the target at a backward-transfer check. That is the
+  resume pc and EPC the interrupt frame records (`tests/test_clock_irq.py`,
+  `CheckPointPcTest`, compares the frame in both modes; `tests/test_recomp.py` and
+  `tests/test_interp.py` compare the pc `rt_tick` sees). Until the whole-branch review of M2
+  (finding I3, 2026-11-20) the generated code never stored it, so every frame recorded the
+  game's entry address 0x800C4000, and the interpreter recorded the pc of the instruction it
+  ran last (the caller's delay slot at an entry, the branch's delay slot at a back edge).
 
 ## The reference interpreter
 

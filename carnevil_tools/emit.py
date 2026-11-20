@@ -310,3 +310,6 @@ def statement(insn, addr):
 STRAIGHT = frozenset(_STRAIGHT)
 # The loads and stores among them (the instructions that touch memory or the bus).
 ACCESSES = frozenset(_MEMORY) - {"cache"}
+# The FP divides: the instructions that go through recomp.h's divide seam (rc_div_s,
+# rc_div_d), so may call rt_fp_trap.
+DIVIDES = frozenset(("div.s", "div.d", "recip.s"))

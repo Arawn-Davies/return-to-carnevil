@@ -29,7 +29,9 @@ typedef struct cpu {
     uint32_t fpr[32];
     uint32_t fcsr;  /* FCSR without its condition bits (FCSR bits 23 and 25..31 are 0 here) */
     uint8_t fcc;    /* bit n is FP condition code n */
-    uint32_t pc;    /* kept by the interpreter, and by generated code built with --trace-pc */
+    uint32_t pc;    /* the guest pc as last stored: exact at an interrupt check point that ticks
+                     * and at an FP divide in both modes, everywhere in the interpreter, and at
+                     * loads, stores and calls only in generated code built with --trace-pc */
     int32_t slice;  /* check points left until RT_CHECK calls rt_tick (below) */
     void *rt;       /* the runtime's own data */
 } cpu_t;
@@ -95,7 +97,9 @@ enum { RT_SWITCH_RESUME, RT_SWITCH_YIELD, RT_SWITCH_EXIT };
 void rt_host_switch(uint8_t *ram, cpu_t *c, int kind);
 
 /* rt_fp_trap: the FP exception the board raises, with cause_bit its FCSR cause bit (1 << 15,
- * divide by zero, is the only one raised: by rc_div_s and rc_div_d below). The runtime does
+ * divide by zero, is the only one raised: by rc_div_s and rc_div_d below), and c->pc the
+ * dividing instruction's address (the interpreter stores every instruction's pc, the
+ * generated code stores it before each div.s, div.d and recip.s). The runtime does
  * not return from it: on the board the game's catch-all handler runs and ends at the reset
  * vector. A test or stub runtime that does return gets the IEEE result of the operation. */
 void rt_fp_trap(cpu_t *c, uint32_t cause_bit);
@@ -160,11 +164,20 @@ extern void (*rt_log_unrecompiled)(uint32_t addr);
  * runs on inline into another function's start that generated C calls (a branch to it, a
  * fall-through off the end, a jump to an unregistered start), the counts differ by that entry
  * check. Each check counts one unit of the runtime's clock; an interrupt is delivered at the
- * check where slice reaches 0. */
-#define RT_CHECK(ram, c)                                                                    \
+ * check where slice reaches 0.
+ *
+ * at is the guest address execution goes on at after the check, which is the resume pc an
+ * interrupt delivered there records (frame + 0x110 and EPC): the function's own address at
+ * an entry check, the transfer's target at a backward-transfer check. It is stored in c->pc
+ * only on the slow path, just before rt_tick, so the fast path costs one decrement and one
+ * compare as before. The interpreter passes the same addresses, so rt_tick sees the same
+ * c->pc in both modes. */
+#define RT_CHECK(ram, c, at)                                                                \
     do {                                                                                    \
-        if (--(c)->slice <= 0)                                                              \
+        if (--(c)->slice <= 0) {                                                            \
+            (c)->pc = (at);                                                                 \
             rt_tick((ram), (c));                                                            \
+        }                                                                                   \
     } while (0)
 
 /* --- provided by runtime/interp ------------------------------------------------------- */

@@ -19,7 +19,10 @@
  * A control transfer in a delay slot is an error. Interrupt check points (RT_CHECK, see
  * recomp.h): at entry, and after the delay slot of a taken branch or jump that continues in
  * this run at an address at or below its own; a jump that leaves through rt_call or
- * rt_host_switch does not check (the callee's entry does).
+ * rt_host_switch does not check (the callee's entry does). A check that ticks stores the
+ * address execution goes on at in c->pc first (the entry's address, the target), as the
+ * generated code does; elsewhere c->pc is the instruction being run (a delay slot's own
+ * address while the slot runs).
  */
 #include <stdarg.h>
 #include <stdio.h>
@@ -386,7 +389,7 @@ static void delay_slot(uint8_t *ram, cpu_t *c, uint32_t pc)
 void interp_run(uint8_t *ram, cpu_t *c, uint32_t pc)
 {
     note_entry(pc);
-    RT_CHECK(ram, c);
+    RT_CHECK(ram, c, pc);
     for (;;) {
         uint32_t w = fetch(ram, c, pc), target;
         int taken, likely;
@@ -414,7 +417,7 @@ void interp_run(uint8_t *ram, cpu_t *c, uint32_t pc)
         switch (x) {
         case X_BRANCH:
             if (taken && target <= pc)
-                RT_CHECK(ram, c);
+                RT_CHECK(ram, c, target);
             pc = taken ? target : pc + 8;
             break;
         case X_CALL:
@@ -429,7 +432,7 @@ void interp_run(uint8_t *ram, cpu_t *c, uint32_t pc)
                 return;
             }
             if (target <= pc)
-                RT_CHECK(ram, c);
+                RT_CHECK(ram, c, target);
             pc = target;
             break;
         }

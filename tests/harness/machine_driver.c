@@ -35,6 +35,8 @@
  *   advanceby NS         vclock_advance(c, NS) (decimal), then "advancedby NOW SLICE"
  *   state                the state
  *   run PC               interp_run from PC, then "ran" and the state
+ *   call PC              rt_call of PC (generated code when a linked file's extra_lookup
+ *                        knows it, otherwise the interpreter), then "ran" and the state
  *   break PC CODE        rt_break, then "returned" and the state
  *   raise CODE EPC       exc_raise, then "resume PC" and the state
  *   fptrap BIT           rt_fp_trap(c, BIT), then "returned" and the state
@@ -48,7 +50,13 @@
  * The state is the lines "r R0 .. R31", "hilo HI LO", "fpr F0 .. F31", "fcsr X" (as cfc1
  * reads it) and "m STATUS CAUSE_IP INTCTL GT_CAUSE NOW SLICE PC".
  *
- * PROBE (0x80300000) prints "probe A0 A1 A2 SP STATUS NOW" and returns, changing nothing.
+ * PROBE (0x80300000) prints "probe A0 A1 A2 SP STATUS NOW RESUME EPC" and returns, changing
+ * nothing: RESUME and EPC are the frame's words at + 0x110 and + 0x188 (meaningful when the
+ * probe runs as a handler).
+ *
+ * A test may link one more file defining extra_lookup (the weak default here returns NULL):
+ * recomp_lookup then also finds the generated functions it knows, so "call" runs them as
+ * recompiled code.
  */
 #include <inttypes.h>
 #include <stdio.h>
@@ -107,14 +115,22 @@ int rt_switch_kind(uint32_t pc)
 
 static void probe(uint8_t *r, cpu_t *c)
 {
-    (void)r;
     printf("probe %08" PRIX32 " %08" PRIX32 " %08" PRIX32 " %08" PRIX32 " %08" PRIX32
-           " %" PRIu64 "\n", c->r[4], c->r[5], c->r[6], c->r[29], m_status(), vclock_now(c));
+           " %" PRIu64 " %08" PRIX32 " %08" PRIX32 "\n", c->r[4], c->r[5], c->r[6], c->r[29],
+           m_status(), vclock_now(c), frame_r32(r, 0x110), frame_r32(r, 0x188));
+}
+
+/* The default when no linked file defines it: no generated code. */
+recomp_fn extra_lookup(uint32_t addr) __attribute__((weak));
+recomp_fn extra_lookup(uint32_t addr)
+{
+    (void)addr;
+    return NULL;
 }
 
 recomp_fn recomp_lookup(uint32_t addr)
 {
-    return addr == PROBE ? probe : NULL;
+    return addr == PROBE ? probe : extra_lookup(addr);
 }
 
 /* --- events and stop functions ----------------------------------------------------------- */
@@ -323,6 +339,10 @@ int main(void)
             irq_set_vblank_hook(vblank_hook);
         } else if (strcmp(key, "run") == 0) {
             interp_run(ram, &cpu, hex());
+            puts("ran");
+            print_state();
+        } else if (strcmp(key, "call") == 0) {
+            rt_call(ram, &cpu, hex());
             puts("ran");
             print_state();
         } else if (strcmp(key, "break") == 0) {

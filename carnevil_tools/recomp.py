@@ -26,16 +26,20 @@ emitted here, with the order of the reference interpreter (runtime/interp/interp
   `rt_switch_kind`): the slot, `rt_host_switch(ram, c, RT_SWITCH_<KIND>)`, then for a resume
   (a `jr ra`) the code at addr + 8, for a yield or an exit (a `j`) `return`;
 - `break`: `rt_break(ram, c, addr, code)`, then the next instruction;
-- `RT_CHECK(ram, c)` at entry and, after the slot, before every `goto` to an address at or
-  below the transfer's own; never before a transfer that leaves through a call (the
-  callee's entry checks; see recomp.h);
+- `RT_CHECK(ram, c, <pc>)` at entry, with the function's address, and, after the slot,
+  before every `goto` to an address at or below the transfer's own, with the target; never
+  before a transfer that leaves through a call (the callee's entry checks; see recomp.h).
+  The address is the one the interpreter passes at the same check, and the resume pc an
+  interrupt delivered there records;
+- `c->pc = <addr>;` before each FP divide (emit.DIVIDES: `div.s`, `div.d`, `recip.s`), in
+  every build, so that rt_fp_trap raises with the dividing instruction's address;
 - a function whose code can run off its end calls the function starting there, then
   returns; `RecompileError` if none does;
 - a function in a stub block is a thunk whose body is the `rt_loader` call; a function the
   analysis lists as interpreted is a thunk whose body is `interp_run(ram, c, addr)` (its
   own words are never emitted or checked);
 - with trace_pc, `c->pc = <addr>;` before each load and store (emit.ACCESSES) and before the
-  call of each `jal` and `jalr` (after its slot); without it no line names c->pc.
+  call of each `jal` and `jalr` (after its slot); without it no other line stores c->pc.
 
 A control transfer in a delay slot, or an instruction outside the reached census, is a
 `RecompileError` naming its address.
@@ -148,7 +152,7 @@ class _Function:
     def transfer(self, target, at, what):
         """Lines that leave `at` for `target` for good (a goto or a call and return)."""
         if target in self.wordset:  # labelled by collect_labels
-            check = ["RT_CHECK(ram, c);"] if target <= at else []
+            check = [f"RT_CHECK(ram, c, {_u(target)});"] if target <= at else []
             return check + [f"goto {_label(target)};"]
         slot = self.stub_slot(target)
         if slot is not None:
@@ -184,6 +188,8 @@ class _Function:
             return [f"rt_break(ram, c, {_u(addr)}, {_u(insn.word >> 6 & 0xFFFFF)});"]
         try:
             lines = emit.statement(insn, addr)
+            if insn.mnemonic in emit.DIVIDES:  # the pc rt_fp_trap raises with, in every build
+                return [f"c->pc = {_u(addr)};"] + lines
             return self.trace(addr) + lines if insn.mnemonic in emit.ACCESSES else lines
         except emit.UnsupportedInstruction:
             raise RecompileError(addr, f"unsupported instruction {insn.mnemonic}") from None
@@ -266,7 +272,7 @@ class _Function:
         if not self.words or self.words[0] != self.fn.addr:
             raise RecompileError(self.fn.addr, "the function's first word is not reached code")
         self.collect_labels()
-        self.lines = ["    RT_CHECK(ram, c);"]
+        self.lines = [f"    RT_CHECK(ram, c, {_u(self.fn.addr)});"]
         nxt, last, i = None, None, 0
         while i < len(self.words):
             addr = self.words[i]

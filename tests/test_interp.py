@@ -222,7 +222,13 @@ class InterpTest(unittest.TestCase):
             cases.append(case)
         for case, (slice_, a0s), got in zip(cases, runs, self.assertSameInBothModes(cases)):
             self.assertEqual([call[0] for call in got.calls], ["tick"] * len(a0s), case.name)
-            self.assertEqual([call[1 + A0] for call in got.calls], a0s, case.name)
+            self.assertEqual([call[2 + A0] for call in got.calls], a0s, case.name)
+            # c->pc at each tick: the entry's address at the entry check (only slice (1, 1)
+            # ticks there), the back edge's target (the addiu) at the others
+            entry_ticks = 1 if slice_ == (1, 1) else 0
+            pcs = [vectors.CODE_BASE] * entry_ticks + [vectors.CODE_BASE + 4] * (
+                len(a0s) - entry_ticks)
+            self.assertEqual([call[1] for call in got.calls], pcs, case.name)
             self.assertEqual(got.r[A0], 0xFFFFFFFF)
 
     def test_fp_trap_seam(self):
@@ -247,21 +253,28 @@ class InterpTest(unittest.TestCase):
             ("recip-zero", recip, None, zero, FCSR_EZ, True, INF),
             ("recip-not-enabled", recip, None, zero, 0, False, INF),
         ]
+        # Each divide is the case's second instruction, so the pc rt_fp_trap sees (the
+        # dividing instruction's address, stored before it in both modes) is CODE_BASE + 4;
+        # the last case divides in the delay slot of a jr ra, at CODE_BASE + 8.
+        at = vectors.CODE_BASE + 4
         cases = []
         for name, word, fs, ft, fcsr, _t, _r in runs:
             fpr = {4: ft} if fs is None else {2: fs, 4: ft}
-            cases.append(_case(name, word, fpr=fpr, fcsr=fcsr))
-        cases.append(_case("d-one-by-zero", div_d, fpr={3: d_one}, fcsr=FCSR_EZ))
-        cases.append(_case("d-zero-by-zero", div_d, fcsr=FCSR_EZ))
+            cases.append(_case(name, NOP, word, fpr=fpr, fcsr=fcsr))
+        cases.append(_case("d-one-by-zero", NOP, div_d, fpr={3: d_one}, fcsr=FCSR_EZ))
+        cases.append(_case("d-zero-by-zero", NOP, div_d, fcsr=FCSR_EZ))
+        cases.append(_case("slot-one-by-zero", NOP, JR_RA, div_s, fpr={2: one, 4: zero},
+                           fcsr=FCSR_EZ))
         got = self.assertSameInBothModes(cases)
         for (name, _w, _fs, _ft, fcsr, trapped, result), state in zip(runs, got):
-            self.assertEqual(state.calls, [("fp_trap", CAUSE_Z)] if trapped else [], name)
+            self.assertEqual(state.calls, [("fp_trap", CAUSE_Z, at)] if trapped else [], name)
             if result is not None:
                 self.assertEqual(state.fpr[0], result, name)
             self.assertEqual(state.fcsr, fcsr, name)
-        self.assertEqual(got[-2].calls, [("fp_trap", CAUSE_Z)])
-        self.assertEqual((got[-2].fpr[0], got[-2].fpr[1]), (0, 0x7FF00000))
-        self.assertEqual(got[-1].calls, [])
+        self.assertEqual(got[-3].calls, [("fp_trap", CAUSE_Z, at)])
+        self.assertEqual((got[-3].fpr[0], got[-3].fpr[1]), (0, 0x7FF00000))
+        self.assertEqual(got[-2].calls, [])
+        self.assertEqual(got[-1].calls, [("fp_trap", CAUSE_Z, at + 4)])
 
     def test_flush_to_zero_when_fs_is_honoured(self):
         # built with RT_HONOUR_FS = 1: FS = 1 flushes, as the R5000 documents

@@ -652,6 +652,11 @@ class FunctionTest(RecompTestCase):
         for case, state in zip(cases, got):
             n = max(_s32(case.before.r[A0]), 1)
             self.assertEqual(_kinds(state.calls), ["tick"] * n, case.name)
+            # c->pc as rt_tick sees it: the function's address at the entry check, the back
+            # edge's target at each backward-branch check (compared with the interpreter's by
+            # assertSameAsInterpreter too)
+            self.assertEqual([call[1] for call in state.calls],
+                             [CODE] + [prog.at("loop")] * (n - 1), case.name)
         quiet = prog.cases("quiet", setup)
         for state in self.assertSameAsInterpreter(prog, quiet):
             self.assertEqual(state.calls, [])
@@ -691,6 +696,8 @@ class FunctionTest(RecompTestCase):
         for case, state in zip(cases, got):
             # entries: main, b1, f, b2, f, f
             self.assertEqual(_kinds(state.calls), ["tick"] * 6, case.name)
+            self.assertEqual([call[1] for call in state.calls],
+                             [CODE, prog.at("b1"), f, prog.at("b2"), f, f], case.name)
             self.assertEqual(state.r[V0], (case.before.r[V0] + 3) & _M32)
 
     def test_rt_check_at_backward_jump_table_case(self):
@@ -720,6 +727,8 @@ class FunctionTest(RecompTestCase):
         for case, state in zip(cases, got):
             n = max(_s32(case.before.r[A0]), 1)
             self.assertEqual(_kinds(state.calls), ["tick"] * n, case.name)
+            # the entry and the backward table case both go on at "top", the function's start
+            self.assertEqual([call[1] for call in state.calls], [CODE] * n, case.name)
 
     def test_rt_check_documented_exceptions(self):
         """A conditional branch to another function's start, and running off the end into

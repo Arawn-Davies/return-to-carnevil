@@ -46,10 +46,13 @@ MARK = 0xA5A5A5A5
 FCSR = 0x00800001  # condition code 0 and RM = 1, so both kinds of FCSR bit are carried
 
 
-def build_driver():
-    """Path of the machine driver binary. Raises unittest.SkipTest without `cc`."""
+def build_driver(generated=None):
+    """Path of the machine driver binary. Raises unittest.SkipTest without `cc`. generated:
+    C text of recompiled functions defining extra_lookup (machine_driver.c), linked in and
+    built with the generated code's warning flags."""
     cc = charness._cc()
     flags = charness.CFLAGS + charness.RUNTIME_WARNINGS + charness.SANITIZE
+    gen_flags = charness.CFLAGS + charness.GENERATED_WARNINGS + charness.SANITIZE
     h = hashlib.sha256()
     st = os.stat(os.path.realpath(cc))
     h.update(f"{os.path.realpath(cc)}\0{st.st_size}\0{st.st_mtime_ns}\0".encode())
@@ -57,6 +60,8 @@ def build_driver():
     for path in SOURCES + [DRIVER] + HEADERS:
         with open(path, "rb") as f:
             h.update(path.encode() + b"\0" + hashlib.sha256(f.read()).digest())
+    if generated is not None:
+        h.update(b"generated\0" + generated.encode())
     out = os.path.join(CACHE, h.hexdigest()[:32])
     exe = os.path.join(out, "machine_driver")
     if os.path.exists(exe):
@@ -69,6 +74,13 @@ def build_driver():
             obj = os.path.join(tmp, f"{i}-{os.path.basename(src)}.o")
             charness._cc_run([cc, *flags, "-I", charness.INCLUDE, "-c", src, "-o", obj])
             objs.append(obj)
+        if generated is not None:
+            src = os.path.join(tmp, "generated.c")
+            with open(src, "w") as f:
+                f.write(generated)
+            charness._cc_run([cc, *gen_flags, "-I", charness.INCLUDE, "-c", src, "-o",
+                              src + ".o"])
+            objs.append(src + ".o")
         charness._cc_run([cc, *charness.SANITIZE, *objs, "-lm",
                           "-o", os.path.join(tmp, "machine_driver")])
         try:
@@ -120,7 +132,7 @@ def ret(v0):
 # The guest's main loop: t0 counts down to 0, one check point per iteration.
 LOOP = asm("loop", A("addiu", rt=T0, rs=T0, imm=-1), ("bne", T0, 0, "loop"), NOP,
            A("jr", rs=RA), NOP)
-LOOP_EPC = MAIN + 8  # the pc stored last at the loop's check point: the bne's delay slot
+LOOP_EPC = MAIN  # the pc the loop's check point stores: the back edge's target
 
 
 def place(addr, words):
@@ -161,7 +173,8 @@ class Out:
 
     def probes(self):
         return [dict(zip(("a0", "a1", "a2", "sp", "status"), (int(x, 16) for x in p[:5])),
-                     now=int(p[5])) for p in self.all("probe")]
+                     now=int(p[5]), resume=int(p[6], 16), epc=int(p[7], 16))
+                for p in self.all("probe")]
 
     def regs(self):
         return [int(x, 16) for x in self.last("r")]
@@ -581,12 +594,10 @@ class ClockIrqTest(unittest.TestCase):
              ["0x80100040", "code 13"]),
             (["raise 9 80100040"], ["0x80100040", "code 9"]),
             (["break 80100000 409", "pc 80100050", "fptrap 8000"],
-             ["0x80100050", "pc as last stored", "exact only in a --trace-pc build",
-              "0x8000"]),
+             ["0x80100050", "(the dividing instruction)", "0x8000"]),
             (place(H, ret(0)) + [f"fpe 3 {H:08X}", "break 80100000 409", "pc 80100050",
                                  "fptrap 8000"],
-             ["0x80100050", "pc as last stored", "exact only in a --trace-pc build",
-              "0x8000"]),
+             ["0x80100050", "(the dividing instruction)", "0x8000"]),
             (["badtarget 9FC00000"], ["reset vector", "0x9FC00000"]),
             (["badtarget 10000000"], ["0x10000000"]),
             (place(MAIN, LOOP) + place(H, moves) + [f"line 0 {H:08X}", f"vblank {P}"]
@@ -603,7 +614,7 @@ class ClockIrqTest(unittest.TestCase):
             (["irqraise 1"], ["IP1"]),
             ([f"event {i:X} 1000" for i in range(65)], ["events"]),
             # before the runtime was given RAM
-            (["fptrap 8000"], ["0x8000", "exact only in a --trace-pc build"]),
+            (["fptrap 8000"], ["0x8000", "(the dividing instruction)", "given RAM"]),
             (["slice 5", "checks 0"], ["slice"]),
             ([f"hook 5 {H:08X}"], ["break hook 5"]),
         ]
@@ -652,6 +663,89 @@ class ClockIrqTest(unittest.TestCase):
         for k, t in enumerate(hooks):
             self.assertGreaterEqual(t, (k + 3) * P)
             self.assertLess(t, (k + 3) * P + 10 * NS_PER_CHECK)
+
+
+# Recompiled guest code (final review I3): a loop whose back edge targets an address other
+# than the function's own, and an FP divide that traps, at addresses the generated C knows.
+GEN = 0x80120000
+GEN_LOOP = GEN + 4
+GEN_DIV = GEN + 0x40
+GEN_DIV_AT = GEN_DIV + 4
+
+
+def generated_program():
+    """(the words from GEN, the C of both functions with extra_lookup)."""
+    from carnevil_tools import exe, functions, recomp
+    import struct
+    loop = asm(A("ori", rt=T1, rs=0, imm=1), "loop", A("addiu", rt=T0, rs=T0, imm=-1),
+               ("bne", T0, 0, "loop"), NOP, A("jr", rs=RA), NOP)
+    div = [NOP, A("div.s", fd=0, fs=2, ft=4), A("jr", rs=RA), NOP]
+    words = loop + [0] * ((GEN_DIV - GEN) // 4 - len(loop)) + div
+    image = exe.ExeImage(0, GEN, struct.pack("<%dI" % len(words), *words), "")
+    analysis = functions.analyse(image, GEN, manual=[GEN_DIV])
+    fns = sorted(analysis.functions, key=lambda f: f.addr)
+    assert [f.addr for f in fns] == [GEN, GEN_DIV], [hex(f.addr) for f in fns]
+    text = '#include "recomp.h"\n\n' + "\n".join(
+        recomp.function_c(image, analysis, f) for f in fns)
+    text += ("\nrecomp_fn extra_lookup(uint32_t addr);\n"
+             "recomp_fn extra_lookup(uint32_t addr)\n{\n"
+             f"    return addr == 0x{GEN:08X}u ? {recomp.c_name(GEN)} : addr == 0x{GEN_DIV:08X}u "
+             f"? {recomp.c_name(GEN_DIV)} : NULL;\n}}\n")
+    return words, text
+
+
+class CheckPointPcTest(unittest.TestCase):
+    """The resume pc and EPC an interrupt frame records, and the pc an FP trap raises with,
+    are the same in generated C ("call") and in the interpreter ("run"): the address the
+    interrupted check point goes on at, and the dividing instruction's address."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.words, generated = generated_program()
+        cls.exe = build_driver(generated)
+
+    drive = ClockIrqTest.drive
+
+    def both(self, cmds_for):
+        """The driver's output for cmds_for(entry_command) in each mode."""
+        return {mode: self.drive(place(GEN, self.words) + cmds_for(mode))[0]
+                for mode in ("run", "call")}
+
+    def test_interrupt_at_a_function_entry(self):
+        # IP6 pending and deliverable with one check left: the entry check delivers it
+        handler = asm(call_probe(1), ret(1))
+        for mode, out in self.both(lambda m: place(H, handler) + [
+                f"line 0 {H:08X}", "irqraise 6", "reload", f"r {T0:X} 3",
+                f"{m} {GEN:08X}"]).items():
+            probes = out.probes()
+            self.assertEqual(len(probes), 1, mode)
+            self.assertEqual((probes[0]["resume"], probes[0]["epc"]), (GEN, GEN), mode)
+            self.assertEqual(out.regs()[T0], 0, mode)
+
+    def test_interrupt_at_a_backward_branch(self):
+        # VBLANKs every P from time 0: the entry check is long past, each lands on the loop's
+        # back edge, whose target is GEN + 4
+        handler = asm(call_probe(1), ret(1))
+        for mode, out in self.both(lambda m: place(H, handler) + [
+                f"line 0 {H:08X}", f"vblank {P}", f"r {T0:X} {5 * P // (2 * NS_PER_CHECK):X}",
+                f"{m} {GEN:08X}"]).items():
+            probes = out.probes()
+            self.assertEqual(len(probes), 2, mode)
+            for p in probes:
+                self.assertEqual((p["resume"], p["epc"]), (GEN_LOOP, GEN_LOOP), mode)
+
+    def test_fp_trap_names_the_dividing_instruction(self):
+        # the FPU handler for divide by zero sees the frame of the trap: EPC and the resume pc
+        # are the div.s (GEN_DIV + 4), which it steps past
+        skip = asm(call_probe(7), A("lw", rt=T0, base=A0, imm=0x110),
+                   A("addiu", rt=T0, rs=T0, imm=4), A("sw", rt=T0, base=A0, imm=0x110), ret(9))
+        for mode, out in self.both(lambda m: place(H, skip) + [
+                f"fpe 3 {H:08X}", "fpr 2 3F800000", "fpr 4 0", "fcsr 400",
+                "break 80100000 409",
+                f"{m} {GEN_DIV:08X}"]).items():
+            [p] = out.probes()
+            self.assertEqual((p["resume"], p["epc"]), (GEN_DIV_AT, GEN_DIV_AT), mode)
+            self.assertEqual(out.all("ran"), [[]], mode)
 
 
 if __name__ == "__main__":

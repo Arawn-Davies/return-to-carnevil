@@ -17,8 +17,8 @@ Each returned `vectors.State` also carries, as attributes outside its dataclass 
 equality with a recorded State is unaffected):
 - `calls`: the runtime calls in order, as tuples ("bus_read", addr, size),
   ("bus_write", addr, size, value), ("loader", slot), ("break", pc, code),
-  ("tick", r0, ..., r31) (the general registers at the check point),
-  ("host_switch", kind, sp) and ("fp_trap", cause_bit);
+  ("tick", pc, r0, ..., r31) (c->pc and the general registers at the check point),
+  ("host_switch", kind, sp) and ("fp_trap", cause_bit, pc);
 - `unrecompiled`: the addresses `rt_log_unrecompiled` reported, in order.
 """
 import hashlib
