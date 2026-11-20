@@ -64,9 +64,17 @@ The copy produced from the supported revision, with `config/game.manual.toml`, i
 python3 -m carnevil_tools recompile <GAME.EXE> -o <output folder> [--functions config/game.functions.toml] [--trace-pc]
 ```
 
-Turns every function of the functions file into C. It refuses an EXE whose SHA-256 is not the one the functions file was made from, naming both. The output folder gets `funcs.h` (a prototype of each function), `funcs_000.c`, `funcs_001.c` and so on (64 functions each, in address order), `func_table.c` (`recomp_lookup`, which finds the recompiled function at an address: every function, loader slots and interpreted functions included; and `rt_switch_kind`, which names the host-switch points) and, last, `manifest.toml` (the EXE's SHA-256 and the counts of functions, files, loader stubs, interpreted functions, jump tables and `jr`s left to `rt_jump`). A loader slot becomes a call of `rt_loader`, an interpreted function a call of `interp_run`, a host-switch point a call of `rt_host_switch`. With `--trace-pc` the generated code also stores the guest address in `c->pc` before each load, store and call, so a runtime can name the instruction; without it the output is unchanged.
+Turns every function of the functions file into C. It refuses an EXE whose SHA-256 is not the one the functions file was made from, naming both. The output folder gets `funcs.h` (a prototype of each function), `funcs_000.c`, `funcs_001.c` and so on (64 functions each, in address order), `func_table.c` (`recomp_lookup`, which finds the recompiled function at an address: every function, loader slots and interpreted functions included; `rt_switch_kind`, which names the host-switch points; and `recomp_exe_sha256`, the EXE's SHA-256, which `carnevil` checks) and, last, `manifest.toml` (the EXE's SHA-256 and the counts of functions, files, loader stubs, interpreted functions, jump tables and `jr`s left to `rt_jump`). A loader slot becomes a call of `rt_loader`, an interpreted function a call of `interp_run`, a host-switch point a call of `rt_host_switch`. With `--trace-pc` the generated code also stores the guest address in `c->pc` before each load, store and call, so a runtime can name the instruction; without it the output is unchanged.
 
 Everything is written to a working folder the command creates next to the output folder under a unique hidden name, and renamed into place when it is complete, so a folder holding `manifest.toml` is always a whole output. An instruction the recompiler does not handle stops it with the address and the mnemonic, and leaves no output. An existing output folder is replaced only if it holds a `manifest.toml`; anything else at that path is left alone and the command stops. Nothing else is ever deleted: only the folders a run creates are removed, on success or failure, and a failed run leaves an existing output as it was. The output is game code: it goes to the share (`make recomp` writes `$CARNEVIL_WORK/generated`), never into this repository.
+
+## bootstate
+
+```
+python3 -m carnevil_tools bootstate [config/boot_state.toml] -o <generated folder>/boot_state.h
+```
+
+Writes the machine state at GAME.EXE's entry as a C header for `carnevil`: the entry address, Status, FCSR, hi, lo and the 32 general registers from the file's top-level values (a register it does not list is 0). The file's tables (the first loader call, the RAM ranges, the external calls) are evidence and are not used. A top-level key that is not a register or one of `entry`, `status`, `fcr31`, `config`, `hi` and `lo` is refused, as is a value outside 32 bits. `make carnevil` runs it; the header is generated output and is not committed.
 
 ## pure-functions
 
@@ -92,8 +100,13 @@ make recomp       # recompile $CARNEVIL_WORK/part0_files/GAME.EXE into $CARNEVIL
 make linkcheck    # compile the generated C and link it into $BUILD/game_stub
 make smoke        # ... with runtime/stub/smoke.c into $BUILD/smoke
 make replay       # ... with runtime/stub/replay.c into $BUILD/replay
+make carnevil     # ... with the whole runtime and runtime/main into $BUILD/carnevil
+make carnevil-ubsan  # the same under -fsanitize=undefined, into $BUILD/ubsan/carnevil
+make run DISK=… SECONDS=…  # $BUILD/carnevil --disk DISK --seconds SECONDS
 make test         # the unit tests
 ```
+
+`carnevil --disk carnevil.raw [--overlay FILE] [--nvram FILE] [--seconds N | --frames N] [--trace FILE] [--quiet]` is the game itself, headless: it reads GAME.EXE from your disk image (opened read-only), refuses one whose SHA-256 is not the one the generated code was made from, and runs it from its entry. The game's writes to the disk go to the overlay and its CMOS to the NVRAM file, both next to the image unless given (`carnevil.overlay`, `carnevil.nvram`). `--seconds` and `--frames` end the run after that much virtual time or that many VBLANK interrupts; `--trace` writes one line per event (console writes, opens, loader calls, task switches, stops, and counts at the end; `runtime/main/trace.c` lists them); `--quiet` keeps the console output out of the terminal. It exits 0 when the time has run, 2 for a usage or file error and 3 when the runtime stops on something it does not model, naming it. `make run` passes `OVERLAY`, `NVRAM` and `TRACE` on when they are set. `make carnevil` first writes `boot_state.h` into the generated folder (`bootstate`, below).
 
 `smoke RAM_IN RAM_OUT [NAME=VALUE ...]` runs GAME.EXE's entry on MAME's RAM dump at the entry, with the registers given (ABI names and `fcsr`), to the first loader call, and prints the slot and the state there and writes the RAM. `replay [--interp] CAPTURE_DIR` runs one captured function and compares its result with MAME's; it stops at the first bus access, prints it and the state and exits 3; `--interp` runs every call in the interpreter instead. Both are described at the top of their source files.
 
