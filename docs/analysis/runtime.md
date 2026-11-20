@@ -258,7 +258,14 @@ reaches 6 too. Files: `runtime/core/tasks.c`, `runtime/core/tasks.h`. The tests 
 `test_retire_parked`, `test_stop_from_task`, `test_fcsr_follows_cpu`, `test_misuse_stops`,
 `test_record_reuse`, `test_switch_hook`, `test_guest_scheduler` (a synthetic guest
 scheduler, recompiled and interpreted) and `test_under_thread_sanitizer` (the scenarios
-again under the thread sanitizer, skipped where the host cannot run it).
+again under the thread sanitizer, skipped where the host cannot run it). Interrupts and task
+switches together (since the whole-branch review of M2, finding I4), on the same guest
+scheduler in both modes with the real clock and dispatcher: `test_task_created_in_vblank_handler`
+(VBLANKs every 400 ns; the handler links a new task record, which the scheduler then first-runs
+on a context of its own; the handler always runs with EXL set and returns normally) and
+`test_interrupt_due_at_a_host_switch` (IP6 raised at the start of a chosen resume, yield or
+exit: it is delivered once, at the first check point after the switch, on the resumed task's
+context or the scheduler's, and the tasks end as without it).
 
 ## The loader's stand-ins
 

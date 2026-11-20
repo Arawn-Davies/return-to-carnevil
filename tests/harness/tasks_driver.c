@@ -40,6 +40,17 @@
  *                   switchhook      tasks_set_switch_hook of a hook printing "switch KIND
  *                                   RECORD", RECORD the current task word, at every
  *                                   rt_host_switch
+ *                   raiseat KIND N  the same hook raises IP6 at the N-th rt_host_switch of
+ *                                   KIND (0 resume, 1 yield, 2 exit), printing "raised KIND
+ *                                   RECORD", and reloads the slice, so the first check point
+ *                                   after the switch delivers it
+ *                   line LINE FN    irq_set_line, then vclock_reload
+ *                   vblank NS       vblank_raise every NS (hexadecimal) from NS after the time
+ *                                   last accounted, replacing an earlier one
+ *                 and recomp_lookup knows PROBE (0x80300000) in both modes: it prints "probe
+ *                 TAG THREAD SCHED EXL RECORD", TAG a2 (decimal), THREAD a number per host
+ *                 thread in the order they first call it, SCHED ctx_is_scheduler, EXL
+ *                 Status's, RECORD the current task word, and changes nothing.
  *
  * Outside guest mode, recomp_lookup knows one function: a native trampoline at 0x8014A930
  * (the address the glue enters a new task at), which runs the scenario's C task body for the
@@ -57,6 +68,7 @@
 
 #define TRAMPOLINE 0x8014A930u
 #define CURRENT_TASK 0x801A3118u
+#define GUEST_PROBE 0x80300000u
 #define REC_A 0x80180000u
 #define REC_B 0x80180040u
 #define HOST_STACK (256u * 1024u)
@@ -67,6 +79,7 @@ static uint8_t *ram;
 static cpu_t cpu;
 static int guest_recomp; /* guest mode: recomp_lookup answers from the registry */
 static int guest;
+static int print_switches, raise_kind = -1, raise_at, seen_of_kind[3]; /* the switch hook */
 
 static _Noreturn void die(const char *what, const char *detail)
 {
@@ -140,10 +153,14 @@ int rt_switch_kind(uint32_t pc)
 
 static void native_trampoline(uint8_t *r, cpu_t *c);
 
+static void guest_probe(uint8_t *r, cpu_t *c);
+
 recomp_fn recomp_lookup(uint32_t addr)
 {
     if (!guest)
         return addr == TRAMPOLINE ? native_trampoline : NULL;
+    if (addr == GUEST_PROBE)
+        return guest_probe;
     if (!guest_recomp)
         return NULL;
     for (unsigned i = 0; i < fn_count; i++)
@@ -422,15 +439,51 @@ static uint32_t hex(void)
 static void reset(void)
 {
     tasks_reset();
+    tasks_set_switch_hook(NULL);
+    print_switches = 0;
+    raise_kind = -1;
     machine_reset();
     memset(ram, 0, RAM_SIZE);
     memset(&cpu, 0, sizeof cpu);
     rt_set_fcsr(&cpu, 0);
 }
 
+/* The switch hook: prints the switch (switchhook), and raises IP6 at the chosen one
+ * (raiseat), with the slice reloaded so that the first check point after it delivers the
+ * interrupt: an interrupt that falls due exactly at the host switch. */
 static void switch_hook(uint8_t *r, cpu_t *c, int kind)
 {
-    printf("switch %d %08" PRIX32 "\n", kind, mem_r32(r, c, 0x801A3118u));
+    if (print_switches)
+        printf("switch %d %08" PRIX32 "\n", kind, mem_r32(r, c, CURRENT_TASK));
+    if (kind >= 0 && kind <= 2 && kind == raise_kind && ++seen_of_kind[kind] == raise_at) {
+        printf("raised %d %08" PRIX32 "\n", kind, mem_r32(r, c, CURRENT_TASK));
+        irq_raise(6);
+        vclock_reload(c);
+    }
+}
+
+/* Guest-mode PROBE: which context runs (a small number per host thread, given in the order
+ * threads first call it; the scheduler's thread is the one that ran the first "run"), whether
+ * it is the scheduler's, Status EXL, the current task word and a tag from a2. */
+static _Thread_local int thread_id;
+static int threads_seen;
+
+static void guest_probe(uint8_t *r, cpu_t *c)
+{
+    if (!thread_id)
+        thread_id = ++threads_seen;
+    printf("probe %" PRIu32 " %d %d %d %08" PRIX32 "\n", c->r[6], thread_id, ctx_is_scheduler(),
+           (m_status() & ST_EXL) != 0, mem_r32(r, c, CURRENT_TASK));
+}
+
+static uint64_t retrace_period, retrace_next;
+
+static void on_retrace(void *arg)
+{
+    (void)arg;
+    vblank_raise();
+    retrace_next += retrace_period;
+    vclock_at(retrace_next, on_retrace, NULL);
 }
 
 static void run_guest(void)
@@ -453,7 +506,25 @@ static void run_guest(void)
             rt_call(ram, &cpu, hex());
             puts("ran");
         } else if (strcmp(key, "switchhook") == 0) {
+            print_switches = 1;
             tasks_set_switch_hook(switch_hook);
+        } else if (strcmp(key, "raiseat") == 0) {
+            raise_kind = (int)hex();
+            raise_at = (int)hex();
+            memset(seen_of_kind, 0, sizeof seen_of_kind);
+            tasks_set_switch_hook(switch_hook);
+        } else if (strcmp(key, "line") == 0) {
+            uint32_t line = hex();
+            irq_set_line((int)line, hex());
+            vclock_reload(&cpu);
+        } else if (strcmp(key, "vblank") == 0) {
+            retrace_period = hex();
+            if (!retrace_period)
+                die("bad input", "vblank: period 0");
+            vclock_cancel(on_retrace, NULL);
+            retrace_next = machine.now + retrace_period;
+            vclock_at(retrace_next, on_retrace, NULL);
+            vclock_reload(&cpu);
         } else if (strcmp(key, "dump") == 0) {
             uint32_t addr = hex(), n = hex();
             fputs("dump", stdout);

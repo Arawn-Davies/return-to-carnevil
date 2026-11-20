@@ -48,9 +48,12 @@ TRAMPOLINE = 0x8014A930
 CURRENT_TASK = 0x801A3118
 # The synthetic guest's records and stacks. A record: +0 next (0 ends the list), +8 saved
 # sp, +0xC alive, +0x10 counter, +0x14 the count at which the task returns (0: never).
-REC_A, REC_B = 0x80180000, 0x80180040
+REC_A, REC_B, REC_C = 0x80180000, 0x80180040, 0x80180080
 SCHED_STACK = 0x80200000
-STACK_A, STACK_B = 0x80210000, 0x80220000
+STACK_A, STACK_B, STACK_C = 0x80210000, 0x80220000, 0x80230000
+FLAGS = 0x80190000  # +0: the VBLANK handler has linked REC_C; +4 INSERT: it may
+PROBE = 0x80300000  # tasks_driver.c's guest-mode probe
+A2, V0 = 6, 2
 PASSES = 5
 RZ_THIRD, RN_THIRD = 0x3EAAAAAA, 0x3EAAAAAB  # 1.0f / 3.0f toward zero and to nearest
 
@@ -158,9 +161,10 @@ def swap_sp_k1():
 LAST_XOR = A("xor", rd=SP, rs=SP, rt=K1)
 
 
-def guest_program():
+def guest_program(irq=False):
     """(words, labels) of the guest program at TRAMPOLINE, the shapes of
-    docs/analysis/task-switch.md reduced to two tasks.
+    docs/analysis/task-switch.md reduced to two tasks. With irq, the task loop also calls
+    PROBE (tag 2) at each run, and there is a VBLANK handler `vbl` (below, irq_items).
 
     - `tramp`, at the trampoline's address: calls the task, then jumps to the exit.
     - `sched`: PASSES passes over the record list from REC_A; for each live record: the
@@ -209,6 +213,7 @@ def guest_program():
         A("lui", rt=S0, imm=CURRENT_TASK >> 16),
         A("lw", rt=S0, rs=S0, imm=CURRENT_TASK & 0xFFFF),
         "loop",
+        *([A("ori", rt=A2, rs=0, imm=2), A("jal", target=PROBE), NOP] if irq else []),
         A("lw", rt=T0, rs=S0, imm=0x10), A("addiu", rt=T0, rs=T0, imm=1),
         A("sw", rt=T0, rs=S0, imm=0x10), A("lw", rt=T1, rs=S0, imm=0x14),
         ("b", "beq", T0, T1, "done"), NOP,
@@ -242,15 +247,47 @@ def guest_program():
         "exit_j",
         ("j", "j", "restore"), LAST_XOR,
     ]
+    if irq:
+        items += irq_items()
     return asm(TRAMPOLINE, *items)
 
 
-def guest_records():
+def irq_items():
+    """The VBLANK handler `vbl`: PROBE (tag 1); the first time it runs with the word INSERT
+    non-zero it links task record REC_C after REC_A (C.next = A.next, A.next = C), as the
+    game's creation routine links a new record that the scheduler then first-runs through the
+    trampoline, and calls PROBE (tag 3); it returns 1, so the loader's default work
+    acknowledges the VBLANK."""
+    return [
+        "vbl",
+        A("addiu", rt=SP, rs=SP, imm=-8), A("sw", rt=RA, rs=SP, imm=0),
+        A("ori", rt=A2, rs=0, imm=1), A("jal", target=PROBE), NOP,
+        A("lui", rt=T0, imm=FLAGS >> 16),
+        A("lw", rt=T1, rs=T0, imm=4),            # INSERT: 0, nothing is linked
+        ("b", "beq", T1, 0, "vbl_done"), NOP,
+        A("lw", rt=T1, rs=T0, imm=0),            # done already
+        ("b", "bne", T1, 0, "vbl_done"), NOP,
+        A("ori", rt=T1, rs=0, imm=1), A("sw", rt=T1, rs=T0, imm=0),
+        A("lui", rt=T2, imm=REC_A >> 16), A("lw", rt=T3, rs=T2, imm=0),
+        A("lui", rt=T1, imm=REC_C >> 16), A("ori", rt=T1, rs=T1, imm=REC_C & 0xFFFF),
+        A("sw", rt=T3, rs=T1, imm=0), A("sw", rt=T1, rs=T2, imm=0),
+        A("ori", rt=A2, rs=0, imm=3), A("jal", target=PROBE), NOP,
+        "vbl_done",
+        A("lw", rt=RA, rs=SP, imm=0), A("addiu", rt=SP, rs=SP, imm=8),
+        A("jr", rs=RA), A("ori", rt=V0, rs=0, imm=1),
+    ]
+
+
+def guest_records(irq=False):
     """RAM words of the two records and of the first frames on their stacks: saved sp is the
     stack top - 8, holding the trampoline as ra (as the creation routines plant it) and 0 as
-    s0. Task A never returns; task B returns at its third run."""
+    s0. Task A never returns; task B returns at its third run. With irq, also record REC_C
+    (unlinked until the VBLANK handler links it; it returns at its second run)."""
     mem = {}
-    for rec, nxt, stack, limit in ((REC_A, REC_B, STACK_A, 0), (REC_B, 0, STACK_B, 3)):
+    recs = [(REC_A, REC_B, STACK_A, 0), (REC_B, 0, STACK_B, 3)]
+    if irq:
+        recs.append((REC_C, 0, STACK_C, 2))
+    for rec, nxt, stack, limit in recs:
         mem.update({rec: nxt, rec + 8: stack - 8, rec + 0xC: 1, rec + 0x10: 0,
                     rec + 0x14: limit, stack - 8: TRAMPOLINE, stack - 4: 0})
     return mem
@@ -264,7 +301,9 @@ def guest_c(words, labels):
                 labels["exit_j"]: "exit"}
     # the trampoline is entered only through the ra a record holds, the exit only through the
     # trampoline's tail jump: both are named starts, as config/game.manual.toml names them
-    analysis = functions.analyse(image, labels["sched"], manual=[TRAMPOLINE, labels["exit"]],
+    # (and so is the VBLANK handler, entered only through the dispatcher)
+    manual = [TRAMPOLINE, labels["exit"]] + ([labels["vbl"]] if "vbl" in labels else [])
+    analysis = functions.analyse(image, labels["sched"], manual=manual,
                                  host_switches=switches)
     fns = sorted(analysis.functions, key=lambda f: f.addr)
     source = "".join(recomp.function_c(image, analysis, f) + "\n" for f in fns)
@@ -458,6 +497,95 @@ class TasksTest(unittest.TestCase):
         dumps = [[int(x, 16) for x in line[1:]] for line in lines if line[0] == "dump"]
         self.assertEqual([dumps[0][i] for i in (0, 3, 4, 5)], [REC_B, 1, PASSES, 0])
         self.assertEqual([dumps[1][i] for i in (0, 3, 4, 5)], [0, 0, 3, 3])
+
+    # --- interrupts and task switches (final review I4) ----------------------------------
+
+    def run_irq_guest(self, extra, insert):
+        """The irq variant of the guest scheduler run in both modes with `extra` commands
+        before the run (insert: whether the VBLANK handler links REC_C); {mode: (parsed
+        probes, every line split, the dumps of REC_A, REC_B and REC_C)}."""
+        words, labels = guest_program(irq=True)
+        path, _ = guest_c(words, labels)
+        exe = build_driver([path])
+        load = [f"mem {TRAMPOLINE + 4 * i:08X} {w:08X}" for i, w in enumerate(words)]
+        load += [f"mem {a:08X} {v:08X}" for a, v in sorted(guest_records(irq=True).items())]
+        load += [f"mem {FLAGS + 4:08X} {1 if insert else 0:08X}",
+                 f"line 0 {labels['vbl']:08X}"] + extra
+        load += [f"r {SP:X} {SCHED_STACK:08X}", f"r {RA:X} 80001000",
+                 f"run {labels['sched']:08X}",
+                 f"dump {REC_A:08X} 6", f"dump {REC_B:08X} 6", f"dump {REC_C:08X} 6"]
+        got = {}
+        for mode in ("recomp", "interp"):
+            out, _ = self.drive(["guest", mode], stdin="\n".join(["reset"] + load) + "\n",
+                                exe=exe)
+            lines = [line.split() for line in out.splitlines()]
+            self.assertEqual([line for line in lines if line[0] == "unrecompiled"], [], mode)
+            probes = [dict(tag=int(p[1]), thread=int(p[2]), sched=int(p[3]), exl=int(p[4]),
+                           record=int(p[5], 16)) for p in lines if p[0] == "probe"]
+            dumps = [[int(x, 16) for x in line[1:]] for line in lines if line[0] == "dump"]
+            got[mode] = (probes, lines, dumps)
+        return got
+
+    def test_task_created_in_vblank_handler(self):
+        """A task created from inside the VBLANK handler: VBLANKs every 400 ns across the whole
+        run; the handler links a new record (REC_C) once, which the guest scheduler then
+        first-runs through the trampoline. The handler runs at the exception level each time
+        and returns normally (no switch can happen while EXL is set: rt_host_switch would
+        stop); the new task runs on a context of its own, at task level, twice, then exits;
+        the other tasks end as without interrupts. In emitted C and in the interpreter."""
+        for mode, (probes, _lines, dumps) in self.run_irq_guest(["vblank 190"], True).items():
+            with self.subTest(mode=mode):
+                handler = [p for p in probes if p["tag"] == 1]
+                inserted = [p for p in probes if p["tag"] == 3]
+                runs = [p for p in probes if p["tag"] == 2]
+                self.assertGreaterEqual(len(handler), 3)
+                self.assertEqual({p["exl"] for p in handler + inserted}, {1})
+                self.assertEqual(len(inserted), 1)
+                self.assertEqual({p["exl"] for p in runs}, {0})
+                self.assertEqual({p["sched"] for p in runs}, {0})
+                threads = {rec: {p["thread"] for p in runs if p["record"] == rec}
+                           for rec in (REC_A, REC_B, REC_C)}
+                self.assertEqual([len(threads[r]) for r in (REC_A, REC_B, REC_C)], [1, 1, 1])
+                self.assertEqual(len(threads[REC_A] | threads[REC_B] | threads[REC_C]), 3)
+                self.assertEqual(len([p for p in runs if p["record"] == REC_C]), 2)
+                a, b, c = dumps
+                self.assertEqual([a[0], a[3], a[4], a[5]], [REC_C, 1, PASSES, 0])
+                self.assertEqual([b[0], b[3], b[4], b[5]], [0, 0, 3, 3])
+                self.assertEqual([c[0], c[3], c[4], c[5]], [REC_B, 0, 2, 2])
+
+    def test_interrupt_due_at_a_host_switch(self):
+        """An interrupt that falls due exactly at a host switch (IP6 raised by the switch
+        hook, at the start of rt_host_switch, with the slice reloaded so the next check point
+        delivers it): it is delivered once, on the context that runs after the switch has
+        completed (the resumed task's after a resume, first runs and parked contexts alike;
+        the scheduler's after a yield or an exit), never during the switch, and the tasks
+        end as without the interrupt. In emitted C and in the interpreter."""
+        resume, yield_, exit_ = 0, 1, 2
+        for kind, n in ((resume, 1), (resume, 2), (resume, 4), (yield_, 1), (yield_, 3),
+                        (exit_, 1)):
+            for mode, (probes, lines, dumps) in self.run_irq_guest(
+                    [f"raiseat {kind:X} {n:X}"], False).items():
+                with self.subTest(kind=kind, n=n, mode=mode):
+                    raised = [i for i, line in enumerate(lines) if line[0] == "raised"]
+                    self.assertEqual(len(raised), 1)
+                    record = int(lines[raised[0]][2], 16)
+                    handler = [i for i, line in enumerate(lines)
+                               if line[0] == "probe" and line[1] == "1"]
+                    self.assertEqual(len(handler), 1)
+                    self.assertGreater(handler[0], raised[0])
+                    [h] = [p for p in probes if p["tag"] == 1]
+                    self.assertEqual(h["exl"], 1)
+                    if kind == resume:
+                        task_threads = {p["thread"] for p in probes
+                                        if p["tag"] == 2 and p["record"] == record}
+                        self.assertEqual((h["sched"], h["record"]), (0, record))
+                        self.assertEqual({h["thread"]}, task_threads)
+                    else:
+                        self.assertEqual(h["sched"], 1)
+                    a, b, c = dumps
+                    self.assertEqual([a[0], a[3], a[4], a[5]], [REC_B, 1, PASSES, 0])
+                    self.assertEqual([b[0], b[3], b[4], b[5]], [0, 0, 3, 3])
+                    self.assertEqual([c[0], c[3], c[4], c[5]], [0, 1, 0, 2])  # never linked
 
     def test_guest_scheduler(self):
         """A synthetic guest scheduler with the three host-switch shapes (a scheduler loop
