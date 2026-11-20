@@ -171,6 +171,7 @@ static struct {
     /* the card's retrace, once the video timing is programmed */
     int armed;
     uint64_t retrace_next, retrace_len, irq_next;
+    uint64_t last_ps;          /* the latest card time an access brought */
 } v;
 
 uint32_t voodoo_reg(uint32_t n)
@@ -178,9 +179,18 @@ uint32_t voodoo_reg(uint32_t n)
     return n < NREGS_VOODOO ? v.reg[n] : 0;
 }
 
-static uint64_t card_now(cpu_t *c)
+/* The card time of an access. The card's state holds times it has passed (the running
+ * command's end, the next retrace), so a clock that goes back under it, as machine_reset
+ * without hw_reset does, stops. */
+static uint64_t card_now(cpu_t *c, uint32_t phys, int size, int write, uint32_t value)
 {
-    return vclock_now(c) * 1000u + VOODOO_ENTRY_PS;
+    uint64_t now = vclock_now(c) * 1000u + VOODOO_ENTRY_PS;
+    if (now < v.last_ps)
+        hw_stop(c, phys, size, write, value, "the virtual clock went backwards under the "
+                "Voodoo (from %llu ps to %llu ps since power-on): a machine_reset without "
+                "hw_reset", (unsigned long long)v.last_ps, (unsigned long long)now);
+    v.last_ps = now;
+    return now;
 }
 
 /* The virtual time (ns) at or after a card time. */
@@ -277,6 +287,14 @@ static void video_timing(cpu_t *c, uint64_t now, uint32_t n, uint32_t value)
                 "the vertical retrace: when MAME's model ends that retrace is not modelled");
     vsyncoff = (vs >> 16) & 0xFFFu;
     vtotal = vsyncoff + (vs & 0xFFFu);
+    /* every quantity the clock divides or steps by must be non-zero: the frame's rows (and
+     * so its period and its row period) and the row's pixels (hSync's fields plus 2, never
+     * zero) */
+    if (vtotal == 0 || ((hs >> 16) & 0x3FFu) + 1 + (hs & 0xFFu) + 1 == 0)
+        hw_stop(c, VOODOO_PHYS + 4 * n, 4, 1, value, "Voodoo video timing with zero total "
+                "lines or pixels (hSync 0x%08X, vSync 0x%08X, backPorch 0x%08X, "
+                "videoDimensions 0x%08X): MAME's model divides by them", (unsigned)hs,
+                (unsigned)vs, (unsigned)bp, (unsigned)dim);
     vbp = (bp >> 16) & 0xFFu;
     vvis = (dim >> 16) & 0x3FFu;
     vmax = vbp + (vvis ? vvis - 1 : 0);
@@ -589,7 +607,7 @@ static uint32_t status(uint64_t now)
 static uint32_t reg_read(cpu_t *c, uint32_t off, int size)
 {
     uint32_t phys = VOODOO_PHYS + off, n = reg_of(c, off, size, 0, 0);
-    uint64_t now = card_now(c);
+    uint64_t now = card_now(c, phys, size, 0, 0);
     if (off & ALT_MAP)
         hw_stop(c, phys, 4, 0, 0, "Voodoo read through the alternate register map (bit 21), "
                 "which the game never read through");
@@ -621,7 +639,7 @@ static void reg_write(cpu_t *c, uint32_t off, int size, uint32_t value)
 {
     uint32_t phys = VOODOO_PHYS + off, n = reg_of(c, off, size, 1, value), cycles;
     uint32_t chips = (off >> CHIP_SHIFT) & 0xFu;
-    uint64_t now = card_now(c);
+    uint64_t now = card_now(c, phys, size, 1, value);
     if (off & ALT_MAP) {
         if (chips)
             hw_stop(c, phys, 4, 1, value, "Voodoo write through the alternate map with chip "
@@ -666,7 +684,7 @@ uint32_t voodoo_read(cpu_t *c, uint32_t off, int size)
         hw_stop(c, phys, size, 0, 0, "a texture memory read: the game made none in MAME");
     if ((size != 2 && size != 4) || (off & (uint32_t)(size - 1)))
         hw_stop(c, phys, size, 0, 0, "LFB reads are aligned halfwords and words");
-    card_advance(c, card_now(c));
+    card_advance(c, card_now(c, phys, size, 0, 0));
     if (vfb_lfb_read(off - VOODOO_LFB, size, &value, &why) != 0)
         hw_stop(c, phys, size, 0, 0, "%s", why);
     return value;
@@ -689,7 +707,7 @@ void voodoo_write(cpu_t *c, uint32_t off, int size, uint32_t value)
     } else if ((size != 2 && size != 4) || (off & (uint32_t)(size - 1))) {
         hw_stop(c, phys, size, 1, value, "LFB writes are aligned halfwords and words");
     }
-    now = card_now(c);
+    now = card_now(c, phys, size, 1, value);
     card_advance(c, now);
     if (v.op_end && (v.cfg[CFG_INIT_ENABLE] & INIT_PCI_FIFO))
         enqueue(c, phys, size, e);

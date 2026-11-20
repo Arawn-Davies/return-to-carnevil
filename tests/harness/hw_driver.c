@@ -6,6 +6,7 @@
  * One command per line. Numbers are hexadecimal, except times in nanoseconds and counts
  * (decimal):
  *   reset                machine_reset, loader_reset, hw_reset; RAM and cpu_t zeroed, FCSR 0
+ *   machinereset         machine_reset alone, cpu_t's slice zeroed (a misuse, for its test)
  *   img RAW OVERLAY      img_open (OVERLAY - for none); "img 0", or "img -1 MESSAGE"
  *   mem ADDR WORD        a RAM word
  *   fill ADDR N BYTE     N RAM bytes from ADDR set to BYTE
@@ -153,7 +154,10 @@ int main(void)
         die("out of memory", NULL);
     reset();
     while (scanf("%15s", key) == 1) {
-        if (strcmp(key, "reset") == 0) {
+        if (strcmp(key, "machinereset") == 0) {
+            machine_reset();
+            cpu.slice = 0;
+        } else if (strcmp(key, "reset") == 0) {
             reset();
         } else if (strcmp(key, "img") == 0) {
             static char raw[1024], ovl[1024], err[256];

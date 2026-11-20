@@ -182,7 +182,34 @@ class VoodooTest(HwTestCase):
         # before any fbiInit2 write MAME's layout has three colour buffers, all at 0, so the
         # displayed buffer goes 0, 1, 2
         self.assertEqual(self.rds(out), [0x0FFFF43F, 0x1FFFF7BF, 0x0FFFF87F])
+        # a swapbufferCMD delivered as a DMA record's destination reaches the card too: with
+        # vsync and no timing programmed, it stays pending and the card busy
+        swap = mem(CHAIN, 4, 0x002375D0, 0x08000128, 0, 1)
+        out, _ = self.drive(swap + open_("pci:", 2) + start_chain(0x002375C0) + [rd(4, VOODOO)])
+        self.assertEqual(self.rds(out), [0x1FFFF3BF])
         self.stops([wr(4, VOODOO, 0)], "physical 0x08000000", "status")
+
+    def test_degenerate_video_timing(self):
+        """Video timing registers all non-zero whose derived total lines are zero (vSync
+        0x0000F000: only bits outside its two fields) stop, naming the four values, rather
+        than divide by zero or loop. hSync's total cannot be zero (its two fields plus 2, as
+        MAME's model adds them): hSync 0x0000F000 gives a 2-pixel line and a working clock."""
+        timing = dict(vt.GAME_TIMING)
+        bad = dict(timing)
+        bad[0x224] = 0x0000F000
+        self.stops([wr(4, VOODOO + r, v) for r, v in bad.items()], "physical 0x080002",
+                   "0x01CF002D", "0x0000F000", "0x00110030", "0x0100018F", "zero")
+        narrow = dict(timing)
+        narrow[0x220] = 0x0000F000
+        out, _ = self.drive([wr(4, VOODOO + r, v) for r, v in narrow.items()]
+                            + ["vsync", "at 100000000", rd(4, VOODOO)])
+        self.assertEqual(len(out.all("vsync")[0]), 3)
+
+    def test_clock_backwards(self):
+        """A machine_reset without hw_reset sets the virtual clock back under the card: its
+        next access stops instead of computing from a time it has passed."""
+        self.stops(vt.timing_writes(wr) + ["at 30000000", rd(4, VOODOO), "machinereset",
+                                           rd(4, VOODOO)], "backwards", "hw_reset")
 
     def test_voodoo_registers(self):
         """Kind 1: a register reads back what was last written, and counts its writes; the

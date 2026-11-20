@@ -9,10 +9,11 @@
  * A triangle is drawn only if every pipeline feature its mode registers enable is one the
  * model implements (vfb_capability: flat colour1 or a TMU texel passed through, dither,
  * clipping, the y origin; nothing else). Any other triangle is counted under the first
- * feature missing and dropped, and the pixels it would have covered are marked; an LFB
- * read of a marked pixel, or of one never written since reset (the power-on content is not
- * measured), returns an error for the caller to stop on. A modelled write of a pixel clears
- * its mark.
+ * feature missing and dropped, and its buffer is flagged (decision 2: one flag per buffer,
+ * front, back and aux by their place in memory); so is an LFB write in a mode the model does
+ * not implement. An LFB read of a flagged buffer, or of a pixel never written since reset
+ * (the power-on content is not measured), returns an error for the caller to stop on. A
+ * buffer's flag clears only when a fastfill overwrites the whole buffer (full_fill).
  */
 #include <math.h>
 #include <string.h>
@@ -65,14 +66,16 @@ static const char *const DROP_NAMES[DROP_COUNT] = {
     [DROP_TEX_FORMAT] = "a texture format other than RGB 565",
     [DROP_TEX_COMBINE] = "a texture combine other than the TMU's own texel",
     [DROP_LFB_MODE] = "an LFB write mode other than raw RGB 565 or depth",
+    [DROP_NO_BUFFER] = "draw buffer 2 or 3 (none: nothing is written)",
 };
 
 static struct {
     uint16_t px[FB_PIXELS];
     uint8_t known[FB_PIXELS / 8];   /* written by a modelled operation since reset */
-    uint8_t dropped[FB_PIXELS / 8]; /* may hold drawing the model dropped */
     uint32_t rgboffs[3], auxoffs;   /* pixel offsets, NO_BUFFER for none */
+    uint32_t bufpixels;             /* a buffer's size: fbiInit2's pages */
     uint32_t rowpixels;
+    int flag[4];                    /* colour buffers 0 to 2 and aux (3): drawing dropped */
     int front, back;
     uint32_t drops[DROP_COUNT];
 } f;
@@ -115,6 +118,10 @@ void vfb_layout(uint32_t fbiinit1, uint32_t fbiinit2)
             f.rgboffs[i] = bytes[i] == NO_BUFFER ? NO_BUFFER : bytes[i] / 2;
     }
     f.auxoffs = bytes[3] == NO_BUFFER ? NO_BUFFER : bytes[3] / 2;
+    f.bufpixels = pages * 0x1000u / 2;
+    /* a flagged buffer's memory may belong to another buffer now: all are flagged */
+    if (f.flag[0] || f.flag[1] || f.flag[2] || f.flag[3])
+        f.flag[0] = f.flag[1] = f.flag[2] = f.flag[3] = 1;
     if (!triple) {
         if (f.front == 2)
             f.front = 0;
@@ -147,12 +154,12 @@ static void put(uint32_t p, uint16_t v)
 {
     f.px[p] = v;
     f.known[p / 8] |= (uint8_t)(1u << (p % 8));
-    f.dropped[p / 8] &= (uint8_t)~(1u << (p % 8));
 }
 
-static void mark(uint32_t p)
+/* a pixel whose content the model cannot give (drawn from a texel never written) */
+static void unknown(uint32_t p)
 {
-    f.dropped[p / 8] |= (uint8_t)(1u << (p % 8));
+    f.known[p / 8] &= (uint8_t)~(1u << (p % 8));
 }
 
 /* draw_buffer_indirect / lfb_buffer_indirect: 0 front, 1 back, 2 the aux buffer (LFB reads
@@ -166,6 +173,48 @@ static uint32_t buffer(uint32_t select, int aux)
     if (select == 2 && aux)
         return f.auxoffs;
     return NO_BUFFER;
+}
+
+/* The buffer a select names as an index into flag[]: 0 to 2 the colour buffer the front or
+ * back is, 3 the aux buffer (reads only), -1 for none. */
+static int index_of(uint32_t select, int aux)
+{
+    if (select == 0)
+        return f.front;
+    if (select == 1)
+        return f.back;
+    if (select == 2 && aux && f.auxoffs != NO_BUFFER)
+        return 3;
+    return -1;
+}
+
+static uint32_t base_of(int i)
+{
+    return i < 3 ? f.rgboffs[i] : f.auxoffs;
+}
+
+/* Sets or clears buffer i's flag, and that of every buffer at the same place (at power-on
+ * all colour buffers are at 0). */
+static void set_flag(int i, int on)
+{
+    if (i < 0 || base_of(i) == NO_BUFFER)
+        return;
+    for (int j = 0; j < 4; j++)
+        if (base_of(j) == base_of(i))
+            f.flag[j] = on;
+}
+
+/* A read of pixel p through buffer i meets dropped drawing: i is flagged, or p lies in a
+ * flagged buffer's memory (an LFB row past a buffer's end reads the next one). */
+static int flagged(int i, uint32_t p)
+{
+    if (f.flag[i])
+        return 1;
+    for (int j = 0; j < 4; j++)
+        if (f.flag[j] && base_of(j) != NO_BUFFER && p >= base_of(j) &&
+            p - base_of(j) < f.bufpixels)
+            return 1;
+    return 0;
 }
 
 /* The pixel index of (x, row) in the buffer at base, or -1 outside the memory. */
@@ -214,6 +263,7 @@ int vfb_lfb_read(uint32_t off, int size, uint32_t *value, const char **why)
     uint32_t lfb = voodoo_reg(R_LFBMODE), pix = (off >> 2) << 1, base, data, used;
     int64_t x = pix & ((1u << LFB_STRIDE) - 1), y = (pix >> LFB_STRIDE) & 0x3FFu, p;
     int lane = (off >> 1) & 1, ws = (lfb >> 15) & 1, bs = (lfb >> 16) & 1;
+    int index = index_of((lfb >> 6) & 3u, 1);
     if (lfb & 0x2000u)
         y = yorigin() - y;
     base = buffer((lfb >> 6) & 3u, 1);
@@ -228,15 +278,16 @@ int vfb_lfb_read(uint32_t off, int size, uint32_t *value, const char **why)
     } else {
         for (int k = 0; k < 2; k++) {
             used = (uint32_t)p + (uint32_t)(size == 4 ? k : (lane ^ ws ^ bs));
-            if (bit(f.dropped, used)) {
-                *why = "an LFB read of a pixel that holds drawing the model does not render "
-                       "(a triangle or LFB write it counted and dropped, or a texel never "
-                       "written since reset)";
+            if (flagged(index, used)) {
+                *why = "an LFB read of a buffer that holds drawing the model does not render "
+                       "(a triangle or LFB write it counted and dropped since a fastfill last "
+                       "covered the whole buffer)";
                 return -1;
             }
             if (!bit(f.known, used)) {
-                *why = "an LFB read of a pixel not written since reset (the frame buffer's "
-                       "power-on content is not measured)";
+                *why = "an LFB read of a pixel whose content is not known: not written since "
+                       "reset (the frame buffer's power-on content is not measured), or drawn "
+                       "from a texel not written since reset";
                 return -1;
             }
             if (size != 4)
@@ -256,8 +307,8 @@ int vfb_lfb_read(uint32_t off, int size, uint32_t *value, const char **why)
  * bits by bit replication, then dithered as fbzMode says, into the buffer of lfbMode bits 4
  * and 5) and 15 (two 16-bit depths into the aux buffer, nothing under fbzMode bit 18). Two
  * pixels per word, the halfword's lane by address bit 1; a pixel past the end of the memory
- * is not written; write buffer 2 or 3 writes nothing. Any other mode is counted, dropped and
- * marked. */
+ * is not written; write buffer 2 or 3 writes nothing. Any other mode is counted and dropped,
+ * and flags both its write buffer and the aux buffer. */
 const char *vfb_lfb_write(uint32_t off, int size, uint32_t value)
 {
     uint32_t lfb = voodoo_reg(R_LFBMODE), fbz = voodoo_reg(R_FBZMODE), fmt = lfb & 0xFu;
@@ -270,11 +321,8 @@ const char *vfb_lfb_write(uint32_t off, int size, uint32_t value)
         return NULL;
     if ((fmt != 0 && fmt != 15) || (lfb & 0x1F00u)) { /* pipeline, lanes, swaps */
         f.drops[DROP_LFB_MODE]++;
-        for (int k = first; k <= last; k++) {
-            int64_t p = at(fmt == 15 && f.auxoffs != NO_BUFFER ? f.auxoffs : base, y, x0 + k);
-            if (p >= 0)
-                mark((uint32_t)p);
-        }
+        set_flag(index_of((lfb >> 4) & 3u, 0), 1);
+        set_flag(3, 1);
         return NULL;
     }
     for (int k = first; k <= last; k++) {
@@ -303,6 +351,21 @@ const char *vfb_lfb_write(uint32_t off, int size, uint32_t value)
 }
 
 /* --- fastfillCMD ---------------------------------------------------------------------------- */
+
+/* A fill is full, and clears a buffer's flag, when its rectangle covers the buffer's visible
+ * area as the model lays it out: columns 0 to the row's width (fbiInit1) and every row the
+ * buffer's size (fbiInit2's pages) holds, a partial last row included, after the y-origin
+ * flip. */
+static int full_fill(int64_t left, int64_t right, int64_t top, int64_t bottom, int flip)
+{
+    int64_t rows, lo, hi;
+    if (!f.rowpixels || !f.bufpixels || left > 0 || right < (int64_t)f.rowpixels)
+        return 0;
+    rows = ((int64_t)f.bufpixels + f.rowpixels - 1) / f.rowpixels;
+    lo = flip ? yorigin() - (bottom - 1) : top;
+    hi = flip ? yorigin() - top : bottom - 1;
+    return lo <= 0 && hi >= rows - 1;
+}
 
 /* reg_fastfill_w: the rectangle [clipLeft, clipRight) x [clipLowY, clipHighY) of the draw
  * buffer (fbzMode bits 14 and 15; 2 and 3 fill nothing), its RGB with color1 dithered by the
@@ -352,6 +415,12 @@ uint32_t vfb_fastfill(const char **why)
                 put((uint32_t)p, (uint16_t)za);
             }
         }
+    }
+    if (full_fill(left, right, top, bottom, (fbz & 0x20000u) != 0)) {
+        if (fbz & 0x200u)
+            set_flag(index_of((fbz >> 14) & 3u, 0), 0);
+        if ((fbz & 0x400u) && f.auxoffs != NO_BUFFER)
+            set_flag(3, 0);
     }
     pixels = (uint32_t)((bottom - top) * (right - left));
     return pixels / 2;
@@ -428,8 +497,10 @@ uint32_t vfb_triangle(const char **why)
     int32_t ct = (tb >> 16) & 0x3FFu, cb = tb & 0x3FFu;
     int cap = vfb_capability(), textured = (voodoo_reg(R_FBZCOLORPATH) & 3u) == 1;
     uint8_t rgb[3];
-    if (base == NO_BUFFER)
+    if (base == NO_BUFFER) {
+        f.drops[DROP_NO_BUFFER]++; /* MAME returns at once: nothing is written */
         return TRIANGLE_SETUP_CLOCKS;
+    }
     for (int i = 0; i < 3; i++) {
         v[i][0] = vertex(R_VERTEX + 2u * (uint32_t)i);
         v[i][1] = vertex(R_VERTEX + 2u * (uint32_t)i + 1);
@@ -446,8 +517,12 @@ uint32_t vfb_triangle(const char **why)
     d12 = v2[1] == v1[1] ? 0.0f : (v2[0] - v1[0]) / (v2[1] - v1[1]);
     d13 = v3[1] == v1[1] ? 0.0f : (v3[0] - v1[0]) / (v3[1] - v1[1]);
     d23 = v3[1] == v2[1] ? 0.0f : (v3[0] - v2[0]) / (v3[1] - v2[1]);
-    if (cap != VFB_DRAWABLE)
+    if (cap != VFB_DRAWABLE) {
         f.drops[cap]++;
+        set_flag(index_of((fbz >> 14) & 3u, 0), 1);
+        if (fbz & 0x400u) /* the mode writes depth or alpha */
+            set_flag(3, 1);
+    }
     if (!textured)
         color1(rgb);
     for (int32_t y = y1; y < y3; y++) {
@@ -465,6 +540,8 @@ uint32_t vfb_triangle(const char **why)
         if (a >= b)
             a = b = 0;
         pixels += (uint32_t)(b - a);
+        if (cap != VFB_DRAWABLE)
+            continue; /* only the clocks count */
         row = (fbz & 0x20000u) ? yorigin() - y : y;
         if (fbz & 0x1u) {
             if (row < ct || row >= cb || a >= cr)
@@ -474,29 +551,21 @@ uint32_t vfb_triangle(const char **why)
             if (a < cl)
                 a = cl;
         }
-        if (!(fbz & 0x200u) && cap == VFB_DRAWABLE)
+        if (!(fbz & 0x200u))
             continue; /* nothing written: no RGB write and no aux write (capability) */
         {
             struct tmu_iter it;
-            if (textured && cap == VFB_DRAWABLE)
+            if (textured)
                 tmu_iter_start(&it, a - (ax >> 4), y - (ay >> 4));
             for (int32_t x = a; x < b; x++) {
                 int64_t p = at(base, row, x);
-                if (cap != VFB_DRAWABLE) {
-                    if ((fbz & 0x200u) && p >= 0)
-                        mark((uint32_t)p);
-                    if ((fbz & 0x400u) && f.auxoffs != NO_BUFFER &&
-                        (p = at(f.auxoffs, row, x)) >= 0)
-                        mark((uint32_t)p);
-                    continue;
-                }
                 if (p < 0) {
                     *why = "a triangle pixel outside the frame-buffer memory, which MAME's "
                            "model does not define";
                     return TRIANGLE_SETUP_CLOCKS + pixels;
                 }
                 if (textured && tmu_texel(&it, rgb) != 0)
-                    mark((uint32_t)p); /* the texel was never written since reset */
+                    unknown((uint32_t)p); /* the texel was never written since reset */
                 else
                     put((uint32_t)p, dither(fbz, x, row, rgb));
                 if (textured)

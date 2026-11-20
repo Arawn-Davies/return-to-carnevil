@@ -729,6 +729,9 @@ about the card. Each rule below is marked "from MAME's model", "measured", "read
 **Checked against the capture** (measured). `voodoo-ramp.txt` is replayed in time order with
 `voodoo-reads.txt`'s PCI configuration writes, at its recorded times. Virtual time is the
 capture time less the entry's, 5,003,569,667 ns, the CPU's cycle 750,535,450 at 150 MHz.
+This is a convention for the whole runtime: virtual time 0 is GAME.EXE's entry, which is
+5,003,569,666,667 ps after power-on. That figure is measured: the entry's cycle count in
+tools/mame/README.md, "M2 facts", at 150 MHz (hw.h, `VOODOO_ENTRY_PS`).
 Every one of its 274,967 reads returns the value MAME returned (`tests/test_voodoo_fb.py`):
 - 266,645 status reads, including 771 of 0x0FFFF3BD and 16 of 0x0FFFF3BE, which are busy
   with writes queued;
@@ -753,6 +756,22 @@ Every one of its 274,967 reads returns the value MAME returned (`tests/test_vood
 - Power-on content: MAME's memory starts at zero. The model treats it as unknown, because it
   is not measured. An LFB read of a pixel no modelled operation wrote since reset stops. The
   capture never makes such a read.
+- Dropped drawing (not from MAME's model: the never-guess rule). Each of the three buffers,
+  front, back and aux, carries one flag.
+  - Setting the flag:
+    - A dropped triangle sets its draw buffer's flag, and the aux buffer's flag too when its
+      mode writes depth or alpha (fbzMode bit 10).
+    - A dropped LFB write sets the flags of its write-select buffer and of the aux buffer,
+      always both.
+    - The flag belongs to the buffer's place in memory, so a swap does not move it.
+    - A layout change while any flag is set sets them all.
+  - Clearing the flag: it clears only when a fastfill overwrites the whole buffer. The
+    fastfill's clip rectangle must cover the buffer's visible area as the model lays it out:
+    columns 0 to the row width, and every row the buffer's pages hold, after the y flip.
+  - An LFB read through a flagged buffer, or of a pixel in a flagged buffer's memory, stops
+    with the message that the buffer holds drawing the model does not render.
+  - No measured read meets a flag. Every triangle and LFB write of the capture is one the
+    model draws.
 
 **LFB** (from MAME's model).
 - Addressing:
@@ -770,8 +789,8 @@ Every one of its 274,967 reads returns the value MAME returned (`tests/test_vood
     dithered as fbzMode says) and raw format 15 (16-bit depth into the aux buffer, nothing
     under fbzMode bit 18).
   - A pixel past the end of the memory is not written.
-  - Any other mode (the pixel pipeline, the 32-bit formats, the lanes and swaps) is counted,
-    dropped and its pixels marked, as for triangles below.
+  - Any other mode (the pixel pipeline, the 32-bit formats, the lanes and swaps) is counted
+    and dropped, and flags its buffers (above).
 
 **Dither** (from MAME's model, "hardware-verified" there).
 - Red and blue go from 8 to 5 bits as (2v - v/16 + v/128 + d) / 16, green to 6 bits as
@@ -804,9 +823,9 @@ Every one of its 274,967 reads returns the value MAME returned (`tests/test_vood
   names the reason: subpixel adjust, iterated (Gouraud) colour, the colour combine, chroma
   key, stipple, the depth test, the alpha mask, alpha test, fog, alpha blending, a depth or
   alpha buffer write, the TMUs disabled, TMU0 off, or a texture-path reason below.
-- A triangle that fails is counted under that reason and dropped, and every pixel it would
-  have written is marked. An LFB read of a marked pixel stops, saying it holds drawing the
-  model does not render. A modelled write of the pixel, such as a fastfill, clears the mark.
+- A triangle that fails is counted under that reason, dropped, and its buffers are flagged
+  (Frame buffer, above). A triangle for draw buffer 2 or 3, which MAME writes nowhere, is
+  counted under a reason of its own and flags nothing.
 - A drawn pixel outside the memory, which MAME leaves undefined, stops.
 
 **Fastfill** (from MAME's model).
@@ -824,7 +843,8 @@ Every one of its 274,967 reads returns the value MAME returned (`tests/test_vood
     dropped.
   - A texture word is placed by texBaseAddr × 8 and the LOD layout of tLOD and the format, as
     MAME's `internal_texture_w`.
-  - A texel never written since reset makes its pixel marked.
+  - A texel never written since reset leaves its pixel's content unknown, so a read of that
+    pixel stops.
 - Drawn: a non-perspective, point-sampled RGB 565 texture of one LOD (lod_min = lod_max).
   - S and T are iterated in 32.32 from vertex A, converted to 24.8 by truncation (out of
     range 0x80000000, as MAME's x86-64 build), shifted by the LOD, then clamped or wrapped.
@@ -905,6 +925,12 @@ fastfillCMD and 7,159 nopCMD.
 - If the game registers line 0 before the timing is programmed, no VBLANK arrives until it is.
 - Reprogramming the timing during a retrace stops, because when MAME's model ends that
   retrace is not modelled. The game programs it once.
+- Timing registers that are all non-zero but give zero total lines stop, naming the four
+  values; MAME's model would divide by them. An example is vSync 0x0000F000, with bits only
+  outside its fields. A row's total pixels cannot be zero, because MAME adds 2 to hSync's
+  fields.
+- The card's state holds card times it has passed. If the virtual clock goes back under it,
+  as a machine_reset without hw_reset makes it do, the next access stops.
 
 **Known gaps in the card model.**
 - The DMA delivers a chain at one instant. dev_sysctrl.c copies every record at the enable

@@ -13,7 +13,8 @@ import unittest
 
 from tests import voodoo_timing as vt
 from tests.gamedata import requires_file
-from tests.test_hw import HwTestCase, cfg_write, fact_lines, rd, wr
+from tests.test_hw import CHAIN, HwTestCase, cfg_write, fact_lines, mem, rd, start_chain, wr
+from tests.test_loader import open_
 
 VOODOO = 0xA8000000
 LFB = 0xA8400000
@@ -27,7 +28,7 @@ DITHER4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5]
 REASONS = ["subpixel", "gouraud", "color_combine", "chroma", "stipple", "depth", "alpha_mask",
            "aux_write", "alpha_test", "alpha_blend", "fog", "tmus_disabled", "tmu_off",
            "perspective", "trilinear", "mipmap", "bilinear", "tex_format", "tex_combine",
-           "lfb_mode"]
+           "lfb_mode", "no_buffer"]
 RGB565_LOCAL = 0x08241A00  # the TMU check's textureMode: RGB 565, point, the TMU's texel
 
 
@@ -101,6 +102,18 @@ def pixel(x, y):
     return rd(2, LFB + 2 * (y << 10 | x))
 
 
+def buffers(front, back, depth):
+    """The front and back buffers and the aux buffer filled whole (512 x 256, the layout of
+    setup()), so that every pixel of each is known."""
+    return (fill(front, 512, 256) + fill(back, 512, 256, fbz=0x4200)
+            + [reg(ZACOLOR, depth)] + fill(0, 512, 256, fbz=0x400))
+
+
+def read_in(buffer, x, y):
+    """lfbMode read select 0 front, 1 back, 2 aux, then the pixel."""
+    return [reg(LFBMODE, buffer << 6), pixel(x, y)]
+
+
 RAMP_TRIANGLE = [(0, 0), (0x240, 0), (0, 0x240)]  # (0,0), (36,0), (0,36) in 12.4
 
 
@@ -143,25 +156,54 @@ class FrameBufferTest(HwTestCase):
     def test_non_flat_triangle_dropped(self):
         """A triangle whose modes enable a feature the model does not implement (a depth
         test, alpha blending, bilinear filtering: modes attract mode uses) is counted under
-        that reason and dropped: a pixel outside it keeps the fill, one inside stops the
-        read (it holds drawing the model does not render), and a fastfill over it clears the
-        mark."""
+        that reason and dropped, and its draw buffer is flagged (decision 2: per buffer): any
+        LFB read of that buffer stops, also far outside the triangle, while the other colour
+        buffer reads; a fastfill of the whole buffer clears the flag, a partial one does not.
+        A depth-writing mode (fbzMode bit 10) flags the aux buffer too."""
         tex = [reg(TLOD, 0), reg(TEXBASE, 0), wr(4, TEX, 0x22221111)]
         cases = [("depth", [], 0x210, 0x2),
                  ("alpha_blend", [reg(ALPHAMODE, 0x10)], 0x200, 0x2),
                  ("bilinear", tex + [reg(TEXMODE, RGB565_LOCAL | 0x4)], 0x200, 0x08000001)]
         for reason, modes, fbz, colorpath in cases:
             with self.subTest(reason=reason):
-                before = setup() + fill(0x204080) + modes
+                before = setup() + buffers(0x204080, 0x408020, 0x5555) + modes
                 draw = triangle(RAMP_TRIANGLE, 0x808080, fbz=fbz, colorpath=colorpath)
-                out, _ = self.drive(before + draw + ["dropped", pixel(40, 40)])
+                out, _ = self.drive(before + draw + ["dropped"] + read_in(1, 40, 40)
+                                    + read_in(2, 40, 40))
                 counts = [int(n) for n in out.all("dropped")[0]]
                 self.assertEqual(counts, [int(r == reason) for r in REASONS])
+                self.assertEqual(self.rds(out), [plain565(0x408020), 0x5555])
+                self.stops(before + draw + read_in(0, 300, 200), "does not render")
+                after = [reg(ALPHAMODE, 0)]
+                out, _ = self.drive(before + draw + after + fill(0x204080, 512, 256)
+                                    + read_in(0, 1, 1))
                 self.assertEqual(self.rds(out), [plain565(0x204080)])
-                self.stops(before + draw + [pixel(1, 1)], "does not render")
-                out, _ = self.drive(before + draw + [reg(ALPHAMODE, 0)] + fill(0x204080)
-                                    + [pixel(1, 1)])
-                self.assertEqual(self.rds(out), [plain565(0x204080)])
+                self.stops(before + draw + after + fill(0x204080) + read_in(0, 1, 1),
+                           "does not render")
+        before = setup() + buffers(0x204080, 0x408020, 0x5555)
+        draw = triangle(RAMP_TRIANGLE, 0x808080, fbz=0x610)
+        self.stops(before + draw + read_in(2, 40, 40), "does not render")
+        # draw buffer 2: nothing is written, the drop is counted under its own reason
+        out, _ = self.drive(before + triangle(RAMP_TRIANGLE, 0x808080, fbz=0x8200)
+                            + ["dropped"] + read_in(0, 1, 1))
+        self.assertEqual([int(n) for n in out.all("dropped")[0]],
+                         [int(r == "no_buffer") for r in REASONS])
+        self.assertEqual(self.rds(out), [plain565(0x204080)])
+
+    def test_dropped_lfb_write_flags_buffers(self):
+        """An LFB write in a mode the model does not implement (format 1, 16-bit RGB 555;
+        format 4, 32-bit RGB; format 12, depth and RGB 565) flags its write-select buffer and
+        the aux buffer: reads of both stop anywhere in them; the other colour buffer reads."""
+        before = setup() + buffers(0x204080, 0x408020, 0x5555)
+        for fmt, size in ((1, 2), (4, 4), (12, 4)):
+            with self.subTest(fmt=fmt):
+                value = 0x5678 if size == 2 else 0x12345678
+                write = [reg(LFBMODE, fmt), wr(size, LFB + 0x100, value)]
+                out, _ = self.drive(before + write + ["dropped"] + read_in(1, 40, 40))
+                self.assertEqual(int(out.all("dropped")[0][REASONS.index("lfb_mode")]), 1)
+                self.assertEqual(self.rds(out), [plain565(0x408020)])
+                self.stops(before + write + read_in(0, 300, 200), "does not render")
+                self.stops(before + write + read_in(2, 300, 200), "does not render")
 
     def test_textured_triangle(self):
         """A point-sampled RGB 565 texel passed through by the texture combine is the pixel:
@@ -172,7 +214,7 @@ class FrameBufferTest(HwTestCase):
         draw = triangle([(0, 0), (0x40, 0), (0, 0x40)], fbz=0x200, colorpath=0x08000001)
         out, _ = self.drive(base + draw + [pixel(0, 0), pixel(1, 0)])
         self.assertEqual(self.rds(out), [0x1111, 0x2222])
-        self.stops(base + draw + [pixel(2, 0)], "does not render")
+        self.stops(base + draw + [pixel(2, 0)], "texel not written since reset")
         out, _ = self.drive(base + [reg(0x320, 0x0004F420)] + draw + [pixel(0, 0), pixel(2, 0)])
         self.assertEqual(self.rds(out), [0x0002, 0x0002])
 
@@ -191,6 +233,16 @@ class FrameBufferTest(HwTestCase):
             return self.rds(out)
         self.assertEqual(run(1), [0x1111, 0x2222])
         self.assertEqual(run(0), [0x1111, 0x1111])
+        # the same write as a DMA record's destination (GT64010 channel 0) reaches dSdX too
+        dma = mem(CHAIN, 4, 0x002375D0, 0x08200060, 0, 0x40000) + open_("pci:", 2) \
+            + start_chain(0x002375C0)
+        out, _ = self.drive(setup(fbiinit3=1) + fill(0)
+                            + [reg(TEXMODE, RGB565_LOCAL), reg(TLOD, 0), reg(TEXBASE, 0),
+                               wr(4, TEX, 0x22221111), reg(0x054, 0)] + dma
+                            + triangle([(0, 0), (0x40, 0), (0, 0x40)], colorpath=0x08000001)
+                            + [pixel(0, 0), pixel(1, 0), "counts 18"])
+        self.assertEqual(out.all("counts")[0][:2], ["0", "1"])
+        self.assertEqual(self.rds(out), [0x1111, 0x2222])
 
 
 @requires_file("mame", "m2-facts", "voodoo-ramp.txt")

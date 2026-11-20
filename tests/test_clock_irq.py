@@ -294,6 +294,17 @@ class ClockIrqTest(unittest.TestCase):
         want[T0] = 0
         self.assertEqual(out.regs(), want)
 
+    def test_masked_pending_not_delivered(self):
+        # IP6 raised directly (as a device would) while Status IM6 is clear, with line 0
+        # never registered: it stays pending in Cause and is never delivered
+        r, hi, lo, fpr = pattern()
+        out, _ = self.drive(place(MAIN, LOOP) + place(H, asm(call_probe(1), ret(1)))
+                            + set_state(r, hi, lo, fpr) + ["irqraise 6"] + run_main(10200))
+        self.assertEqual(out.probes(), [])
+        m = out.m()
+        self.assertEqual(m["status"], STATUS)
+        self.assertEqual(m["cause"], 0x4000)  # pending, masked
+
     def test_frame_layout(self):
         handler = asm(li(T0, FRAME), li(T1, COPY), A("addiu", rt=T2, rs=T0, imm=FRAME_SIZE),
                       "copy", A("lw", rt=T3, base=T0, imm=0), A("sw", rt=T3, base=T1, imm=0),

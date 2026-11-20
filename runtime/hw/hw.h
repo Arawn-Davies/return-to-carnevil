@@ -89,6 +89,7 @@ enum {
     DROP_TEX_FORMAT,
     DROP_TEX_COMBINE,
     DROP_LFB_MODE,
+    DROP_NO_BUFFER,
     DROP_COUNT
 };
 #define VFB_DRAWABLE (-1)
@@ -99,7 +100,8 @@ enum {
  * *why, for an access MAME's model leaves undefined (outside the memory); vfb_fastfill and
  * vfb_triangle return the card's clocks for the command. vfb_capability: VFB_DRAWABLE or the
  * DROP_ reason for the current mode registers. vfb_dropped: triangles (and, for
- * DROP_LFB_MODE, LFB writes) dropped for a reason. */
+ * DROP_LFB_MODE, LFB writes) dropped for a reason; a dropped draw flags its buffer, and an
+ * LFB read of a flagged buffer gives -1. */
 void vfb_reset(void);
 void vfb_layout(uint32_t fbiinit1, uint32_t fbiinit2);
 int vfb_lfb_read(uint32_t off, int size, uint32_t *value, const char **why);
