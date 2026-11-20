@@ -11,12 +11,26 @@
  *     the rest zero;
  * - then the records, record i at byte 512 + 520 * i: a u32 absolute sector number (LBA), a
  *   zero u32, and the sector's 512 bytes as last written.
- * A sector's first write appends its record and then updates the count; later writes of it
- * rewrite the record in place, so each changed sector has exactly one record. Opening checks
- * the magic, the version, the size and first-sector hash against the raw image, and that the
- * file is exactly 512 + 520 * count bytes: shorter is truncated; longer is a record appended
- * by a write that stopped before the count was updated, and is refused as well rather than
- * guessed at.
+ * A sector's first write appends its record, syncs the file (fsync), and then updates the
+ * count; later writes of it rewrite the record in place, so each changed sector has exactly
+ * one record. The count is the commit point (final review I5 b): a record is in the overlay
+ * once the count includes it. Opening checks the magic, the version, the size and
+ * first-sector hash against the raw image, and the length: shorter than 512 + 520 * count
+ * bytes is a truncated file and is refused; longer is a record (or part of one) appended by
+ * a write that stopped before the count was updated, which is the uncommitted write itself:
+ * the bytes past the counted records are ignored, and the next new record is written over
+ * them. A kill can therefore lose at most the one sector the game was writing for the first
+ * time, never make the overlay unreadable.
+ *
+ * The sync between the record and the count is what makes the order hold when the host
+ * itself goes down (a power cut), not only when the process dies: without it the count could
+ * reach the disk before the record it counts. It costs one fsync per sector the game writes
+ * for the first time (a first boot writes 1,426 such sectors in its first 150 s; a rewrite of
+ * a sector already in the overlay costs none). Rewrites in place are not synced one by one:
+ * after a power cut a rewritten sector can hold its old or its new contents, as on a disk.
+ *
+ * A host read, write or sync that fails goes to the handler of img_set_host_error, naming
+ * the file (the program stops there); without one, the call fails with -1.
  */
 #define _POSIX_C_SOURCE 200809L
 #define _FILE_OFFSET_BITS 64
@@ -50,7 +64,36 @@ static struct {
     uint8_t header[IMG_SECTOR];
     struct rec *map; /* sorted by lba */
     uint32_t nmap, cap;
-} img = {-1, -1, 0, 0, {0}, NULL, 0, 0};
+    char raw_path[1024], ovl_path[1024]; /* for the host error messages */
+} img = {-1, -1, 0, 0, {0}, NULL, 0, 0, "", ""};
+
+static void (*host_error)(const char *message);
+static void (*write_hook)(void);
+
+void img_set_host_error(void (*fn)(const char *message))
+{
+    host_error = fn;
+}
+
+void img_set_write_hook(void (*fn)(void))
+{
+    write_hook = fn;
+}
+
+/* A host I/O error (errno set by the failing call, 0 for a short transfer): to the handler,
+ * then -1. */
+static int host_failed(const char *file, const char *what, uint32_t lba)
+{
+    int e = errno;
+    if (host_error) {
+        char msg[1400];
+        snprintf(msg, sizeof msg, "%s %s: cannot %s sector %u: %s",
+                 file == img.ovl_path ? "overlay" : "raw image", file, what, (unsigned)lba,
+                 e ? strerror(e) : "the transfer came up short");
+        host_error(msg);
+    }
+    return -1;
+}
 
 static uint32_t get32(const uint8_t *p)
 {
@@ -89,6 +132,8 @@ static int read_at(int fd, void *buf, size_t n, uint64_t off)
         ssize_t got = pread(fd, p, n, (off_t)off);
         if (got < 0 && errno == EINTR)
             continue;
+        if (got == 0)
+            errno = 0; /* end of file: a short transfer, not a system error */
         if (got <= 0)
             return -1;
         p += got;
@@ -105,6 +150,8 @@ static int write_at(int fd, const void *buf, size_t n, uint64_t off)
         ssize_t put = pwrite(fd, p, n, (off_t)off);
         if (put < 0 && errno == EINTR)
             continue;
+        if (put == 0)
+            errno = 0;
         if (put <= 0)
             return -1;
         p += put;
@@ -187,6 +234,7 @@ static int open_overlay(const char *path, const uint8_t first_hash[32], char *er
         return fail(err, errlen, "overlay %s is the raw image itself", path);
 
     uint8_t h[OVL_HEADER];
+    snprintf(img.ovl_path, sizeof img.ovl_path, "%s", path);
     img.ovl = open(path, O_RDWR | O_CLOEXEC);
     if (img.ovl < 0 && errno == ENOENT) {
         img.ovl = open(path, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
@@ -232,10 +280,8 @@ static int open_overlay(const char *path, const uint8_t first_hash[32], char *er
     if (have < need)
         return fail(err, errlen, "overlay %s is truncated: %llu bytes, its %u records need %llu",
                     path, (unsigned long long)have, count, (unsigned long long)need);
-    if (have > need)
-        return fail(err, errlen,
-                    "overlay %s has %llu bytes after its %u records (a write that did not "
-                    "finish)", path, (unsigned long long)(have - need), count);
+    /* have > need: an uncounted tail, the write that did not commit (top comment); ignored,
+     * and overwritten by the next new record */
     for (uint32_t i = 0; i < count; i++) {
         uint8_t lba[4];
         if (read_at(img.ovl, lba, 4, record_offset(i)) != 0)
@@ -254,6 +300,7 @@ int img_open(const char *raw_path, const char *overlay_path, char *err, size_t e
     if (err && errlen)
         err[0] = 0;
 
+    snprintf(img.raw_path, sizeof img.raw_path, "%s", raw_path);
     img.raw = open(raw_path, O_RDONLY | O_CLOEXEC);
     if (img.raw < 0)
         return fail(err, errlen, "cannot open raw image %s: %s", raw_path, strerror(errno));
@@ -308,7 +355,7 @@ int img_read(uint32_t lba, void *buf, uint32_t count)
     while (lba < end) {
         if (at < img.nmap && img.map[at].lba == lba) {
             if (read_at(img.ovl, p, IMG_SECTOR, record_offset(img.map[at].index) + 8) != 0)
-                return -1;
+                return host_failed(img.ovl_path, "read", lba);
             lba++;
             at++;
             p += IMG_SECTOR;
@@ -318,7 +365,7 @@ int img_read(uint32_t lba, void *buf, uint32_t count)
         uint32_t stop = at < img.nmap && img.map[at].lba < end ? img.map[at].lba : end;
         size_t n = (size_t)(stop - lba) * IMG_SECTOR;
         if (read_at(img.raw, p, n, (uint64_t)lba * IMG_SECTOR) != 0)
-            return -1;
+            return host_failed(img.raw_path, "read", lba);
         p += n;
         lba = stop;
     }
@@ -327,6 +374,8 @@ int img_read(uint32_t lba, void *buf, uint32_t count)
 
 int img_write(uint32_t lba, const void *buf, uint32_t count)
 {
+    if (write_hook)
+        write_hook();
     if (!in_range(lba, count) || img.ovl < 0)
         return -1;
     const uint8_t *p = buf;
@@ -334,16 +383,22 @@ int img_write(uint32_t lba, const void *buf, uint32_t count)
         uint32_t s = lba + i, at = lower_bound(s);
         if (at < img.nmap && img.map[at].lba == s) {
             if (write_at(img.ovl, p, IMG_SECTOR, record_offset(img.map[at].index) + 8) != 0)
-                return -1;
+                return host_failed(img.ovl_path, "write", s);
             continue;
         }
+        /* a new record: the record, synced, then the count that commits it (top comment) */
         uint8_t rec[OVL_RECORD], n[4];
         put32(rec, s);
         put32(rec + 4, 0);
         memcpy(rec + 8, p, IMG_SECTOR);
         put32(n, img.nmap + 1);
-        if (write_at(img.ovl, rec, sizeof rec, record_offset(img.nmap)) != 0 ||
-            write_at(img.ovl, n, 4, 12) != 0 || map_insert(s, img.nmap) != 0)
+        if (write_at(img.ovl, rec, sizeof rec, record_offset(img.nmap)) != 0)
+            return host_failed(img.ovl_path, "write", s);
+        if (fsync(img.ovl) != 0)
+            return host_failed(img.ovl_path, "sync the record of", s);
+        if (write_at(img.ovl, n, 4, 12) != 0)
+            return host_failed(img.ovl_path, "count the record of", s);
+        if (map_insert(s, img.nmap) != 0)
             return -1;
     }
     return 0;
@@ -356,8 +411,12 @@ uint32_t img_sectors(void)
 
 void img_flush(void)
 {
-    if (img.ovl >= 0)
-        fsync(img.ovl);
+    if (img.ovl >= 0 && fsync(img.ovl) != 0 && host_error) {
+        char msg[1200];
+        snprintf(msg, sizeof msg, "overlay %s: cannot sync it to the disk: %s", img.ovl_path,
+                 strerror(errno));
+        host_error(msg);
+    }
 }
 
 const uint8_t *img_header(void)

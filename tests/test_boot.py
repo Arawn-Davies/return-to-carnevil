@@ -21,6 +21,7 @@ GAME.EXE's entry (carnevil.c's top comment lists the kinds).
 import collections
 import dataclasses
 import os
+import re
 import shutil
 import signal
 import struct
@@ -617,6 +618,27 @@ class BootTest(unittest.TestCase):
         trace = Trace(os.path.join(frames_dir, "trace.txt"))
         self.assertEqual(trace.end, "frames 100")
         self.assertEqual(trace.counts["vblank"], 100)
+
+    def test_host_write_error_stops(self):
+        """A host write to the overlay that fails (the file-size limit RLIMIT_FSIZE reached
+        part-way through the first boot's 1,426 records) stops the run with a message naming
+        the overlay and the system's error (final review M2), instead of handing the game the
+        loader's -1; the overlay still opens afterwards."""
+        from tests.test_disk_c import _limit_file_size
+        game_program()
+        folder = os.path.join(_game["tmp"], "fsize")
+        os.makedirs(folder)
+        overlay = os.path.join(folder, "carnevil.overlay")
+        res = subprocess.run([game_program(), *files_in(folder, work_path("carnevil.raw"),
+                                                        trace=False), "--seconds", "30"],
+                             capture_output=True, text=True, timeout=SHORT_TIMEOUT,
+                             preexec_fn=_limit_file_size(600_000))
+        self.assertEqual(res.returncode, 3, res.stderr[-2000:])
+        self.assertRegex(res.stderr, r"(?m)^carnevil: stop: overlay " + re.escape(overlay)
+                         + r": cannot write sector [0-9]+: File too large$")
+        r = run(game_program(), files_in(folder, work_path("carnevil.raw"), trace=False)
+                + ["--seconds", "1"], SHORT_TIMEOUT)
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
 
     def test_interrupted_boot(self):
         """A run without a limit sent SIGTERM after 4 s of wall time (final review I1): exit

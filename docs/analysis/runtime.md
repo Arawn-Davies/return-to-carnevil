@@ -454,23 +454,40 @@ in `runtime/loader/dev_cmos.c`. Tests in `tests/test_disk_c.py`: the overlay
 `test_truncating_open`, `test_full_directory_is_extended`), damaged input
 (`test_bad_first_block`, `test_chain_that_loops`, `test_chain_leaves_the_partition`,
 `test_bad_directory_link`, `test_directory_blocks_that_link_in_a_circle`,
-`test_extension_ignores_a_link_past_the_length`) and, with game data,
-`test_every_file_matches_the_python_reader`, `test_write_round_trip`,
-`test_python_reads_the_written_partition` and `test_raw_image_unchanged`.
+`test_extension_ignores_a_link_past_the_length`), crash ordering and host errors (since the
+whole-branch review of M2: `test_uncounted_trailing_record_is_ignored`,
+`test_host_error_is_reported_not_returned`, and `CrashOrderTests`, a kill before every sector
+write of a create, an extension, a truncation, an unlink and a directory extension) and, with
+game data, `test_every_file_matches_the_python_reader`, `test_write_round_trip`,
+`test_python_reads_the_written_partition` and `test_raw_image_unchanged`
+(`tests/test_boot.py`: `test_host_write_error_stops`).
 
 - **The raw image** is opened read-only and is never written (`runtime/disk/image.c`).
 - **The overlay** holds every sector the game writes. Its header is a 512-byte sector: the
   magic "CEOVRLAY", version 1, the record count, the raw image's size and the SHA-256 of its
   first sector; then one 520-byte record per sector (the LBA, a zero word, the 512 bytes).
-  The first write of a sector appends a record and then updates the count; later writes
-  rewrite the record. An overlay made for another image, a truncated one, or one with bytes
-  after its last record is refused with a message (exit 2).
+  The first write of a sector appends a record, syncs the file, and then updates the count;
+  later writes rewrite the record. The count is the commit point: bytes after the counted
+  records are a write that did not commit (a kill between the record and the count), which
+  opening ignores and the next new record overwrites, so a kill loses at most the sector being
+  written for the first time. An overlay made for another image, or a truncated one (shorter
+  than its count needs), is refused with a message (exit 2).
+- **Host errors.** A failed or short host read, write or sync of the raw image or the overlay
+  is not the game's disk error: from the start of the run it stops (exit 3) with a message
+  naming the file, the sector and the system's reason, instead of reaching the game as the
+  loader's -1 (finding M2). The NVRAM save stops the same way.
 - **The file system** (`fs.c`) follows `disk-format.md` and the loader's routines (read): 170
   entries per directory block, an entry whose first name word is zero is free, the link to the
   next block at byte 4092, 0 ends the directory. Allocation is first fit; the date and time it
   writes are a constant, not the loader's clock. A damaged chain or directory is bounded and
   refused rather than followed. 1,523 files on partition 1 (static: counted by the C and the
-  Python readers alike).
+  Python readers alike). Its writes are ordered so that a kill between any two leaves a
+  consistent file system (finding I5): when blocks are allocated, the chain table is written
+  before the directory entry or link that reaches them; when they are freed, the entry is
+  written before the chain table releases them. The worst a kill leaves is allocated blocks
+  nothing refers to. The order holds against a kill of the process; against a power cut it
+  holds for first writes of sectors (synced) but not for rewrites in place, which are not
+  synced one by one.
 - **The NVRAM file** is the CMOS, 32,768 bytes; one of another size stops. A second run on the
   same NVRAM is a non-blank CMOS, and the game then does not print "reseting high scores"
   (`test_boot.py`, `test_user_files`).

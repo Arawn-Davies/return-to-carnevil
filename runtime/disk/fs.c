@@ -319,11 +319,15 @@ static int create(const char *key, struct where *at)
     if (free_slot.block) {
         *at = free_slot;
     } else {
+        /* Write order (final review I5 a): the new block zeroed, then the chain table that
+         * allocates it, then the link that makes it part of the directory. A kill before the
+         * link leaves an allocated block nothing refers to (a leak); the link never reaches a
+         * block the table still calls free, which the next allocation would hand out. */
         uint32_t b = allocate();
         if (!b)
             return -1;
         memset(dirbuf, 0, BLOCK);
-        if (write_block(b, dirbuf) != 0 || read_block(last, dirbuf) != 0)
+        if (write_block(b, dirbuf) != 0 || fat_sync() != 0 || read_block(last, dirbuf) != 0)
             return -1;
         put32(dirbuf + DIR_LINK, b);
         if (write_block(last, dirbuf) != 0)
@@ -390,6 +394,9 @@ int fs_open(const char *name, int mode)
     if (f.length > MAX_WORDS)
         return -1;
     if (mode == 1 && (f.length || f.first)) {
+        /* Freeing (final review I5 a): the directory entry first, which no longer refers to
+         * the chain, then the chain table that releases it. A kill between leaves the blocks
+         * allocated and unreferenced (a leak), never an entry reaching free blocks. */
         free_chain(f.first);
         f.first = 0;
         f.length = 0;
@@ -534,8 +541,13 @@ int fs_write(int h, const void *buf, uint32_t n)
             f->length = f->pos;
         changed = 1;
     }
-    /* nothing written and nothing allocated: the entry is left as it was */
-    if (changed && (entry_update(f) != 0 || fat_sync() != 0))
+    /* Allocating (final review I5 a): the data blocks, then the chain table that allocates
+     * and links them, then the directory entry whose length and first block reach them. A
+     * kill before the entry leaves the new blocks allocated past the length the entry gives
+     * (unreachable: fs_write never follows a link past the length, above), a leak; the entry
+     * never reaches a block the table still calls free. Nothing written and nothing
+     * allocated: the entry is left as it was. */
+    if (changed && (fat_sync() != 0 || entry_update(f) != 0))
         ok = 0;
     return ok ? (int)n : -1;
 }
@@ -574,6 +586,8 @@ int fs_unlink(const char *name)
         return -1;
     uint8_t *e = dirbuf + w.slot * DIR_ENTRY;
     uint32_t first = get32(e + 20);
+    /* Freeing (final review I5 a): the entry first, then the chain table; a kill between
+     * leaks the file's blocks, and no entry is left reaching free ones. */
     memset(e, 0, 4);
     if (write_block(w.block, dirbuf) != 0)
         return -1;

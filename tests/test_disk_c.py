@@ -8,7 +8,9 @@ data is only ever opened read-only, and the tests check that the raw image is un
 import hashlib
 import os
 import random
+import resource
 import shutil
+import signal
 import struct
 import subprocess
 import tempfile
@@ -83,6 +85,23 @@ def run_driver(raw, overlay, commands=()):
     if res.returncode not in (0, 1) or res.stderr or not lines:
         raise AssertionError(f"driver status {res.returncode}: {res.stderr}")
     return lines[0], lines[1:]
+
+
+def _limit_file_size(limit):
+    """preexec_fn: files the child writes may not grow past limit bytes, and a write past it
+    fails with EFBIG instead of raising SIGXFSZ."""
+    def apply():
+        signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+        resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
+    return apply
+
+
+def run_limited(raw, overlay, commands, limit):
+    """The driver on `commands` with its files limited to `limit` bytes; the
+    CompletedProcess (text)."""
+    return subprocess.run([build_driver(), raw, overlay], input="".join(c + "\n" for c in commands),
+                          capture_output=True, text=True, timeout=120,
+                          preexec_fn=_limit_file_size(limit))
 
 
 def pattern(n, seed):
@@ -258,13 +277,69 @@ class ImageTests(DriverTestCase):
             return self.refused(raw, self.path("bad.ovl"), *fragments)
 
         refused_with(good[:-100], "truncated", "2 records")
+        refused_with(good[:-1], "truncated", "2 records")
         refused_with(good[:100], "truncated", "shorter than its header")
-        refused_with(good + b"\0" * 520, "after its 2 records")
         refused_with(b"NOTOVRLY" + good[8:], "bad magic")
         refused_with(good[:8] + struct.pack("<I", 2) + good[12:], "format version 2")
         bad_lba = bytearray(good)
         struct.pack_into("<I", bad_lba, OVERLAY_HEADER, 64)
         refused_with(bytes(bad_lba), "record 0 names sector 64")
+
+    def test_uncounted_trailing_record_is_ignored(self):
+        """The record count in the header is the commit point (final review I5 b): an
+        overlay holding a record appended but not counted (a kill between the record and the
+        count) opens as if the record were absent, and the next new record overwrites it; a
+        part of a record behaves the same. One shorter than its count is still refused
+        (test_damaged_overlays_are_refused)."""
+        image = synthetic_image()
+        raw = self.write("img.raw", image)
+        ovl = self.path("img.ovl")
+        self.opened(raw, ovl, ["write 3 2 7"])
+        with open(ovl, "rb") as f:
+            good = f.read()
+        uncounted = struct.pack("<II", 20, 0) + b"\x55" * SECTOR  # sector 20, never counted
+        original = image[20 * SECTOR:21 * SECTOR]
+        for name, tail in (("record", uncounted), ("part", uncounted[:100])):
+            with self.subTest(tail=name):
+                path = self.write(f"{name}.ovl", good + tail)
+                lines = self.opened(raw, path, ["read 20 1", "read 3 2", "write 30 1 9",
+                                                "read 30 1", "read 20 1"])
+                self.assertEqual(lines, ["read 0 " + sha(original),
+                                         "read 0 " + sha(b"\x07" * 2 * SECTOR), "write 0",
+                                         "read 0 " + sha(b"\x09" * SECTOR),
+                                         "read 0 " + sha(original)])
+                with open(path, "rb") as f:
+                    now = f.read()
+                self.assertEqual(struct.unpack_from("<I", now, 12)[0], 3)
+                self.assertEqual(len(now), OVERLAY_HEADER + 3 * OVERLAY_RECORD)
+                self.assertEqual(now[-OVERLAY_RECORD:-SECTOR], struct.pack("<II", 30, 0))
+                # a new process sees the counted record, and sector 20 as the image has it
+                self.assertEqual(self.opened(raw, path, ["read 30 1", "read 20 1"]),
+                                 ["read 0 " + sha(b"\x09" * SECTOR), "read 0 " + sha(original)])
+
+    def test_host_error_is_reported_not_returned(self):
+        """A host write that fails (here past a file-size limit, RLIMIT_FSIZE, which makes
+        the write fail with EFBIG) goes to the handler with the overlay's path and the
+        system's reason (final review M2), where the program stops; without a handler the
+        call fails with -1 as before."""
+        raw = self.write("img.raw", synthetic_image())
+        ovl = self.path("img.ovl")
+        limit = OVERLAY_HEADER + OVERLAY_RECORD + 10  # the first record fits, the second not
+        res = run_limited(raw, ovl, ["hosterr", "write 3 1 7", "write 4 1 7", "sectors"],
+                          limit)
+        self.assertEqual(res.returncode, 4, res.stderr)
+        lines = res.stdout.splitlines()
+        self.assertEqual(lines[:3], ["open 0", "hosterr", "write 0"])
+        self.assertEqual(len(lines), 4, lines)
+        self.assertRegex(lines[3], r"^hosterr overlay \S*img\.ovl: cannot write sector 4: "
+                                   r"File too large$")
+        # without the handler: -1, and the overlay still opens (the partial record is
+        # beyond the count)
+        ovl2 = self.path("img2.ovl")
+        res = run_limited(raw, ovl2, ["write 3 1 7", "write 4 1 7", "sectors"], limit)
+        self.assertEqual((res.returncode, res.stdout.splitlines()),
+                         (0, ["open 0", "write 0", "write -1", "sectors 64"]))
+        self.assertEqual(self.opened(raw, ovl2, ["read 3 1"]), ["read 0 " + sha(b"\x07" * SECTOR)])
 
     def test_bad_raw_images_are_refused(self):
         self.refused(self.path("missing.raw"), self.path("o1"), "cannot open raw image",
@@ -399,6 +474,98 @@ class SyntheticFileSystemTests(DriverTestCase):
         d = (BASE_SECTOR + 8 * 3) * SECTOR
         self.assertEqual(struct.unpack_from("<I", part, d + 4092)[0], 4)
         self.assertEqual([fat_entry(part, b) for b in (4, 5, 6)], [0, 0, 1])
+
+
+class CrashOrderTests(DriverTestCase):
+    """A kill between any two sector writes of a create, an extension, a truncation, an
+    unlink or a directory extension leaves a consistent file system (final review I5 a):
+    every file's chain (walked as far as its length needs) holds blocks the chain table has
+    allocated, no block belongs to two files or to a file and the directory, and every file
+    not being changed reads as before. The worst a kill may leave is a leak: blocks allocated
+    that nothing refers to. The kill comes from the driver's `die N` (exit before the N-th
+    img_write), for every N up to the writes the operation makes."""
+
+    def setUp(self):
+        super().setUp()
+        self.a = random.Random(2).randbytes(5000)
+        self.b = random.Random(3).randbytes(300)
+        self.part = fs_partition(
+            [("A.BIN", 5000, 4), (None, 0x2000, 6), ("B.BIN", 300, 7)],
+            [([4, 5], self.a), ([7], self.b)])
+
+    def check(self, raw, ovl, untouched):
+        out = self.path("dump")
+        self.assertEqual(self.opened(raw, ovl, [f"dump 1 {out}"]), ["dump 0"])
+        with open(out, "rb") as f:
+            part = f.read()
+        fat = part[FAT:disk.FAT_END]
+        owner, b = {}, 3
+        while b:  # the directory's blocks, from block 3 through the links at byte 4092
+            self.assertNotIn(b, owner, "the directory links back into itself")
+            if b != 3:
+                self.assertNotEqual(fat_entry(part, b), 1, f"directory block {b} is free")
+            owner[b] = "the directory"
+            b = struct.unpack_from("<I", part, (BASE_SECTOR + 8 * b) * SECTOR + 4092)[0]
+        entries = disk.list_files(out)
+        for e in entries:
+            for blk in disk._chain(e, fat, len(part)):
+                self.assertNotEqual(fat_entry(part, blk), 1, f"{e.name}: block {blk} is free")
+                self.assertNotIn(blk, owner, f"{e.name}: block {blk} is {owner.get(blk)}'s")
+                owner[blk] = e.name
+        files = self.path("files")
+        shutil.rmtree(files, ignore_errors=True)
+        disk.extract_files(out, files)
+        for name, want in untouched.items():
+            with open(os.path.join(files, name), "rb") as f:
+                self.assertEqual(f.read(), want, name)
+        return {e.name: e.size for e in entries}
+
+    def kill_at_every_write(self, part, ops, untouched):
+        """Runs ops once whole, then once per write with a kill before it; checks each.
+        Returns the files after the whole run."""
+        raw = self.write("c.raw", fs_image(part))
+        whole = self.path("whole.ovl")
+        lines = self.opened(raw, whole, ops + ["writes"])
+        k = int(lines[-1].split()[1])
+        self.assertGreaterEqual(k, 2, "an operation of one write cannot be split")
+        for n in range(1, k + 1):
+            with self.subTest(kill_before_write=n):
+                ovl = self.path(f"kill{n}.ovl")
+                res = subprocess.run([build_driver(), raw, ovl],
+                                     input="".join(c + "\n" for c in [f"die {n}"] + ops),
+                                     capture_output=True, text=True, timeout=120)
+                self.assertEqual(res.returncode, 9, res.stdout + res.stderr)
+                self.check(raw, ovl, untouched)
+        return self.check(raw, whole, untouched)
+
+    def test_create_and_write(self):
+        files = self.kill_at_every_write(self.part, ["open NEW.BIN 1", "wr 0 8324 5",
+                                                     "close 0"], {"A.BIN": self.a,
+                                                                  "B.BIN": self.b})
+        self.assertEqual(files["NEW.BIN"], 8324)
+
+    def test_extend(self):
+        files = self.kill_at_every_write(self.part, ["open B.BIN 2", "seek 0 0 2",
+                                                     "wr 0 9000 3", "close 0"],
+                                         {"A.BIN": self.a})
+        self.assertEqual(files["B.BIN"], 9300)
+
+    def test_truncate(self):
+        files = self.kill_at_every_write(self.part, ["open A.BIN 1", "wr 0 4 1", "close 0"],
+                                         {"B.BIN": self.b})
+        self.assertEqual(files["A.BIN"], 4)
+
+    def test_unlink(self):
+        files = self.kill_at_every_write(self.part, ["unlink A.BIN", "open C.BIN 1",
+                                                     "wr 0 6000 2", "close 0"],
+                                         {"B.BIN": self.b})
+        self.assertNotIn("A.BIN", files)
+
+    def test_directory_extension(self):
+        entries = [(f"F{i:03d}.BIN", 0, 0) for i in range(170)]
+        files = self.kill_at_every_write(fs_partition(entries, []),
+                                         ["open NEWX.BIN 1", "wr 0 5000 3", "close 0"], {})
+        self.assertEqual(files["NEWX.BIN"], 5000)
 
 
 class DamagedInputTests(DriverTestCase):

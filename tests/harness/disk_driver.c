@@ -22,12 +22,38 @@
  *   flush                    flush
  *   sha TEXT                 sha SHA              (of TEXT; "-" for the empty string)
  *   shaa N                   shaa SHA             (of N bytes "a", fed in uneven pieces)
+ *   writes                   writes N             (img_write calls since the image opened)
+ *   die N                    die N                (the process exits with status 9, at once,
+ *                                                  before the N-th img_write from now: a kill
+ *                                                  between two writes)
+ *   hosterr                  hosterr              (from now on a host I/O error prints
+ *                                                  "hosterr MESSAGE" and exits with status 4,
+ *                                                  as the program stops on one; before it, the
+ *                                                  call fails with -1)
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "disk.h"
+
+static unsigned long writes, die_at;
+
+static void on_write(void)
+{
+    if (++writes == die_at) {
+        fflush(stdout);
+        _exit(9);
+    }
+}
+
+static void on_host_error(const char *message)
+{
+    printf("hosterr %s\n", message);
+    fflush(stdout);
+    exit(4);
+}
 
 static void print_hash(const char *tag, const void *data, size_t n, const char *prefix)
 {
@@ -88,6 +114,7 @@ int main(int argc, char **argv)
         return 2;
     }
     int rc = img_open(argv[1], strcmp(argv[2], "-") ? argv[2] : NULL, err, sizeof err);
+    img_set_write_hook(on_write);
     printf("open %d\n", rc);
     if (rc != 0) {
         printf("%s\n", err);
@@ -175,6 +202,14 @@ int main(int argc, char **argv)
         } else if (!strcmp(cmd, "flush")) {
             img_flush();
             printf("flush\n");
+        } else if (!strcmp(cmd, "writes")) {
+            printf("writes %lu\n", writes);
+        } else if (!strcmp(cmd, "die") && sscanf(line, "%*s %lu", &x) == 1) {
+            die_at = writes + x;
+            printf("die %lu\n", x);
+        } else if (!strcmp(cmd, "hosterr")) {
+            img_set_host_error(on_host_error);
+            printf("hosterr\n");
         } else if (!strcmp(cmd, "sha") && sscanf(line, "%*s %255s", a) == 1) {
             print_hash("sha", a, strcmp(a, "-") ? strlen(a) : 0, " ");
         } else if (!strcmp(cmd, "shaa") && sscanf(line, "%*s %lu", &x) == 1) {

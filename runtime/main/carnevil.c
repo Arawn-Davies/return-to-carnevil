@@ -268,6 +268,11 @@ static void entry_state(void)
     m_status_set(BOOT_STATUS, 0xFFFFFFFFu);
 }
 
+static void host_io_failed(const char *message)
+{
+    rt_stop(RT_STOP_STATUS, "%s", message);
+}
+
 static void time_up(void *arg)
 {
     char how[48];
@@ -302,6 +307,9 @@ int main(int argc, char **argv)
     exe = read_game_exe(&size, " (through the overlay)");
     cmos_load(opt.nvram);
     rt_at_stop(img_flush);
+    /* from here a host I/O error on the image or the overlay stops, naming the file: it is
+     * not the game's disk error, so it must not reach the game as the loader's -1 */
+    img_set_host_error(host_io_failed);
 
     ram = calloc(1, RAM_SIZE);
     if (!ram)

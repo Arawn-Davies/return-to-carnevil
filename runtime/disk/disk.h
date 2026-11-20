@@ -6,7 +6,8 @@
  *   (image.c, whose top comment gives the overlay's format);
  * - fs_*: the file system of docs/analysis/disk-format.md on the loader's partition 1,
  *   the disk's first partition (fs.c).
- * One image is open at a time. Nothing here prints or exits; errors are return values.
+ * One image is open at a time. Nothing here prints or exits; errors are return values, and a
+ * host I/O error is given to the handler img_set_host_error installs, if any.
  */
 #ifndef CARNEVIL_DISK_H
 #define CARNEVIL_DISK_H
@@ -43,6 +44,15 @@ int img_write(uint32_t lba, const void *buf, uint32_t count);
 uint32_t img_sectors(void);
 /* Pushes the overlay's writes to the host disk (fsync). */
 void img_flush(void);
+/* img_set_host_error: fn (or NULL) is called when a host read, write or sync of the raw
+ * image or the overlay fails or comes up short (final review M2), with a message naming
+ * the file, what failed and the system's reason. The program's fn stops (rt_stop) and does
+ * not return: such a failure is not the game's disk error. Without fn, or if it returns, the
+ * call fails as described above (-1). img_open keeps it. */
+void img_set_host_error(void (*fn)(const char *message));
+/* img_set_write_hook: for tests, fn (or NULL) is called at the start of every img_write, so
+ * a test can end the process between two sector writes. img_open keeps it. */
+void img_set_write_hook(void (*fn)(void));
 /* The disk header (sector 0) as the loader's partition-table slot hands it out: with the
  * word at + 0xC replaced by the disk's sector count (loader-services.md, slot 0x128). NULL
  * when no image is open. */
