@@ -55,6 +55,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "../core/tasks.h"
 #include "../disk/disk.h"
@@ -71,7 +72,13 @@
 #define GAME_EXE "GAME.EXE"
 #define EXE_HEADER 8u
 #define NS_PER_SECOND 1000000000ull
-#define MAX_SECONDS 100000000ull /* so that N s in ns stays far inside 64 bits */
+/* The largest --seconds (final review M3): every time base of the runtime must hold the end
+ * of the run. The narrowest is the Voodoo's, picoseconds since power-on in 64 bits (hw.h,
+ * voodoo_null.c: virtual ns x 1000 + VOODOO_ENTRY_PS), which wraps after 18,446,744 s, about
+ * 213.5 days; the virtual clock's nanoseconds wrap after about 584 years. 18,000,000 s
+ * (about 208 days) leaves the card more than 400,000 s for its own times past the end (a
+ * retrace or a command end comes at most a frame or a few milliseconds later). */
+#define MAX_SECONDS 18000000ull
 #define EXIT_FILES 2
 
 static const char USAGE[] = "usage: carnevil --disk FILE [--overlay FILE] [--nvram FILE] "
@@ -178,21 +185,30 @@ static void check_disk(void)
                (uint64_t)st.st_size, DISK_BYTES);
 }
 
-/* The NVRAM file must be the CMOS's size if it exists, or creatable (its folder exists):
- * cmos_load's own refusals are stops, and these are the user's files. */
+/* The NVRAM file must be the CMOS's size if it exists, and its folder must exist and be
+ * writable either way: the file is created there on a first run and replaced through a
+ * temporary file and a rename at every save (dev_cmos.c), so a folder the program cannot
+ * write would otherwise fail only at the end of the run (final review M1). cmos_load's own
+ * refusals are stops, and these are the user's files, so they are checked here, before any
+ * file is created. */
 static void check_nvram(void)
 {
     struct stat st;
-    if (stat(opt.nvram, &st) == 0) {
-        if (!S_ISREG(st.st_mode) || (uint64_t)st.st_size != CMOS_SIZE)
-            refuse("%s: not an NVRAM file (%u bytes)", opt.nvram, CMOS_SIZE);
-        return;
-    }
-    if (errno != ENOENT)
-        refuse("%s: %s", opt.nvram, strerror(errno));
     char *dir = beside(opt.nvram, ".");
+    if (stat(opt.nvram, &st) == 0) {
+        if (!S_ISREG(st.st_mode))
+            refuse("%s: not a regular file, so not an NVRAM file", opt.nvram);
+        if ((uint64_t)st.st_size != CMOS_SIZE)
+            refuse("%s: %" PRIu64 " bytes, not the CMOS's %u", opt.nvram, (uint64_t)st.st_size,
+                   CMOS_SIZE);
+    } else if (errno != ENOENT) {
+        refuse("%s: %s", opt.nvram, strerror(errno));
+    }
     if (stat(dir, &st) != 0 || !S_ISDIR(st.st_mode))
         refuse("%s: its folder does not exist", opt.nvram);
+    if (access(dir, W_OK | X_OK) != 0)
+        refuse("%s: cannot write its folder (%s), where the NVRAM is saved", opt.nvram,
+               strerror(errno));
     free(dir);
 }
 

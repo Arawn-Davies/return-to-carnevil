@@ -93,7 +93,7 @@ The options:
 - `--disk FILE` (required): your raw image. It is only ever opened for reading; the program checks its size and that its `GAME.EXE` is the supported revision before it creates any other file.
 - `--overlay FILE`: where the game's writes to its disk go (audits, adjustments, high scores). Created on the first run, reused afterwards, and refused if it was made for another image.
 - `--nvram FILE`: the game's settings memory (CMOS), 32 KB. Created blank on the first run. It is saved when the run ends, whether it reached its limit, stopped, or was interrupted (below); a run killed with `SIGKILL` (or by a crash of the machine) cannot save it.
-- `--seconds N` or `--frames N`: stop after N seconds of game time, or at the N-th frame (VBLANK interrupt). Without either, the game runs until something stops it.
+- `--seconds N` or `--frames N`: stop after N seconds of game time (at most 18,000,000, about 208 days, the most the Voodoo model's picosecond clock can hold), or at the N-th frame (VBLANK interrupt). Without either, the game runs until something stops it.
 - `--trace FILE`: write a log of what the game did, one line per event (see [analysis/runtime.md](analysis/runtime.md), "Reading a trace").
 - `--quiet`: keep the game's console output out of the terminal.
 

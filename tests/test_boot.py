@@ -20,6 +20,7 @@ GAME.EXE's entry (carnevil.c's top comment lists the kinds).
 """
 import collections
 import dataclasses
+import hashlib
 import os
 import re
 import shutil
@@ -222,22 +223,42 @@ def files_in(folder, raw=None, trace=True, quiet=True):
 MSG = b"hello\r\n\0"
 
 
-def synthetic_exe(path, message=MSG, then=0x0C0, then_fd=5, then_len=0):
+def synthetic_exe(path, message=MSG, then=0x0C0, then_fd=5, then_len=0, writes_file=False):
     """GAME.EXE at the entry: write(1, message, len) through the stub block's slot 0x0C0,
     then a call of the stub block at offset `then` with a0 = then_fd, a1 = the message and
     a2 = then_len (by default another write, of 0 bytes to fd 5; with then_fd 3, a write of
     the message's first then_len bytes to the CMOS), then a loop for ever; the image runs past
-    the stub block, with the message after it."""
+    the stub block, with the message after it. With writes_file, instead of the call at
+    `then`: open("NEW.BIN", 1) (slot 0x088) and a write of the message's 8 bytes to the
+    descriptor it returns, a file written to the disk through the overlay."""
     msg = STUB_END
+    name = msg + len(message)
     words = [A("lui", rt=A1, imm=msg >> 16), A("ori", rt=A1, rs=A1, imm=msg & 0xFFFF),
              A("addiu", rt=A0, rs=0, imm=1), A("addiu", rt=A2, rs=0, imm=len(message) - 1),
-             A("jal", target=STUB + 0x0C0), 0,
-             A("addiu", rt=A0, rs=0, imm=then_fd), A("addiu", rt=A2, rs=0, imm=then_len),
-             A("jal", target=STUB + then), 0,
-             A("beq", rs=0, rt=0, imm=-1), 0]
+             A("jal", target=STUB + 0x0C0), 0]
+    if writes_file:
+        words += [A("lui", rt=A0, imm=name >> 16), A("ori", rt=A0, rs=A0, imm=name & 0xFFFF),
+                  A("addiu", rt=A1, rs=0, imm=1), A("jal", target=STUB + 0x088), 0,
+                  A("or", rd=A0, rs=2, rt=0),
+                  A("lui", rt=A1, imm=msg >> 16), A("ori", rt=A1, rs=A1, imm=msg & 0xFFFF),
+                  A("addiu", rt=A2, rs=0, imm=8), A("jal", target=STUB + 0x0C0), 0]
+    else:
+        words += [A("addiu", rt=A0, rs=0, imm=then_fd), A("addiu", rt=A2, rs=0, imm=then_len),
+                  A("jal", target=STUB + then), 0]
+    words += [A("beq", rs=0, rt=0, imm=-1), 0]
     words += [0] * ((msg - ENTRY) // 4 - len(words))
     words += list(struct.unpack("<%dI" % (len(message) // 4), message))
+    words += list(struct.unpack("<2I", b"NEW.BIN\0"))
     return write_exe(path, words, load=ENTRY)
+
+
+def sha256_file(path):
+    """The SHA-256 of a whole file, read in 16 MB pieces."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for piece in iter(lambda: f.read(1 << 24), b""):
+            h.update(piece)
+    return h.hexdigest()
 
 
 def synthetic_disk(path, exe_path, size=DISK_BYTES):
@@ -297,7 +318,17 @@ class MainTest(unittest.TestCase):
                      good + ["--seconds", "1", "--frames", "1"], good + ["--frames", "-1"],
                      good + ["--bogus"], good + ["--disk"], good + ["extra"]):
             with self.subTest(args=args):
-                self.refused(args, "carnevil")
+                res = self.refused(args, "carnevil")
+                self.assertIn("130 when interrupted by a signal", res.stderr)
+        self.assertEqual(os.listdir(self.tmp), [])
+
+    def test_seconds_bound(self):
+        """--seconds is bounded by what every time base of the runtime can represent (final
+        review M3): the card's picosecond clock, power-on based, is the narrowest, so the
+        bound is 18,000,000 s; one more is a usage error naming the bound."""
+        res = self.refused(files_in(self.tmp, self.raw, trace=False) + ["--seconds", "18000001"],
+                           "--seconds 18000001", "from 1 to 18000000")
+        self.assertIn("usage:", res.stderr)
         self.assertEqual(os.listdir(self.tmp), [])
 
     def test_file_errors(self):
@@ -310,8 +341,14 @@ class MainTest(unittest.TestCase):
         nvram = os.path.join(self.tmp, "carnevil.nvram")
         with open(nvram, "wb") as f:
             f.write(b"\xFF" * 100)
-        self.refused(files_in(self.tmp, self.raw, trace=False) + ["--seconds", "1"], nvram)
+        # the size it has and the size it needs (final review M4)
+        self.refused(files_in(self.tmp, self.raw, trace=False) + ["--seconds", "1"], nvram,
+                     "100 bytes, not the CMOS's 32768")
         os.remove(nvram)
+        os.mkdir(nvram)
+        self.refused(files_in(self.tmp, self.raw, trace=False) + ["--seconds", "1"], nvram,
+                     "not a regular file")
+        os.rmdir(nvram)
         trace = os.path.join(self.tmp, "no", "such", "folder", "trace.txt")
         self.refused(files_in(self.tmp, self.raw, trace=False) + ["--trace", trace], trace)
         # nothing was created next to the image, and no overlay before the checks passed
@@ -417,6 +454,47 @@ class MainTest(unittest.TestCase):
                 # the next run on the same overlay and NVRAM starts and ends normally
                 again = run(program, files_in(folder, raw) + ["--seconds", "1"], 120)
                 self.assertEqual((again.returncode, again.stderr), (0, ""))
+
+    def test_nvram_folder_not_writable(self):
+        """An NVRAM file in a folder the program cannot write (final review M1) is refused
+        before the run starts: exit 2, one line naming the file, and nothing is created (no
+        overlay, no trace), whether the NVRAM file exists yet or not."""
+        folder = os.path.join(self.tmp, "ro")
+        os.mkdir(folder)
+        args = ["--disk", self.raw, "--overlay", os.path.join(self.tmp, "o"),
+                "--nvram", os.path.join(folder, "carnevil.nvram"),
+                "--trace", os.path.join(self.tmp, "t"), "--seconds", "1"]
+        os.chmod(folder, 0o555)
+        self.addCleanup(os.chmod, folder, 0o755)
+        if os.access(folder, os.W_OK):
+            self.skipTest("this user can write a read-only folder (running as root?)")
+        self.refused(args, os.path.join(folder, "carnevil.nvram"), "cannot write its folder")
+        self.assertEqual(sorted(os.listdir(self.tmp)), ["ro"])
+        os.chmod(folder, 0o755)
+        with open(os.path.join(folder, "carnevil.nvram"), "wb") as f:
+            f.write(b"\xFF" * 0x8000)
+        os.chmod(folder, 0o555)
+        self.refused(args, os.path.join(folder, "carnevil.nvram"), "cannot write its folder")
+        self.assertEqual(sorted(os.listdir(self.tmp)), ["ro"])
+
+    def test_raw_image_unchanged_by_a_run_that_writes(self):
+        """The raw image is byte-identical before and after a run whose game writes a file
+        through the overlay (final review M13): the synthetic image, all 4,310,046,720 bytes
+        of it, hashed in full both times. (For the user's real image the tests keep to its
+        size and modification time, test_user_files: hashing 4.3 GB per run would dominate
+        the suite.)"""
+        program, raw, _sha = self.synthetic("writer", then=0x088, writes_file=True)
+        before = sha256_file(raw)
+        res = run(program, files_in(self.tmp, raw) + ["--seconds", "1"], 120)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        trace = Trace(os.path.join(self.tmp, "trace.txt"))
+        [(name, mode, fd)] = trace.opens
+        self.assertEqual((name, mode), ("NEW.BIN", 1))
+        self.assertGreaterEqual(fd, 0)
+        self.assertEqual(trace.loader[-1][1], 0x0C0)
+        self.assertEqual(trace.loader[-1][-1], 8)  # the write wrote its 8 bytes
+        self.assertGreater(os.path.getsize(os.path.join(self.tmp, "carnevil.overlay")), 512)
+        self.assertEqual(sha256_file(raw), before)
 
     def test_failed_nvram_save_keeps_the_rest(self):
         """The NVRAM save failing at the end of a run (its temporary file's name taken by a
