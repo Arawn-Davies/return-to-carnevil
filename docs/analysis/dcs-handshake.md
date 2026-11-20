@@ -90,6 +90,7 @@ means a command word followed by a header and data words, sent back to back.
    (0xE000). This is the `main_init_sound: (information) requesting version number` step on
    the console (10.238 s).
 9. SOUNDOUT 0x55D4. **Reply 0x0223** 4 to 6 ms later (the same in both sound loads).
+   (Correction, 2026-11-20: 4.29 to 6.20 ms, as in "Timing".)
 10. Then, three times: SOUNDOUT 0x55D2, 0x55D3 (no reply; five reads of the stale SOUNDIN
     and one acknowledgement, as in step 8), a short 0x55D0 block (13 to 333 words), **reply =
     its data sum**, a long 0x55D0 block (21,924 to 69,828 words, `main_init_sound(): Loading
@@ -98,7 +99,10 @@ means a command word followed by a header and data words, sent back to back.
     `loadwave` starts at 12.29 s, where the game reads the five stale words of step 8 and
     acknowledges, sends 0x55D4 and gets **0x0223**. (Correction, 2026-11-20: the five reads
     return 0xBF10, trace lines 395,536 to 395,540, the last reply before them (the sum of the
-    last 0x55D0 block, line 395,520), as the stale-SOUNDIN rule says; not step 8's 0xE000.)
+    last 0x55D0 block, line 395,520), as the stale-SOUNDIN rule says; not step 8's 0xE000.
+    Second correction, 2026-11-20: at 10.641 s only 0x55AA, 0xC837, 0x55B2, 0xBB44 were sent,
+    lines 395,523 to 395,533; the 0x55D3 came at 12.2907 s, line 395,535, just before the five
+    stale reads.)
 12. 12.295 s to 12.790 s: steps 3 to 10 again, word for word, with the same replies
     (the second `main_init_sound` block on the console).
 13. 12.790 s: SOUNDOUT 0x55AA, 0xC837, 0x55B2, 0xBB44, 0x55AE, 0x0100 (no reply); SOUNDCTL
@@ -144,6 +148,15 @@ The replies the game reads are therefore, per occasion:
 - The words the game sends without a reply (0x55AA 0xC837, 0x55B2 0xBB44, 0x55AE 0x0100,
   0x55D2, 0x55D3, 0x55D7 and its three words) are recorded, not interpreted. (Correction,
   2026-11-20: 0x00B9 0xFF7F 0x8000 was answered by a word the game never read; step 15.)
+- Each of the commands with arguments that are not a download was sent with one argument
+  pattern only (measured, the trace recounted on 2026-11-20): 0x55AA 0xC837 3 times, 0x55B2
+  0xBB44 twice, 0x55AE 0x0100 twice, 0x55D7 0x0000 0xFF00 0x0000 once, 0x00B9 0xFF7F 0x8000
+  once. The commands without arguments: 0x002A twice, 0x55D2 10 times, 0x55D3 13 times, 0x55D4
+  3 times. The downloads: 0x001A 8 times (4 with space 0, 4 with space 1), 0x55D0 14 times,
+  0x55D1 8 times. SOUNDCTL was written 0x0000 4 times, 0x0001 5 times and 0x000F once; INTCTL
+  0x4000 6 times, 0x4008 and 0x4009 once each. The responder takes these argument patterns and
+  values only, and stops on any other, since what the board does with another was not seen;
+  the downloads' addresses and lengths are free, because their reply is computed.
 
 ## Timing (measured)
 
@@ -252,7 +265,8 @@ after its first INTSTAT read (measured, the replay). What it does not reproduce:
 - **The FIFO is never drained** (inferred from the one IP3 in 150 s): once full it stays full,
   and a word written to a full FIFO stops. Play, where the streamer runs on, needs the board's
   consumption of the FIFO.
-- Emulating the sound processor (its boot ROM and the downloaded program) removes these gaps.
+- Emulating the sound processor (its boot ROM and the downloaded program) removes these gaps
+  (inferred).
 
 ## Not done
 

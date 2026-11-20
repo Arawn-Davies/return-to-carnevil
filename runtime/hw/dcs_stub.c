@@ -89,24 +89,30 @@ struct command {
     uint8_t states; /* the states (1 << enum board) that take it */
     uint8_t words;  /* header or argument words after it */
     uint8_t action;
+    uint8_t pinned; /* 1: the arguments must be the measured ones in args */
+    uint16_t args[3];
 };
 
 #define IN(s) (1u << (s))
 /* Every command word of the trace, in the states the trace shows it in (dcs-handshake.md,
- * steps 2 to 15, and the corrections there for 0x00B9). */
+ * steps 2 to 15, and the corrections there for 0x00B9), with how often the trace has it
+ * (measured). The download commands (0x001A, 0x55D0, 0x55D1) take any addresses and lengths
+ * by rule: their reply is computed from the words. The other commands with arguments are
+ * pinned to the one pattern the trace shows: what the board does with another was never
+ * seen, so it stops. */
 static const struct command COMMANDS[] = {
-    {0x55AA, IN(B_ENTRY) | IN(B_PROGRAM), 1, A_NONE}, /* 0x55AA 0xC837: steps 2, 11, 13 */
-    {0x001A, IN(B_BOOT), 3, A_BOOT_BLOCK},            /* step 5 */
-    {0x002A, IN(B_BOOT), 0, A_BOOTED},                /* step 6 */
-    {0x55D0, IN(B_PROGRAM), 4, A_BANK_BLOCK},         /* steps 7, 10 */
-    {0x55D1, IN(B_PROGRAM), 4, A_BANK_BLOCK},         /* step 14 */
-    {0x55D2, IN(B_PROGRAM), 0, A_NONE},               /* steps 10, 14 */
-    {0x55D3, IN(B_PROGRAM), 0, A_NONE},               /* steps 8, 10, 11, 14 */
-    {0x55D4, IN(B_PROGRAM), 0, A_VERSION},            /* step 9 */
-    {0x55B2, IN(B_PROGRAM), 1, A_NONE},               /* 0x55B2 0xBB44: steps 11, 13 */
-    {0x55AE, IN(B_PROGRAM), 1, A_NONE},               /* 0x55AE 0x0100: steps 13, 15 */
-    {0x55D7, IN(B_PROGRAM), 3, A_NONE},               /* 0x55D7 0x0000 0xFF00 0x0000: 14 */
-    {0x00B9, IN(B_PROGRAM), 2, A_UNREAD},             /* 0x00B9 0xFF7F 0x8000: step 15 */
+    {0x55AA, IN(B_ENTRY) | IN(B_PROGRAM), 1, A_NONE, 1, {0xC837}}, /* 3: steps 2, 11, 13 */
+    {0x001A, IN(B_BOOT), 3, A_BOOT_BLOCK, 0, {0}},                 /* 8: step 5 */
+    {0x002A, IN(B_BOOT), 0, A_BOOTED, 0, {0}},                     /* 2: step 6 */
+    {0x55D0, IN(B_PROGRAM), 4, A_BANK_BLOCK, 0, {0}},              /* 14: steps 7, 10 */
+    {0x55D1, IN(B_PROGRAM), 4, A_BANK_BLOCK, 0, {0}},              /* 8: step 14 */
+    {0x55D2, IN(B_PROGRAM), 0, A_NONE, 0, {0}},                    /* 10: steps 10, 14 */
+    {0x55D3, IN(B_PROGRAM), 0, A_NONE, 0, {0}},                    /* 13: 8, 10, 11, 14 */
+    {0x55D4, IN(B_PROGRAM), 0, A_VERSION, 0, {0}},                 /* 3: step 9 */
+    {0x55B2, IN(B_PROGRAM), 1, A_NONE, 1, {0xBB44}},               /* 2: steps 11, 13 */
+    {0x55AE, IN(B_PROGRAM), 1, A_NONE, 1, {0x0100}},               /* 2: steps 13, 15 */
+    {0x55D7, IN(B_PROGRAM), 3, A_NONE, 1, {0x0000, 0xFF00, 0x0000}}, /* 1: step 14 */
+    {0x00B9, IN(B_PROGRAM), 2, A_UNREAD, 1, {0xFF7F, 0x8000}},     /* 1: step 15 */
 };
 #define N_COMMANDS (sizeof COMMANDS / sizeof COMMANDS[0])
 
@@ -316,6 +322,11 @@ static void soundout(cpu_t *c, uint32_t w)
         return;
     }
     if (d.cmd) { /* a header or argument word */
+        if (d.cmd->pinned && w != d.cmd->args[d.got])
+            ld_stop("sound board: 0x%04X argument %u is 0x%04X, not the measured 0x%04X (%s "
+                    "state): what the board does with it was never seen",
+                    (unsigned)d.cmd->word, (unsigned)d.got + 1, (unsigned)w,
+                    (unsigned)d.cmd->args[d.got], BOARD_NAME[d.board]);
         d.header[d.got++] = w;
         if (d.got == d.cmd->words)
             command_done(c);
@@ -336,11 +347,16 @@ static void soundout(cpu_t *c, uint32_t w)
 
 /* SOUNDCTL bit 0 clear holds the board in reset and drops what it was doing; set again, the
  * board's boot loader starts and sends 0x000A (dcs-handshake.md, step 3; the 0x0001 and
- * 0x000F writes of step 13 leave bit 0 set and reset nothing). Other bits are stored only. */
+ * 0x000F writes of step 13 leave bit 0 set and reset nothing). Other bits are stored only,
+ * and only the values the game wrote are taken (measured: 0x0000 4 times, 0x0001 5 times,
+ * 0x000F once). */
 static void soundctl(cpu_t *c, uint32_t v)
 {
     uint64_t now = vclock_now(c);
     uint32_t old = d.soundctl;
+    if (v != 0x0000u && v != 0x0001u && v != 0x000Fu)
+        ld_stop("sound board: SOUNDCTL write 0x%04X (the game wrote 0x0000, 0x0001 and 0x000F "
+                "only)", (unsigned)v);
     d.soundctl = v;
     if ((old & 1u) && !(v & 1u)) {
         d.board = B_HELD;

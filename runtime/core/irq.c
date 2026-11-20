@@ -221,7 +221,8 @@ static void default_work(uint8_t *ram, cpu_t *c, int n)
     case 3:
         /* IOASIC: clears INTCTL bit 0. The IOASIC model's IP3 level (runtime/hw/dcs_stub.c,
          * dcs_irq_update) needs INTCTL bit 0, so with it clear the line follows the model
-         * low; it rises again only when the game sets the bit with a source pending. */
+         * low. It rises again when the level becomes true: the game setting bit 0 with an
+         * enabled source pending, or an enabled source becoming pending while bit 0 is set. */
         machine.intctl &= ~1u;
         irq_clear(3);
         return;

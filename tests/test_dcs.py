@@ -19,6 +19,15 @@ FIFO = 0xB3000000
 # hardware-usage.md, "By GAME.EXE's own code": the game's sound FIFO writes in attract mode
 FIFO_WRITES = 512
 RESET_REPLY_NS = 2027000  # dcs_stub.c, DCS_RESET_REPLY_NS
+# The replay's reads where a timing bit is modelled set and recorded clear, and the words taken
+# as block data (the 1,230,931 SOUNDOUT writes less 191 command, header and argument words)
+EARLY_READS = {"0040": "17978", "0080": "45", "8000": "495782"}
+DATA_WORDS = 1230740
+# The argument words each pinned command was sent with in the trace (dcs-handshake.md, "Which
+# replies are rules and which are recorded values"), and its state
+PINNED = [(0x55AA, (0xC837,), "entry"), (0x55AA, (0xC837,), "program"),
+          (0x55B2, (0xBB44,), "program"), (0x55AE, (0x0100,), "program"),
+          (0x55D7, (0x0000, 0xFF00, 0x0000), "program"), (0x00B9, (0xFF7F, 0x8000), "program")]
 
 
 def read(cmd):
@@ -141,6 +150,49 @@ class DcsTest(test_hw.HwTestCase):
                          [["0", "00000000"], ["1", "00000800"], ["1", "00000000"]])
         self.stops([test_hw.wr(4, FIFO, 0)] * 513, "physical 0x13000000", "full")
 
+    def program(self):
+        """Commands bringing the board to its program state with nothing waiting."""
+        return (board_reset(0) + out_words(0x002A) + ["at 10000000"] + read(SOUNDIN)
+                + write(SOUNDIN_W, 0))
+
+    def test_pinned_arguments(self):
+        """The commands whose behaviour the trace shows for one argument pattern only take
+        that pattern: with it, as measured (no reply, or for 0x00B9 a word waiting); with any
+        other value in any argument, a stop naming the command, the argument, the state and
+        ra."""
+        for word, args, state in PINNED:
+            setup = [] if state == "entry" else self.program()
+            with self.subTest(word=hex(word), state=state):
+                out, _ = self.drive(setup + out_words(word, *args) + read(SOUNDSTAT) + ["dcs"])
+                self.assertEqual(self.words(out)[-1] & 0x40,
+                                 0x40 if word in (0x00B9,) or state == "entry" else 0)
+                for i in range(len(args)):
+                    bad = list(args)
+                    bad[i] ^= 0x0001
+                    self.stops(setup + out_words(word, *bad[:i + 1]), f"0x{word:04X}",
+                               f"0x{bad[i]:04X}", state, f"ra 0x{CALLER_RA:08X}")
+
+    def test_soundctl_measured_values(self):
+        """SOUNDCTL takes the values the game wrote in the trace (0x0000, 0x0001, 0x000F);
+        another stops naming it."""
+        out, _ = self.drive(write(SOUNDCTL_W, 0x000F) + read(SOUNDCTL_R) + write(SOUNDCTL_W, 1)
+                            + read(SOUNDCTL_R))
+        self.assertEqual(self.words(out), [0x000F, 0x0001])
+        self.stops(write(SOUNDCTL_W, 0x0003), "0x0003", "SOUNDCTL", f"ra 0x{CALLER_RA:08X}")
+
+    def test_intctl_enables_limited(self):
+        """An INTCTL write (0x690F) with an enable bit outside those the game wrote in the
+        trace (0x4000, 0x4008, 0x4009) stops naming the value; the measured values are taken,
+        and bit 14, which the dispatcher sets after every exception, is not one the check
+        refuses."""
+        out, _ = self.drive(write(INTCTL_W, 0x4000) + write(INTCTL_W, 0x0008)
+                            + write(INTCTL_W, 0x4009) + read(INTCTL_R))
+        self.assertEqual(self.words(out), [0x4009])
+        for value in (0x4089, 0x4001 | 0x40, 0x0002):
+            with self.subTest(value=hex(value)):
+                self.stops(write(INTCTL_W, value), f"0x{value:04X}", "INTCTL",
+                           f"ra 0x{CALLER_RA:08X}")
+
 
 @requires_file("mame", "m2-facts", "dcs-trace.txt")
 class DcsReplayTest(test_hw.HwTestCase):
@@ -159,10 +211,14 @@ class DcsReplayTest(test_hw.HwTestCase):
             with self.subTest(kind=kind):
                 self.assertEqual(reads[kind][:2], [str(total), str(total)], reads[kind])
         self.assertEqual(out.all("dcsstate"), [["1679832", "1679832", "0"]])
-        for bit, late, _early, first in out.all("dcsbit"):
+        for bit, late, early, first in out.all("dcsbit"):
             with self.subTest(bit=bit):
                 self.assertEqual(late, "0", f"first at trace line {first}")
+                # the reads where the model is earlier than the board (dcs-handshake.md,
+                # "Known gaps in the responder"), pinned so a drift in the model shows
+                self.assertEqual(early, EARLY_READS[bit])
         self.assertEqual(out.all("dcsorphan"), [["0"]])
+        self.assertEqual(out.all("dcsdata"), [[str(DATA_WORDS)]])
         ip3 = out.all("dcsip3")
         self.assertEqual(len(ip3), 1)
         self.assertEqual(out.all("dcsraise"), [[ip3[0][1]]])

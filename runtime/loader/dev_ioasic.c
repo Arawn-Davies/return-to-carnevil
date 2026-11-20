@@ -14,6 +14,9 @@
 #include "loader.h"
 #include "machine.h"
 
+/* The INTCTL bits the game's writes set (see 0x690F below). */
+#define INTCTL_MEASURED 0x4009u
+
 /* PORT0 to PORT3 with no input, as the game read them in MAME (measured: loader-services.md
  * section 3, `ioasic:`, "With no input"). */
 #define PORT0_IDLE 0xBDFEu
@@ -62,6 +65,13 @@ static int ioasic_ioctl(int fd, uint32_t cmd, uint32_t arg)
         ld_put32(arg, dcs_intstat(ld.c) & 0xFFFFu);
         return 0;
     case 0x690F: /* INTCTL write: its enables decide the IP3 level (dcs_stub.c) */
+        /* the game wrote 0x4000 6 times, 0x4008 once and 0x4009 once (measured,
+         * dcs-trace.txt): bits 14, 3 and 0. Another enable could make an INTSTAT bit the model
+         * holds steady (0x0080 is always set) a permanent IP3, which the board never showed.
+         * Bit 14 is among them; the dispatcher's own sets of it do not come through here. */
+        if ((arg & 0xFFFFu) & ~INTCTL_MEASURED)
+            ld_stop("INTCTL write 0x%04X enables bits the game was never seen to (it wrote "
+                    "0x4000, 0x4008 and 0x4009)", (unsigned)(arg & 0xFFFFu));
         machine.intctl = arg & 0xFFFFu;
         dcs_irq_update(ld.c);
         return 0;

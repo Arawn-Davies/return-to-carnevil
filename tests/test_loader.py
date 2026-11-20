@@ -643,18 +643,19 @@ class LoaderTest(LoaderTestCase):
 
     def test_ioasic(self):
         """ioasic: (section 3): 0x6900 to 0x6903 store the input ports (bus words 3, 4, 2,
-        1); 0x6905 is accepted and logged; 0x690E stores INTSTAT, 0x690F writes INTCTL and
-        0x6910 reads it back; read and write return 0."""
+        1); 0x6905 is accepted and logged; 0x690E stores INTSTAT, 0x690F writes INTCTL (16
+        bits, one of the measured values here: tests/test_dcs.py has the limit) and 0x6910
+        reads it back; read and write return 0."""
         out, err = self.drive(["inputs 1111 2222 3333 4444"]
                               + [ioctl(4, 0x6900 + i, BUF + 4 * i) for i in range(4)]
                               + [f"dump {BUF:08X} 4", ioctl(4, 0x6905, 0x10),
-                                 ioctl(4, 0x690E, BUF2), ioctl(4, 0x690F, 0x12345),
+                                 ioctl(4, 0x690E, BUF2), ioctl(4, 0x690F, 0x14008),
                                  ioctl(4, 0x6910, BUF2 + 4), f"dump {BUF2:08X} 2", "state",
                                  call(0x090, 4, BUF, 4), call(0x0C0, 4, BUF, 4)],
                               stderr=True)
         self.assertEqual(out.v0s(), [0] * 8 + [0, 0])
-        self.assertEqual(out.dumps(), [[0x1111, 0x2222, 0x3333, 0x4444], [0x20C9, 0x2345]])
-        self.assertEqual(out.m()["intctl"], 0x2345)
+        self.assertEqual(out.dumps(), [[0x1111, 0x2222, 0x3333, 0x4444], [0x20C9, 0x4008]])
+        self.assertEqual(out.m()["intctl"], 0x4008)
         self.assertEqual(err, f"carnevil: ioasic: ioctl 0x6905 (COIN register write) 0x10, "
                               f"ra 0x{CALLER_RA:08X}\n")
         # 0x6906 to 0x690A and 0x6911 go to the sound board's responder (tests/test_dcs.py)
