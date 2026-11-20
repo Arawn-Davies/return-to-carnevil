@@ -336,6 +336,8 @@ static int end_quiet;
 
 _Noreturn void trace_end(const char *how)
 {
+    /* the task changes since the last switch first, so that only the totals follow "end" */
+    scan_tasks();
     if (out) {
         line_head("end");
         fprintf(out, " %s\n", how);
@@ -357,6 +359,7 @@ _Noreturn void trace_interrupted(int sig)
                        : sig == SIGTERM ? "SIGTERM"
                        : sig == SIGHUP  ? "SIGHUP"
                                         : "a signal";
+    scan_tasks(); /* as in trace_end: only the totals follow "end" */
     if (out) {
         line_head("end");
         fprintf(out, " interrupted %s\n", name);

@@ -767,9 +767,16 @@ class BootTest(unittest.TestCase):
         self.assertEqual(trace.end, "interrupted SIGTERM")
         end = trace.kinds.index("end")
         self.assertLessEqual(set(trace.kinds[end + 1:]), {"count", "alive"})
+        # the task changes since the last host switch, read at the end, come just before the
+        # "end" line; the 150 s run writes the same lines at its next switch, later
+        tail = end
+        while tail > 0 and trace.kinds[tail - 1] == "task":
+            tail -= 1
         with open(long_trace, encoding="latin-1") as f:
-            reference = [next(f).rstrip("\n") for _ in range(end)]
-        self.assertEqual(lines[:end], reference)
+            reference = [line.rstrip("\n") for line in f]
+        self.assertEqual(lines[:tail], reference[:tail])
+        later = [r.split(" ", 1)[1] for r in reference[tail:] if r.split(" ")[1] == "task"]
+        self.assertEqual([x.split(" ", 1)[1] for x in lines[tail:end]], later[:end - tail])
         self.assertEqual(trace.console, mame_console())  # all 25 come within 3 s of game time
         frames = trace.counts["vblank"]
         nvrams = []

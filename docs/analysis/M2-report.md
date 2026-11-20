@@ -31,7 +31,8 @@ Every fact below carries its basis, as in the [M1 report](M1-report.md):
   runtime/*/*.h | wc -l`), 7,665 of them in files new in M2 (static, `git diff --name-only
   --diff-filter=A 4cc16c4 e50f325 -- runtime | xargs cat | wc -l`). The milestone is 24
   commits from the plan (`4cc16c4`) to `e50f325`, plus
-  this report.
+  this report. The whole-branch review's fix wave added 9 commits (2026-11-20, from
+  `2a4a95f`), after which `runtime/` holds 9,806 lines (static, the same command).
 - **The run**: `carnevil --disk carnevil.raw --seconds 150` exits 0 after 150 s of virtual
   time on the Mac (Apple clang, arm64). Task 9 also ran it in the Linux container (GCC 14.2, x86-64) and
   reported that trace's SHA-256 equal to its Mac trace's; the Task 9 reviewer's own Mac run
@@ -47,7 +48,8 @@ Every fact below carries its basis, as in the [M1 report](M1-report.md):
   reported it, not re-run independently (run; below).
 - **Tests**: 491 tests with game data, 5 of them skipped; 485 without (`CARNEVIL_WORK` set to
   a missing folder), 61 skipped (test, at this report's commit; the M1 figures were 309 and
-  303).
+  303). After the whole-branch review's fix wave: 517 with game data, 5 skipped; 511 without,
+  65 skipped (test, Mac, 2026-11-20).
 - **Builds**: `make carnevil` builds with zero warnings under `-Wall -Wextra -Werror` on the
   Mac and, as Task 9 reported (not re-run independently), with GCC 14.2 in the Linux container (run).
 
@@ -161,8 +163,10 @@ because its clock's pace differs.
   where the board takes an interrupt at any instruction. The exception path other than
   interrupts (break hooks, the FP catch-all) never ran in MAME's attract or play runs
   (MAME, `breaks.txt`), so it has run only on synthetic code in the port.
-- **The task contexts** (`tasks.c`): 9 tests, each repeated 20 times without a failure in
-  Task 5, and the scenarios again under the thread sanitizer on the Mac with no report (test).
+- **The task contexts** (`tasks.c`): 7 tests in Task 5, each repeated 20 times there without
+  a failure (11 since: `test_switch_hook` and `test_record_reuse` of later tasks, and the two
+  interrupt tests of the fix wave), and the scenarios again under the thread sanitizer on
+  the Mac with no report (test).
   Task 9 reported that in the Linux container the task tests pass and that the 150 s run and the 20 s
   sanitizer run end tasks through `pthread_exit` from deep inside generated code with glibc's
   forced unwind, on 1 MB host stacks; this was not re-run independently, and the 150 s part is
@@ -763,11 +767,59 @@ The controller's decisions on the review's findings, taken as rulings:
   value, an LFB read) may.
 - **Real-time pacing** itself, with the window: none of M2 reads the host's clock.
 
+## After the whole-branch review
+
+The review (`.superpowers/sdd/2026-11-19-carnevil-recomp-m2/final-review.md`) found five
+important issues and thirteen minor ones; one fix wave on 2026-11-20 changed this (rulings
+36 to 39 above; the fix report beside the review gives the tests' failures before and passes
+after):
+
+- **I1, M10**: SIGINT, SIGTERM and SIGHUP end a run cleanly at the next check point (the
+  NVRAM saved, the overlay synced, the trace's totals written), with exit status 130; the
+  NVRAM's temporary file is synced before its rename; a stop inside an at-stop function no
+  longer skips the others.
+- **I2**: the sound commands after 150 s from a 600 s MAME capture, and the horizon measured
+  ("What runs": at least 1,800 s).
+- **I3**: the check points and the FP divides store the guest pc, so an interrupt frame's
+  resume pc and EPC are real, the same in generated code and in the interpreter (ruling 36).
+- **I4**: tests of interrupts across task switches and of a task created in the VBLANK
+  handler, in both modes.
+- **I5, M2**: the file system orders its writes so that a kill only leaks blocks; the
+  overlay's record count is its commit point, so an uncounted trailing record is ignored
+  rather than refused; a host I/O error on the image, the overlay or the NVRAM stops, naming
+  the file.
+- **M1, M3, M4, M9, M13**: an NVRAM folder that cannot be written is refused before the run;
+  `--seconds` is at most 18,000,000 (the card's picosecond clock); the NVRAM size message
+  gives both sizes; the disk hooks run at the exception level with the dispatcher's registers
+  restored (ruling 37); the synthetic raw image is hashed in full around a run that writes
+  through the overlay. For the user's real 4.3 GB image the evidence stays as it was: opened
+  `O_RDONLY`, and its size and modification time unchanged by the 150 s run
+  (`test_user_files`).
+- The cheap items of the triage that are documentation, comments or test precision (removed
+  from the list below).
+
+None of it changed the comparisons with MAME: after every change the 150 s trace, overlay,
+NVRAM and console output are byte for byte those of the review's run (run, Mac), and only the
+RAM hash moved, with I3 (the frame's pc words).
+
 ## Open items
 
 Every deferred minor and every warning of the ledger, by area, one line each, with what has
-happened to it since where something has. This is the list for the whole-branch review to
-triage. Items this report adds are marked "(new)".
+happened to it since where something has. This was the list for the whole-branch review to
+triage; items this report added are marked "(new)". The review's fix wave (2026-11-20, "After
+the whole-branch review" below) removed the items it closed: the three it marked MUST FIX
+(ruling 12's pc, the overlay's commit point, the NVRAM's fsync) and the cheap ones it fixed.
+The rest stay, as triaged.
+
+**M3's first clean-up task.** Left by the fix wave on purpose, for the start of M3: the
+review's minor findings M5 (one `le.h` for the duplicated `get32`/`put32`/`hex` helpers and
+one stop wrapper for the four), M6 (the layering between `core`, `hw` and `loader`: devices
+reaching into the loader's call context and globals, before a render or sound thread
+arrives), M7 (splitting `voodoo_null.c`: video timing and PCI configuration out), M8 (the
+Makefile does not notice a `generated/` folder made by an older recompiler), M11 (the task
+host stacks' size for play, measured) and M12 (a lock on the overlay against two runs), with
+the items below marked as theirs (`get32`/`put32`, `FL_POLLED`, no lock, `voodoo_null.c`
+large).
 
 ### MAME scripts and fixtures
 
@@ -776,8 +828,6 @@ triage. Items this report adds are marked "(new)".
 - `voodoo-reads.txt`'s pc is MAME's next pc with no correction rule stated (subtract 4, delay
   slot); a load in the delay slot of a branch leaving `GAME.EXE` is dropped by the pc filter
   of `m2facts.lua` (Task 1).
-- `dcstap.lua` logs any v0 with low half 0xEEEE as a timeout; its header should note the
-  ambiguity (Task 1).
 - `PLAY_STEPS` is duplicated between `m2facts.lua` and `tasksw.lua` (Task 1).
 - The derivation scripts for `opens.txt`, `tasks.txt` and `loader-first.txt` live on the share
   only (Task 1).
@@ -786,14 +836,9 @@ triage. Items this report adds are marked "(new)".
 
 - `dcs-handshake.md` step 11 wording ("the five stale words of step 8" are 0xBF10) (Task 1):
   corrected in Task 8.
-- `loader-services.md` open question 4 mixes a mean with a median for cycles per spin; one line
-  of question 3 is over the wrap width (Task 1).
 - `functions.md` stale (format 2, two interpreted entries) (Task 2): corrected in this task.
-- Nothing says `FILESYS.CHK` is not maintained on writes (Task 3).
 - ⚠️ The loader routine addresses quoted as "read" in `disk-format.md` were not re-derived by
   the reviewer (Task 3).
-- The retrace lower bound in `hardware-usage.md` is mis-derived: 251,727 ns is the valid bound,
-  the doc still says 251,354 ns; the constant is consistent either way (Task 7).
 - `loader-services.md` sections 1 and 8 disagree on which disk hook runs when both are
   installed (Task 7): noted in both places in this task; the loader itself was not re-read.
 - The DAC paragraph of `hardware-usage.md` read oddly (Task 7): rewritten in Task 7's second
@@ -818,40 +863,27 @@ triage. Items this report adds are marked "(new)".
   code uses twice the mark (Task 9): corrected in this task.
 - `work/part0_files` on the share predates the directory fix and lacks 167 files until
   `extract` is rerun with the corrected tool (Task 3, a follow-up for the owner).
-- `loader-services.md` sections 2 and 8 say the console stand-in writes to the host's standard
-  error; the code writes standard output, as the Task 6 brief said (new).
-- `hardware-usage.md` infers that the Voodoo writes "outside GAME.EXE" in M0's tap were the boot
-  ROM's POST program; the port's exact texture-write and trexInit1 totals say they are the
-  game's (inferred; new, see "The Voodoo's write counts").
 
 ### Recompiler and tools
 
 - `--trace-pc` does not store the pc at a `j` into the stub block, a tail `j` to a function
   start, or `rt_call`/`rt_jump` of `jr` defaults (Task 2). The loader stand-ins name `ra`, as
   that item asked.
-- The CLI still lists the two host-switch `j`s as "j out of its function" (Task 2).
 - A non-integer `addr` in a manual entry gives an uncaught `TypeError` (Task 2, an M1 pattern).
 - `STUB_SLICE` is defined twice (`common.h`, `stub.c`), and the kind mapping twice
   (`functions.HOST_SWITCH_KINDS`, `recomp.SWITCH_KINDS`) (Task 2).
-- `_require_ubsan` probes `cc` without the global C flags; `replay.c`'s header reflow left a
-  dangling short line (Task 2).
-- Ruling 12: whether the emitter should always store the pc before an FP divide, so the trap's
-  epc is exact (Task 4).
+- `_require_ubsan` probes `cc` without the global C flags (Task 2; `replay.c`'s dangling header
+  line was rewrapped in the fix wave).
 
 ### The disk library
 
 - `dir_scan` detected a directory loop only after `nblocks` steps (Task 3): fixed in Task 3's
   first fix round (a visited bitmap).
-- The overlay is refused as truncated or over-long after a crash between appending a record
-  and updating the count (a trailing uncommitted record could be ignored), and there is no
-  `fdatasync` between the record and the count (Task 3; touches the user's files).
 - A second handle on a file truncated by a mode-1 open, or unlinked, keeps a stale first and
   current block and can write into reallocated blocks (Task 3).
 - The C reader keeps an entry with a non-zero first word but a blank name, where `disk.py`
   raises (Task 3).
 - `fs_find` reports a wrapped size for a length of 0x40000000 words or more (Task 3).
-- The raw-unchanged test compares whole lists with `assertNotEqual` instead of elementwise
-  (Task 3).
 - The Makefile also adds a header prerequisite line (Task 3).
 - The overlay's padding is not validated (Task 3).
 - No lock against two processes on one overlay (Task 3).
@@ -882,16 +914,13 @@ triage. Items this report adds are marked "(new)".
 - Retiring a context that never ran is untested (Task 5).
 - Misuse messages are matched only from the start of stderr (Task 5).
 - `test_ping_pong` cannot detect two threads at once without the thread sanitizer (Task 5).
-- The map's comment should state its bound (records pooled 16 at a time, 6 alive) (Task 5).
 - ⚠️ `pthread_exit` from generated frames on glibc, and 1 MB stacks under UBSan (Task 5):
   settled in Task 9 (the Linux container's 150 s run and 20 s sanitizer run).
 
 ### Loader stand-ins
 
-- `cmos` reads `errno` after `free`/`malloc` (Task 6).
 - `saving` can fall out of step with `machine.at_stop` after a `machine_reset` without
   `loader_reset` (Task 6).
-- No `fsync` before the rename in `cmos_save` (Task 6).
 - The console read ignores the blocking mode (Task 6, doc-sanctioned).
 - Find-first on a hit does not write bytes 0 to 11 and 16 to 19, and writes the upper-cased
   request as the name (Task 6).
@@ -933,7 +962,6 @@ triage. Items this report adds are marked "(new)".
 - The hSync half of the zero check is unreachable (Task 7b).
 - Any fbiInit1 or fbiInit2 write flags every buffer while a flag is set, even if the layout is
   unchanged (Task 7b).
-- A stale line in `test_textured_triangle`'s docstring (Task 7b).
 - Untested: the hold from the PCI FIFO's low-water mark, and the release with the memory FIFO
   off (Task 9).
 - A CPU store during a DMA-started hold is queued then held, where MAME saves and re-issues it
@@ -958,14 +986,11 @@ triage. Items this report adds are marked "(new)".
 
 ### The program, the trace and the boot test
 
-- `test_first_loader_calls_match_mame` uses the sp range 0x800C0000 to 0x800C1400 instead of
-  the documented 0x800C1320 to 0x800C1368, and asserts an unruled floor (more than 300 common
-  calls) without asserting equal lengths; the result is the same 389 either way (Task 9).
 - The port's interrupt-time loader calls run with sp 0x800C13A8 to 0x800C13D0, MAME's with
   0x800C1320 to 0x800C1368: the dispatcher's stack depth differs from the loader's, which the
   game does not see in this run (Task 9).
 - The `tolerated` half of `test_nothing_unexplained` cannot fail (nothing produces a tolerated
-  request), and `trace.c`'s format comment omits `tolerated` (Task 9).
+  request) (Task 9; `trace.c`'s format comment now says so).
 - `trace_open` comes before the overlay's `img_open`, so an overlay error leaves an empty trace
   (Task 9).
 - `trace.c`'s loader-call stack is one global stack, which would be wrong if a slot yielded to
@@ -974,5 +999,3 @@ triage. Items this report adds are marked "(new)".
   SHA-256 (Task 9).
 - `make run` without `OVERLAY` and `NVRAM` puts both files next to the default image, which
   for the default `DISK` is in the work folder on the share; the guide says to set them (new).
-- The opens comparison is a prefix with a floor of 180, so the test alone would accept fewer
-  than 193 opens (new; the run had 193 of 193).
