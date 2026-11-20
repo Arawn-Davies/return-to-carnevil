@@ -54,12 +54,17 @@ static int file_close(int fd)
 }
 
 /* read: section 2, `file`: 0 when n is not a multiple of 4, the bytes read, or 0xFFFFDBAE
- * at end of file */
+ * at end of file. A read on a file opened for writing only is not documented (whether the
+ * loader checks the mode at all is not read), so it stops. */
 static int file_read(int fd, uint32_t buf, uint32_t n)
 {
     static uint8_t chunk[CHUNK];
-    int h = ld_desc((uint32_t)fd)->fh;
+    struct ldesc *d = ld_desc((uint32_t)fd);
+    int h = d->fh;
     uint32_t done = 0;
+    if (!(d->flags & 1u))
+        ld_stop("read on fd %d, a file not open for reading (descriptor flags 0x%X)", fd,
+                (unsigned)d->flags);
     if (n % 4 || n == 0)
         return fs_read(h, chunk, n);
     while (done < n) {

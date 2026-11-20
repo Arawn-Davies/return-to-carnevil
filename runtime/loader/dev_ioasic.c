@@ -1,8 +1,8 @@
 /* dev_ioasic.c: the IOASIC's registers, `ioasic:` (descriptor 4 at the hand-off).
  *
  * docs/analysis/loader-services.md section 3 (`ioasic:`): plain register accessors; a read
- * stores register & 0xFFFF through arg, a write takes arg & 0xFFFF. The input ports come
- * from ioasic_set_inputs; INTCTL is machine_t's word (the dispatcher clears and sets its
+ * stores register & 0xFFFF through arg, a write takes arg & 0xFFFF. The input ports start
+ * at the measured no-input values and ioasic_set_inputs replaces them; INTCTL is machine_t's word (the dispatcher clears and sets its
  * bit 14 around every exception); the sound-board commands go to dcs_ioctl. Section 2: only
  * init and ioctl, so open, close, read and write are the shared return-0 routine.
  */
@@ -16,19 +16,27 @@
  * the sound-board task owns its dynamic bits. */
 #define IOASIC_INTSTAT_IDLE 0x20C9u
 
+/* PORT0 to PORT3 with no input, as the game read them in MAME (measured: loader-services.md
+ * section 3, `ioasic:`, "With no input"). */
+#define PORT0_IDLE 0xBDFEu
+#define PORT1_IDLE 0xFFFFu
+#define PORT2_IDLE 0xFFFFu
+#define PORT3_IDLE 0xFFFFu
+
 static uint16_t ports[4]; /* PORT0 to PORT3 */
-static int ports_set;
 
 void ioasic_set_inputs(const uint16_t p[4])
 {
     for (int i = 0; i < 4; i++)
         ports[i] = p[i];
-    ports_set = 1;
 }
 
 void ld_ioasic_reset(void)
 {
-    ports_set = 0;
+    ports[0] = PORT0_IDLE;
+    ports[1] = PORT1_IDLE;
+    ports[2] = PORT2_IDLE;
+    ports[3] = PORT3_IDLE;
 }
 
 /* The sound-board task replaces this definition. */
@@ -46,9 +54,6 @@ static int ioasic_ioctl(int fd, uint32_t cmd, uint32_t arg)
     case 0x6901: /* PORT1 (bus word 4, player inputs) */
     case 0x6902: /* PORT2 (bus word 2) */
     case 0x6903: /* PORT3 (bus word 1) */
-        if (!ports_set)
-            ld_stop("ioctl 0x%04X reads an input port before ioasic_set_inputs gave them",
-                    (unsigned)cmd);
         ld_put32(arg, ports[cmd - 0x6900]);
         return 0;
     case 0x6905: /* COIN register write: a coin counter pulse (section 3, measured), logged */

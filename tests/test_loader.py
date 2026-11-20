@@ -204,7 +204,8 @@ class LoaderTestCase(unittest.TestCase):
         for needle in needles:
             self.assertIn(needle, lines[0])
         calls = sum(1 for c in cmds if c.startswith("call "))
-        self.assertEqual(len(out.all("ret")), max(calls - 1, 0), out.text)
+        stopper = 1 if cmds and cmds[-1].startswith("call ") else 0
+        self.assertEqual(len(out.all("ret")), max(calls - stopper, 0), out.text)
         return out, lines[0]
 
     def image(self, entries=None, files=None, overlay=True):
@@ -411,11 +412,12 @@ class LoaderTest(LoaderTestCase):
         self.assertEqual([out.rets()[i][1] for i in (1, 3, 4)], [5000, 300, 5300])
 
     def test_timer_stops(self):
-        """Requests whose result is not documented stop: a read of a timer never started or
-        stopped, a period above the 24-bit counter, timer 0 (0x7400) and 0x7404/0x7408."""
-        self.stops([ioctl(5, 0x7405, BUF)], "0x7405", "not running")
-        self.stops([ioctl(5, 0x7403, 0), ioctl(5, 0x740B), ioctl(5, 0x7407, BUF)], "0x7407",
-                   "not running")
+        """Requests whose result is not documented stop: a read of a timer never started
+        (since loader_reset), a period above the 24-bit counter, timer 0 (0x7400) and
+        0x7404/0x7408."""
+        self.stops([ioctl(5, 0x7405, BUF)], "0x7405", "never started")
+        self.stops([ioctl(5, 0x7401, 0), ioctl(5, 0x7409), "reset", ioctl(5, 0x7405, BUF)],
+                   "0x7405", "never started")
         self.stops([ioctl(5, 0x7401, 0x1000000)], "0x7401", "0x1000000")
         for cmd in (0x7400, 0x7404, 0x7408, 0x740C):
             with self.subTest(cmd=hex(cmd)):
@@ -602,6 +604,22 @@ class LoaderTest(LoaderTestCase):
         self.assertEqual(out.dumps(), [[0x0001E240, 0x000001D5, 0x00001B88]])
         self.stops(open_("pic:", 0) + [ioctl(6, 0x7003, BUF)], "0x7003")
 
+    def test_timer_stopped_holds(self):
+        """A stopped timer holds the elapsed value of the moment it was stopped (section 3,
+        inferred): one-shot and timer mode, read twice; a restart reads from 0 again."""
+        out, _ = self.drive([ioctl(5, 0x7403, 0), "checks 7", ioctl(5, 0x740B), "checks 64",
+                             ioctl(5, 0x7407, BUF), ioctl(5, 0x7407, BUF + 4),
+                             ioctl(5, 0x7403, 0), ioctl(5, 0x7407, BUF + 8),
+                             # timer mode: 1,250 counts into a 1,000-count period
+                             ioctl(5, 0x7401, 1000), "checks FA", ioctl(5, 0x7409),
+                             "checks 3E8", ioctl(5, 0x7405, BUF + 0xC),
+                             # a run-out one-shot stopped later holds the saturated value
+                             ioctl(5, 0x7402, 0), "advance 400000000", ioctl(5, 0x740A),
+                             "checks 3E8", ioctl(5, 0x7406, BUF + 0x10),
+                             f"dump {BUF:08X} 5"])
+        self.assertEqual(out.dumps(), [[700, 700, 0, 5000, SAT]])
+        self.assertEqual(out.rets()[3][1], 700)  # v1 too
+
     def test_timer_read_write(self):
         """timer: read and write are the shared return-0 routine (section 2: only ioctl)."""
         out, _ = self.drive([call(0x090, 5, BUF, 4), call(0x0C0, 5, BUF, 4)])
@@ -627,7 +645,6 @@ class LoaderTest(LoaderTestCase):
         self.assertEqual(out.m()["intctl"], 0x2345)
         self.assertEqual(err, f"carnevil: ioasic: ioctl 0x6905 (COIN register write) 0x10, "
                               f"ra 0x{CALLER_RA:08X}\n")
-        self.stops([ioctl(4, 0x6900, BUF)], "0x6900", "ioasic_set_inputs")
         for cmd in (0x6906, 0x6907, 0x6908, 0x6909, 0x690A, 0x6911):
             with self.subTest(cmd=hex(cmd)):
                 self.stops([ioctl(4, cmd, BUF)], f"sound board ioctl 0x{cmd:04X} is not "
@@ -635,6 +652,15 @@ class LoaderTest(LoaderTestCase):
         for cmd in (0x6904, 0x690B, 0x690C, 0x690D, 0x6912):
             with self.subTest(cmd=hex(cmd)):
                 self.stops([ioctl(4, cmd, BUF)], f"0x{cmd:04X}", f"ra 0x{CALLER_RA:08X}")
+
+    def test_input_defaults(self):
+        """With no ioasic_set_inputs, 0x6900 to 0x6903 give the measured no-input values
+        (section 3: 0xBDFE, then 0xFFFF three times); ioasic_set_inputs overrides them and
+        loader_reset brings them back."""
+        reads = [ioctl(4, 0x6900 + i, BUF + 4 * i) for i in range(4)] + [f"dump {BUF:08X} 4"]
+        out, _ = self.drive(reads + ["inputs 1 2 3 4"] + reads + ["reset"] + reads)
+        defaults = [0xBDFE, 0xFFFF, 0xFFFF, 0xFFFF]
+        self.assertEqual(out.dumps(), [defaults, [1, 2, 3, 4], defaults])
 
     def test_generic_ioctls(self):
         """0x6601 sets (arg non-zero) or clears flag 0x04 and returns 0 without the driver;
@@ -672,11 +698,13 @@ class LoaderTest(LoaderTestCase):
                 self.stops(self.image() + cmds, f'"{name}"', "12 characters")
 
     def test_file_access_modes(self):
-        """A file opened for reading refuses writes and one opened for writing refuses reads
-        with -1 (the file system's answer); ioctl on a file stops (the game issues none)."""
-        out, _ = self.drive(self.image() + open_("A.BIN", 0) + [call(0x0C0, 6, BUF, 4)]
-                            + open_("B.BIN", 1) + [call(0x090, 7, BUF, 4)])
-        self.assertEqual(out.v0s(), [6, M1, 7, M1])
+        """A file opened for reading refuses writes with -1 (section 2: "-1 on failure"); a
+        read on a file opened for writing is not documented and stops; ioctl on a file stops
+        (the game issues none)."""
+        out, _ = self.drive(self.image() + open_("A.BIN", 0) + [call(0x0C0, 6, BUF, 4)])
+        self.assertEqual(out.v0s(), [6, M1])
+        self.stops(self.image() + open_("B.BIN", 1) + [call(0x090, 6, BUF, 4)], "0x090",
+                   "fd 6", "not open for reading", f"ra 0x{CALLER_RA:08X}")
         self.stops(self.image() + open_("A.BIN", 0) + [ioctl(6, 0x99F6, 0)], "0x99F6",
                    "file:")
 
@@ -695,8 +723,25 @@ class LoaderTest(LoaderTestCase):
         self.assertEqual(out.all("hook"), [])
         self.assertEqual(out.all("cmosbyte"), [["FF"]])
         self.stops(["inputs 1 2 3 4", ioctl(5, 0x7401, 0), "reset", ioctl(5, 0x7405, BUF)],
-                   "not running")
-        self.stops(["inputs 1 2 3 4", "reset", ioctl(4, 0x6900, BUF)], "ioasic_set_inputs")
+                   "never started")
+
+    def test_cmos_reload_rejected(self):
+        """A second cmos_load of a file of the wrong size stops before anything changes: the
+        rejected file keeps its bytes and modification time, and the stop's save writes the
+        cells to the file loaded first."""
+        a, b = self.path("a.nv"), self.path("b.nv")
+        with open(b, "wb") as f:
+            f.write(b"\x5A" * 100)
+        os.utime(b, ns=(1_000_000_000_000_000_000, 1_000_000_000_000_000_000))
+        before = os.stat(b)
+        self.stops([f"cmosload {a}", ioctl(3, 0x6300, 0xB6100000)]
+                   + data(DATA, b"\x01\x02\x03\x04") + [call(0x0C0, 3, DATA, 4),
+                                                        f"cmosload {b}"], b, "100")
+        with open(b, "rb") as f:
+            self.assertEqual(f.read(), b"\x5A" * 100)
+        self.assertEqual(os.stat(b).st_mtime_ns, before.st_mtime_ns)
+        with open(a, "rb") as f:
+            self.assertEqual(f.read(), b"\x01\x02\x03\x04" + b"\xFF" * (0x8000 - 4))
 
     def test_cmos_file_errors(self):
         """An NVRAM file that cannot be created stops, naming it."""

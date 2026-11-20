@@ -496,6 +496,9 @@ blocks, waits or keeps state.
 - 0x6901 read bus word 4, PORT1 (player inputs; inferred from MAME's port names)
 - 0x6902 read bus word 2, PORT2
 - 0x6903 read bus word 1, PORT3
+- With no input (measured, run A of the M2 facts, `m2-facts/inputs.txt`): every one of the
+  7,889 reads of 0x6900 returned 0xBDFE, and every read of 0x6901 (7,888 reads), 0x6902
+  (11,469) and 0x6903 (11,468) returned 0xFFFF. The stand-in starts with these values.
 - 0x6904 read bus word 0, COIN (not issued by the game)
 - 0x6905 write bus word 0 (COIN register) — what a write there does is not known (open
   question 10)
@@ -558,6 +561,13 @@ What the game uses them for (read):
 emulated clock the rest of the runtime uses; return exactly 0x13FFFFEC once a one-shot has run
 out. A stand-in whose time never advances would make every DCS wait and every Voodoo wait spin
 forever.
+
+**A stopped timer holds** (inferred): the loader's stop (0x7409 to 0x740B) only clears the
+timer's enable and mode bits, a disabled GT64010 counter holds its count, and the elapsed
+read computes (saved count − current count) × 20. So an elapsed read after a stop gives the
+value of the moment of the stop (saturated or wrapped as above), until the timer is started
+again. This matters because the GT64010 bit-4 handler 0x8014FDF0 stops timer 3 while the DMA
+start 0x80168224 may still be polling it as its timeout.
 
 ### `pic:` (the game's own descriptor from `open("pic:", 0)` at 0x800C6480; driver ioctl 0x8000B0D8, read)
 

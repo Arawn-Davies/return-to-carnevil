@@ -41,7 +41,8 @@
 
 /* loader_reset: descriptors 0 to 5 open as at the hand-off (section 7) and the rest free,
  * every file handle closed, the CMOS blank (every byte 0xFF) at position 0xB6100000 with no
- * file behind it, timers 1 to 3 not started, no input ports, no console hook. For tests and
+ * file behind it, timers 1 to 3 not started, the input ports at their no-input values, no
+ * console hook. For tests and
  * for the start of a run; machine_reset does not call it. */
 void loader_reset(void);
 
@@ -62,7 +63,7 @@ void cmos_save(void);
 uint8_t cmos_byte(uint32_t offset);
 
 /* ioasic_set_inputs: the four input ports (PORT0 to PORT3, which ioctls 0x6900 to 0x6903
- * read: section 3). Until it is called, reading a port stops. */
+ * read: section 3), replacing the measured no-input values loader_reset gives them. */
 void ioasic_set_inputs(const uint16_t ports[4]);
 
 /* dcs_ioctl: the `ioasic:` sound-board commands 0x6906 to 0x690A and 0x6911 (section 3),
