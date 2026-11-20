@@ -267,6 +267,33 @@ Runtime tests follow `tests/charness.py`: Python builds a small C driver against
 
 ---
 
+### Task 7b: Voodoo frame buffer for the start-up checks (added 2026-11-20)
+
+Task 7 found that the premise "the Voodoo accepts and discards writes" does not hold: Glide's start-up reads back pixels the card rendered. Two checks run before attract mode (both measured, `mame/m2-facts/voodoo-ramp.txt`): a frame-buffer memory test that depends on how LFB addresses alias (it writes 0xDEAD at 0x08432100 and later reads 0xFFFF there after writing 0x0852BE3C), and a dither detection that draws 258 flat-coloured dithered triangles with `triangleCMD` and reads back 4 × 4 pixel blocks (routine 0x8015B250). This task gives the sink a real frame buffer for exactly those two.
+
+**Files:**
+- Create: `runtime/hw/voodoo_fb.c`, `tests/test_voodoo_fb.py`
+- Modify: `runtime/hw/voodoo_null.c`, `runtime/hw/hw.h`, `tests/harness/hw_driver.c`, `tests/test_hw.py`, `docs/analysis/hardware-usage.md`, `Makefile`
+
+**Interfaces:**
+- Consumes: Task 7's sink (register storage, `hw_reset`), `voodoo-ramp.txt` and `voodoo-reads.txt`.
+- Produces, internal to `runtime/hw/`: `void vfb_reset(void);`, `uint32_t vfb_lfb_read(uint32_t offset, int size);`, `void vfb_lfb_write(uint32_t offset, int size, uint32_t value);`, `void vfb_triangle(void);` (draws from the sink's current register values when `triangleCMD` is written). The frame buffer's size, the buffer offsets, the LFB address decoding, the 16-bit pixel format conversions, the dither matrices and the triangle fill rule are the card's, taken from MAME 0.276's BSD-3-Clause Voodoo sources as reference (fetched read-only into the scratchpad, never into the repo; the code is written fresh and `hardware-usage.md` credits the source and marks each rule "from MAME's model").
+- Drawn: flat-shaded (constant `color1`) triangles with the dither mode `fbzMode` selects, into the buffer `fbzMode` selects, clipped to the clip rectangle. Not drawn, and a stop if the mode registers ask for it at a `triangleCMD`: texturing, Gouraud colour, depth test, alpha test or blend, fog, chroma key, stipple. In attract mode the game draws with all of these; so `triangleCMD` in a mode outside the flat set is counted and dropped once the start-up checks are over. The rule for "over" is not a time or a count: a triangle in a non-flat mode is dropped (and counted), a triangle in the flat mode is drawn. LFB reads always return what the frame buffer holds.
+
+- [ ] **Step 1: Failing tests.**
+  - `test_memory_test_like_mame` (game data): replaying the capture's writes in order, every LFB read of the memory test returns its measured value.
+  - `test_dither_ramp_like_mame` (game data): replaying the capture's writes in order, every one of the 8,228 ramp reads returns its measured value.
+  - `test_reads_like_mame_full` (game data): every Voodoo read in `voodoo-ramp.txt` returns its measured value (registers, status excepted, and LFB).
+  - `test_flat_triangle` (no game data): a triangle with vertices (0,0), (36,0), (0,36) and `color1` 0x808080 without dither fills exactly the pixels the card's fill rule covers (assert the pixel count and the four corner cases) with 0x8410; with 4 × 4 dither, a 4 × 4 block at (4,4) holds the card's dither pattern for that colour.
+  - `test_lfb_aliasing` (no game data): two LFB addresses that the card maps to one pixel read back the last write; an address outside the buffers reads the card's value for unmapped frame-buffer memory.
+  - `test_non_flat_triangle_dropped`: a `triangleCMD` with texturing enabled changes no pixel and increments the dropped count; with depth test or blending enabled, the same.
+  - `test_lfb_readback` in `test_hw.py` is changed back from "stops" to reading what was written.
+- [ ] **Step 2:** Run; expect assertion failures.
+- [ ] **Step 3:** Implement. Where MAME's model and the capture disagree, the capture wins and the difference is reported.
+- [ ] **Step 4:** Run the suite both ways. Commit: `runtime: Voodoo frame buffer for the start-up memory test and dither detection`.
+
+---
+
 ### Task 8: The DCS responder
 
 **Files:**
