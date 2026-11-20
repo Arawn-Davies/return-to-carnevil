@@ -7,11 +7,13 @@ or change it. The generated C and its contract are in [recompiler](recompiler.md
 checked against MAME, and how strongly, is in the [M2 report](M2-report.md); the commands are
 in [tools.md](../tools.md).
 
-Statements about the runtime's own code describe it as of commit `e50f325` and are checked by
-the tests named next to them. Statements about the game or the board carry a mark, as in the
+Two kinds of statement appear here. Facts about the game or the board carry a mark, as in the
 other analysis notes: **measured** (MAME 0.276), **read** (disassembly of `GAME.EXE` or the
 loader), **inferred**, or **from MAME's model** where a rule of the hardware was taken from
-MAME's source, read but not built.
+MAME's source, read but not built. Statements about the runtime's own code are a description
+of that code as of commit `e50f325`, not evidence about the machine: each section names the
+source file or files it describes, and names the test that checks a behaviour where one
+exists. A behaviour with no test named has none that this note knows of.
 
 ## The pieces
 
@@ -53,7 +55,9 @@ nearer the code.
 ## A run from start to end
 
 `carnevil --disk FILE [--overlay FILE] [--nvram FILE] [--seconds N | --frames N] [--trace
-FILE] [--quiet]` (`runtime/main/carnevil.c`, whose top comment gives this order):
+FILE] [--quiet]` (`runtime/main/carnevil.c`, whose top comment gives this order; the
+exit statuses and file errors are checked by `tests/test_boot.py`, `MainTest`, and
+`test_user_files`):
 
 1. The options. Then four resets, each once: `machine_reset` (the clock, its events, the
    interrupt state, the at-stop list), `hw_reset` (the devices), `loader_reset` (descriptors 0
@@ -88,6 +92,11 @@ and the overlay are saved) and exits 3.
 
 ## The clock
 
+Files: `runtime/core/clock.c`, `runtime/include/machine.h`. Tests in
+`tests/test_clock_irq.py`: `test_event_order`, `test_timer_far_future` (an event at 2^40 ns,
+monotonic time), `test_vclock_advance`, `test_vclock_advance_delivers_nothing`,
+`test_raise_outside_event_delivered_next_check`.
+
 Time is virtual and deterministic: nothing in the runtime reads the host's clock, so two runs
 of the same image give byte-identical traces (`tests/test_boot.py`, `test_deterministic`).
 
@@ -117,10 +126,12 @@ of the same image give byte-identical traces (`tests/test_boot.py`, `test_determ
 instructions, so the guest runs faster or slower against the virtual clock depending on the
 code: the first console line comes 3.5 times later than in MAME's virtual time, and the later
 milestones up to 5 times earlier (measured; the [M2 report](M2-report.md), "The clock", has
-the data). The comparisons with MAME compare order
-and values, never times.
+the data). The comparisons with MAME compare order and values, never times.
 
 ## Interrupts and exceptions
+
+Files: `runtime/core/irq.c`, `runtime/core/exc.c`, `runtime/include/machine.h`. The tests
+are named at the end of the section.
 
 The runtime replaces the loader's exception vectors and dispatcher with C that does what the
 dispatcher does to the game's state (`loader-services.md`, section 6, read). The handlers are
@@ -174,8 +185,13 @@ the game's own code, called through `rt_call`.
 
 What is not modelled: the loader's VBLANK count, LED and watchdog writes (the game never reads
 them, read), its 100 ms tick on GT64010 cause bit 8, and the IP4 path. The tests are in
-`tests/test_clock_irq.py` (24 tests, synthetic guest code: frame layout, nesting, masking,
-ordering, every stop path).
+`tests/test_clock_irq.py`, on synthetic guest code: `test_vblank_delivery`,
+`test_frame_layout`, `test_handler_edits_frame`, `test_no_nesting`,
+`test_long_vblank_handler_absorbs`, `test_masked_until_registered`,
+`test_masked_pending_not_delivered`, `test_ip_order`, `test_gt_cause`,
+`test_ip3_default_lowers_the_line`, `test_pending_after_exception_delivered_next_check`,
+`test_break_services`, `test_fp_trap_reaches_catch_all`, `test_fpe_handler_advances` and
+`test_stop_paths` (the stop messages and status 3).
 
 ## The game's tasks on host threads
 
@@ -217,10 +233,12 @@ registers saved on the guest stacks, the `sp`/`k1` swap) stays recompiled code.
   so `rt_stop` from any thread exits at once with the other threads still blocked.
 
 MAME measured at most 6 tasks alive at once (measured, `task-switch.md`); the port's 150 s run
-reaches 6 too. The tests are in `tests/test_tasks.py` (9 tests: ping-pong of 3,000 switches,
-retirement, a stop from a task, FP mode per context, a synthetic guest scheduler run both
-recompiled and interpreted, every misuse, and these scenarios again under the thread sanitizer
-where the host has it).
+reaches 6 too. Files: `runtime/core/tasks.c`, `runtime/core/tasks.h`. The tests are in
+`tests/test_tasks.py`: `test_ping_pong` (3,000 parks among three contexts),
+`test_retire_parked`, `test_stop_from_task`, `test_fcsr_follows_cpu`, `test_misuse_stops`,
+`test_record_reuse`, `test_switch_hook`, `test_guest_scheduler` (a synthetic guest
+scheduler, recompiled and interpreted) and `test_under_thread_sanitizer` (the scenarios
+again under the thread sanitizer, skipped where the host cannot run it).
 
 ## The loader's stand-ins
 
@@ -281,7 +299,24 @@ addresses, so a bad pointer from the game goes to the bus and stops there.
 
 Every request the documents do not show the game making stops, through `ld_stop`, with the
 slot, the request, a0 to a3 and `ra` (the generated code stores no pc at a loader call, so
-`ra` identifies the call site). The tests are in `tests/test_loader.py` (41 tests).
+`ra` identifies the call site). The tests, in `tests/test_loader.py`: descriptors
+(`test_close_then_ioctl`, `test_open_pci_is_6`, `test_open_nosuchfile`,
+`test_open_resolution`, `test_loader_reset`); files (`test_findfirst`, `test_read_rules`,
+`test_lseek_words`, `test_creat_write_unlink_rename`, `test_file_access_modes`,
+`test_long_file_names_stop`); the console (`test_console`, `test_console_echo_off`); the CMOS
+(`test_cmos`, `test_cmos_saved_at_stop`, `test_cmos_stops`, `test_cmos_reload_rejected`,
+`test_cmos_file_errors`); the PIC (`test_pic`); the timers (`test_timer_oneshot`,
+`test_timer_periodic`, `test_timer_stopped_holds`, `test_timer_stops`,
+`test_timer_read_write`); the IOASIC (`test_ioasic`, `test_input_defaults`,
+`test_input_ports`, `test_entry_hardware`); the registrations and other slots
+(`test_irq_set_handler`, `test_gt_set_handler`, `test_fpe_set_handler`, `test_misc_slots`,
+`test_exit_exec`); stops and bad pointers (`test_unknown_requests_stop`,
+`test_generic_ioctls`, `test_bad_guest_memory`, `test_pci_read_stops`); slots called from a
+handler (`test_slots_from_handler`). In `tests/test_hw.py`: `pci:` and DMA (`test_dma0_chain`,
+`test_dma0_stops`, `test_dma0_delay_model`, `test_dma0_delay_fits_mame`); the PCI slots
+(`test_pci_probe`, `test_pci_probe_other`, `test_pci_config`, `test_pci_calls_like_mame`);
+the disk slots (`test_partition_table`, `test_raw_read_callback`, `test_raw_read_wake`,
+`test_disk_hooks_store`, `test_disk_slots_stop`, `test_movie_frame_read`).
 
 ## The bus and the devices
 
@@ -301,6 +336,11 @@ board. Then:
 - **0x17F00000**: a byte register starting at 0x0E, the value the game's one read returned
   (measured), keeping what is written.
 - Anything else stops, naming the address, size, direction, value and the pc as last stored.
+
+Files: `runtime/core/bus.c`, `runtime/hw/misc.c`, `runtime/hw/gun.c`, the CMOS cells in
+`runtime/loader/dev_cmos.c`. Tests in `tests/test_hw.py`: `test_unmodelled_bus_stops`,
+`test_sound_fifo`, `test_cmos_direct_read`, `test_gun`, `test_asic_reset_register`,
+`test_gun_and_asic_like_mame`, `test_hw_reset`.
 
 ### The Voodoo
 
@@ -342,17 +382,25 @@ with its mark and its source file.
   drew (measured), and all 258 of their triangles are of the drawable kind. In the 150 s
   attract run every one of the 126,984 later triangles and every movie-frame LFB write was
   dropped, fastfills were drawn, and no LFB read met a flagged buffer (the run would have
-  stopped) (measured, the run's trace totals).
+  stopped) (the port's run, its trace totals).
 - **Video timing.** The card owns the vertical retrace, which is the board's VBLANK. It has
   none until the game programs hSync, vSync, backPorch and videoDimensions; then the frame is
   291 rows at 15,750 Hz, 18,476,190 ns, and the retrace 4 rows, 253,968 ns (from MAME's
   model; both within the measured bounds). Each retrace start is a clock event that also
   calls `vblank_raise`.
 
-The tests are `tests/test_hw.py` (32 tests: the bus, the PCI slots, DMA, the disk slots, the
-gun, the card's registers, status and holds) and `tests/test_voodoo_fb.py` (11 tests: the fill
-rule, aliasing, drops, texturing, the alternate map, and the replay of MAME's capture of the
-first 2 s after the entry, which returns all 274,967 measured reads).
+The tests: in `tests/test_hw.py`, the registers and status (`test_voodoo_registers`,
+`test_voodoo_status`, `test_lfb_readback`, `test_dac_readback`, `test_degenerate_video_timing`,
+`test_clock_backwards`, `test_voodoo_reads_like_mame`, `test_dac_reads_like_mame`) and the
+holds (`test_cpu_store_held_until_the_card_drains`,
+`test_hold_lets_the_retrace_interrupt_wait`, `test_dma_chain_held_in_pieces`); in
+`tests/test_voodoo_fb.py`, the drawing (`test_flat_triangle`, `test_lfb_aliasing`,
+`test_non_flat_triangle_dropped`, `test_dropped_lfb_write_flags_buffers`,
+`test_textured_triangle`, `test_alternate_map`) and the replay of MAME's capture of the first
+2 s after the entry (`test_memory_test_like_mame`, `test_dither_ramp_like_mame`,
+`test_tmu_check_like_mame`, `test_retrace_phase_like_mame`, and `test_reads_like_mame_full`,
+which returns all 274,967 measured reads). The hold from the PCI FIFO's low-water mark and the
+release with the memory FIFO off have no test.
 
 ### The DCS responder
 
@@ -370,10 +418,25 @@ kind, bit 0x80 (the board can take a word) is always set, and bit 0x8000 is set 
 state in which MAME first shows it. So the responder is never slower than the board, and the
 game polls fewer times than in MAME. The sound FIFO's fill gives SOUNDSTAT bits 0x08 to 0x20
 and INTSTAT bit 0x08; the FIFO is never drained (inferred from MAME's one IP3 interrupt in
-150 s). The tests are `tests/test_dcs.py` (9 tests, including the replay of MAME's 2.9 million
-recorded events).
+150 s). The tests are in `tests/test_dcs.py`: `test_no_reply_without_command`,
+`test_unknown_command_stops`, `test_block_rules`, `test_reply_timing`, `test_fifo_and_ip3`,
+`test_pinned_arguments`, `test_soundctl_measured_values`, `test_intctl_enables_limited`, and
+`test_replays_mame_exchange` (the replay of MAME's 2.9 million recorded events).
 
 ## The disk and the user's files
+
+Files: `runtime/disk/image.c`, `runtime/disk/fs.c`, `runtime/disk/disk.h`, and the NVRAM file
+in `runtime/loader/dev_cmos.c`. Tests in `tests/test_disk_c.py`: the overlay
+(`test_overlay_created_on_first_open_and_holds_writes`, `test_overlay_for_another_image_is_refused`,
+`test_damaged_overlays_are_refused`, `test_without_an_overlay_writes_fail`,
+`test_bad_raw_images_are_refused`), the file system (`test_find_read_and_handles`,
+`test_write_read_seek_unlink_rename`, `test_unlink_zeroes_the_first_name_word`,
+`test_truncating_open`, `test_full_directory_is_extended`), damaged input
+(`test_bad_first_block`, `test_chain_that_loops`, `test_chain_leaves_the_partition`,
+`test_bad_directory_link`, `test_directory_blocks_that_link_in_a_circle`,
+`test_extension_ignores_a_link_past_the_length`) and, with game data,
+`test_every_file_matches_the_python_reader`, `test_write_round_trip`,
+`test_python_reads_the_written_partition` and `test_raw_image_unchanged`.
 
 - **The raw image** is opened read-only and is never written (`runtime/disk/image.c`).
 - **The overlay** holds every sector the game writes. Its header is a 512-byte sector: the
@@ -386,7 +449,8 @@ recorded events).
   entries per directory block, an entry whose first name word is zero is free, the link to the
   next block at byte 4092, 0 ends the directory. Allocation is first fit; the date and time it
   writes are a constant, not the loader's clock. A damaged chain or directory is bounded and
-  refused rather than followed. 1,523 files on partition 1 (measured).
+  refused rather than followed. 1,523 files on partition 1 (static: counted by the C and the
+  Python readers alike).
 - **The NVRAM file** is the CMOS, 32,768 bytes; one of another size stops. A second run on the
   same NVRAM is a non-blank CMOS, and the game then does not print "reseting high scores"
   (`test_boot.py`, `test_user_files`).
@@ -398,8 +462,11 @@ guessing. An unknown slot, ioctl command, argument, bus address, register read, 
 or device state stops the program with `carnevil: stop:` and a message naming the guest pc
 (or the slot's `ra`), the request and its values, and exit status 3. The only escape is
 `config/runtime.expected.toml`, a list of interpreter entries and tolerated requests, each
-with a reason; it is empty, and `test_nothing_unexplained` fails on an entry the run does not
-use.
+with a reason; it is empty, and `test_nothing_unexplained` (`tests/test_boot.py`) fails on an
+entry the run does not use. Files: `rt_stop` in `runtime/core/exc.c`, `ld_stop` in
+`runtime/loader/slots.c`, `hw_stop` in `runtime/core/bus.c`; the stop messages of the clock,
+interrupt and exception code are checked by `test_stop_paths`, those of the stand-ins and
+devices by the stop tests named in their sections.
 
 A stop is therefore the expected result of driving the game anywhere attract mode with a
 blank NVRAM and no input did not go in MAME: play, a coin, the operator menus, a long run
@@ -409,7 +476,9 @@ whose later states were never measured. The message names what to model next.
 
 `--trace FILE` writes one line per event, `TIME KIND FIELDS...`, with TIME the virtual time in
 ns since the entry and numbers in hexadecimal with 0x unless the format says decimal. The
-format is the top comment of `runtime/main/trace.c`. The kinds:
+format is the top comment of `runtime/main/trace.c`; `tests/test_boot.py` reads it
+(`test_timed_run`, `test_stop_is_traced`, `test_frames`, `test_deterministic` and the
+comparisons with MAME). The kinds:
 
 - `console FD N TEXT`: a console write, escaped as `mame/m2-facts/console.txt` is.
 - `open MODE FD NAME`: an open, with the mode as passed, the fd returned and the name.

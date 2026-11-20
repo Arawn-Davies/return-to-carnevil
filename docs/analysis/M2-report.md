@@ -25,24 +25,29 @@ Every fact below carries its basis, as in the [M1 report](M1-report.md):
 
 ## The numbers
 
-- **Code**: `runtime/` holds 9,423 lines of C and headers, 7,665 of them in files new in M2
-  (static, `wc -l`). The milestone is 24 commits from the plan (`4cc16c4`) to `e50f325`, plus
+- **Code**: `runtime/` holds 9,423 lines of C and headers (static, `cat runtime/*/*.c
+  runtime/*/*.h | wc -l`), 7,665 of them in files new in M2 (static, `git diff --name-only
+  --diff-filter=A 4cc16c4 e50f325 -- runtime | xargs cat | wc -l`). The milestone is 24
+  commits from the plan (`4cc16c4`) to `e50f325`, plus
   this report.
 - **The run**: `carnevil --disk carnevil.raw --seconds 150` exits 0 after 150 s of virtual
-  time, on the Mac (Apple clang, arm64) and in the Linux container (GCC 14.2, x86-64), and the two traces
-  are byte-identical (run; SHA-256 equal, Task 9 and its reviewer).
+  time on the Mac (Apple clang, arm64). Task 9 also ran it in the Linux container (GCC 14.2, x86-64) and
+  reported that trace's SHA-256 equal to its Mac trace's; the Task 9 reviewer's own Mac run
+  produced a trace with that same hash. The reviewer ran nothing on Linux, so the Linux run
+  rests on Task 9's report, supported by the matching hash, not re-run independently (run).
 - **Against MAME** (test, `tests/test_boot.py`): console writes 25 of 25; opens 193 of 193;
   task creations and exits 9 of 9; of the first 400 loader calls on each side, the 389 made
   outside interrupts, 389 of 389; at most 6 tasks alive at once; the `attract` task alive at
   the end; 8,072 VBLANK interrupts; no interpreter entry and no tolerated request. Each is
   defined under "What was compared with MAME" below.
 - **Host speed**: 150 virtual seconds in 10.4 to 12.3 s of wall time on the Mac (12 to 14
-  virtual seconds per host second) and in 29 s in the Linux container (5.2 per host second) (run; below).
+  virtual seconds per host second), and in 29 s in the Linux container (5.2 per host second) as Task 9
+  reported it, not re-run independently (run; below).
 - **Tests**: 491 tests with game data, 5 of them skipped; 485 without (`CARNEVIL_WORK` set to
   a missing folder), 61 skipped (test, at this report's commit; the M1 figures were 309 and
   303).
 - **Builds**: `make carnevil` builds with zero warnings under `-Wall -Wextra -Werror` on the
-  Mac and with GCC 14.2 in the Linux container (run, Task 9).
+  Mac and, as Task 9 reported (not re-run independently), with GCC 14.2 in the Linux container (run).
 
 ## What runs
 
@@ -51,12 +56,15 @@ handler registrations, the scheduler's start ("Starting process dispatcher"), th
 high-score checks a blank NVRAM fails, two sound downloads to the DCS responder, and the
 attract loop with its movie streaming from the disk. At 150 s five tasks are alive:
 `loadfram`, `utime`, `volume`, `ccproc` and `attract` (function 0x800CB084) (run); MAME's task
-events, which the port's equal, leave the same five (MAME, `tasks.txt`; inferred). The game's tasks run on host threads, one at a time.
+events, which the port's equal, leave the same five (MAME, `tasks.txt`; inferred). The
+game's tasks run on host threads, one at a time.
 
 What "runs" does not mean: nothing is drawn beyond what Glide's start-up checks read back,
 nothing is played, no input is taken, and the program's pace is neither the board's nor real
 time ("The clock", below). Attract mode is the only state checked. A played game is expected
-to stop early: play reaches requests nobody has measured (input ports with input, coin
+to stop early (inferred: play was never run in the port, and the runtime stops on every
+request it has no evidence for): play reaches requests nobody has measured (input ports with
+input, coin
 ioctls, sound commands with other arguments, DMA chain shapes and Voodoo modes not seen in
 attract mode, the drained sound FIFO), and every such request stops the program by design
 ("Stopping instead of guessing" in [runtime](runtime.md)).
@@ -97,7 +105,8 @@ the board's pace.
   (Open items).
 - **Determinism and the sanitizer**: two traced 20 s runs are byte-identical, and an untraced
   one prints the same output and ends with the same RAM hash (test); a 20 s run built under
-  `-fsanitize=undefined` reports nothing, on the Mac and in the Linux container (test).
+  `-fsanitize=undefined` reports nothing on the Mac (test), and in the Linux container as Task 9 reported
+  (not re-run independently).
 - **The user's files**: a missing image, an image of the wrong size and an image whose
   `GAME.EXE` has another hash each exit 2 with one line naming the file; the raw image's size
   and modification time are unchanged by a run; a second run on the first run's overlay and
@@ -105,8 +114,8 @@ the board's pace.
 - **Independent check**: the Task 9 reviewer built and ran the program itself (150 s, exit
   0), recomputed the four comparisons with its own script from its own trace (25/25,
   193/193, 9/9, 389/389, with identical slot sequences and every a0 to a3 or v0 difference in
-  a field the slot's signature lacks), and found its trace's SHA-256 equal to the one Task 9
-  reported for the Linux container. It did not re-run the Linux container itself.
+  a field the slot's signature lacks), and found its Mac trace's SHA-256 equal to the one
+  Task 9 reported for its the Linux container trace. It ran nothing on Linux.
 
 Counts the tests do not compare (run against MAME's `loader-calls.md`): over 150 s the port
 made 5,556,700 loader calls against MAME's 5,939,280. The sound data words agree exactly
@@ -136,15 +145,18 @@ because its clock's pace differs.
   where the board takes an interrupt at any instruction. The exception path other than
   interrupts (break hooks, the FP catch-all) never ran in MAME's attract or play runs
   (MAME, `breaks.txt`), so it has run only on synthetic code in the port.
-- **The task contexts** (`tasks.c`): 9 tests, each repeated 20 times without a failure, and
-  all of them again under the thread sanitizer on the Mac with no report (test). In the Linux container the
-  task tests pass, and the 150 s run and the 20 s sanitizer run end tasks through
-  `pthread_exit` from deep inside generated code with glibc's forced unwind, on 1 MB host
-  stacks (test, Task 9). The thread sanitizer does not run in the Linux container (its test skips there).
+- **The task contexts** (`tasks.c`): 9 tests, each repeated 20 times without a failure in
+  Task 5, and the scenarios again under the thread sanitizer on the Mac with no report (test).
+  Task 9 reported that in the Linux container the task tests pass and that the 150 s run and the 20 s
+  sanitizer run end tasks through `pthread_exit` from deep inside generated code with glibc's
+  forced unwind, on 1 MB host stacks; this was not re-run independently, and the 150 s part is
+  supported by the matching trace hash. The thread sanitizer does not run in the Linux container (its test
+  skips there).
 - **The loader stand-ins** (`runtime/loader`): each slot and ioctl against
   `loader-services.md` (read) and the measured values it quotes (41 tests), and in the boot
   run the first-400 comparison above, which covers 18 of the 29 slots with their arguments
-  and results (test; the 18 counted in `loader-first.txt`). Measured inputs: the four input ports' no-input values, the PIC words,
+  and results (test; the 18 counted in `loader-first.txt`). Measured inputs: the four input
+  ports' no-input values, the PIC words,
   the blank NVRAM's fill (MAME). Not checked: the slots and ioctls attract mode never calls
   (they stop), the CMOS contents against MAME's NVRAM after a run, and the loader calls after
   the first 400 beyond their counts.
@@ -199,8 +211,9 @@ because its clock's pace differs.
 - **Input.** The input ports and the gun return their no-input values; `ioasic_set_inputs`
   exists but nothing calls it.
 - **The board's timing.** Interrupts are taken at check points, the clock's pace is not the
-  board's, the DCS responder is never slower than the board, DMA words arrive at the card
-  earlier than MAME delivers them.
+  board's, the DCS responder is never slower than the board, and DMA words arrive at the card
+  earlier than MAME delivers them (from MAME's model: its GT64010 moves 32 words per 64 PCI
+  clocks, where the port copies a chain at once up to a hold).
 - **Not built, as the plan said**: IDE, the GT64010's PCI side, timers as registers and
   channels 1 to 3, the UART, the security PIC, the loader's 100 ms tick, the IP4 (IDE)
   interrupt path.
@@ -223,8 +236,9 @@ because its clock's pace differs.
   measured 10.4 s for the same run length, 14.4 per host second (run). A 20 s run with a trace
   took 2.44 s, 8.2 per host second, including the start-up and both sound downloads (run,
   2026-11-20). With the round-1 trace of 556 MB (every loader call written), 150 s took 15.7 s.
-- **The Linux container** (GCC 14.2, x86-64, 4 cores): 29 s for 150 virtual seconds, 5.2 per host second
-  (run, Task 9).
+- **The Linux container** (GCC 14.2, x86-64; 4 cores, as the M1 report gives the container): 29 s for 150
+  virtual seconds, 5.2 per host second, as Task 9 reported it; not re-run independently
+  (run).
 
 These are virtual seconds of the port's clock, which does not run at the board's pace, so
 they are not a measure of how fast the game would run against real time. They say only that
@@ -255,7 +269,8 @@ MAME, `console.txt` and `tasks.txt`; Task 9):
 
 So the first line comes 3.5 times later than on the board, and the later milestones up to 5
 times earlier; the spin counts are 1.5 to 1.6 times MAME's (largest and median) because the
-CPU runs fast against the card's VBLANK (inferred). The game's own limit, a reboot after 100,000,000 spins, is far
+CPU runs fast against the card's VBLANK (inferred). The game's own limit, a reboot after
+100,000,000 spins, is far
 off (test: the largest is below 10,000,000).
 
 What the next milestone needs: an instruction-weighted slice, in which the emitter gives each
@@ -322,9 +337,20 @@ every missing feature per triangle, not only the first.
 
 ## Departures from the plan, and every ruling
 
-The controller took 35 rulings during the milestone (the ledger's "Ruling" lines), and the
-plan was wrong in three places (its "plan notes"). Each ruling is one item: what was decided,
-why, and what it costs if wrong. They are numbered in ledger order and grouped by task.
+The controller took 35 rulings labelled as such during the milestone (the ledger's "Ruling"
+lines, numbered 1 to 35 below), and 3 more that the ledger records without the label, as
+"Carried rulings" of the Task 7 dispatch (C1 to C3, under Task 7). The plan was wrong in
+three places (its "plan notes"). Each ruling is one item: what was decided, why, and what it
+costs if wrong. They are numbered in ledger order and grouped by task.
+
+The ledger's other unlabelled decisions are already here: the plan's own decisions, which the
+owner confirmed on 2026-11-19 ("Decisions in the plan stand"), are the plan's text; the
+items Task 1 carried into later dispatches are measured facts (SOUNDSTAT bit 0x8000, the
+0x000A reply, the reply rules, the Voodoo as PCI device 8, the synchronous disk hooks, the
+order-not-time comparison for Task 9) plus ruling 4; the Task 7 dispatch's other two carried
+items repeat ruling 4 and the device-8 fact; and the Task 8 dispatch's carried items repeat
+Task 1's facts, ruling 15 (c) and C3. The owner's choice of how to finish M1 (merge locally)
+concerns M1, not this milestone.
 
 ### Before the tasks (pre-flight scan)
 
@@ -415,6 +441,32 @@ why, and what it costs if wrong. They are numbered in ledger order and grouped b
     Cost if wrong: a DMA wait sees a slightly wrong elapsed value instead of a stop.
 
 ### Task 7: loader slots II and the bus
+
+Carried into the Task 7 dispatch (ledger, the Task 7 dispatch line; no "Ruling" label):
+
+- C1. **The disk hooks are called synchronously, inside the slot, and the game's wait routine
+  is never called.** Transfers complete inside slot 0x158, and the completion callback (slot
+  0x1D8) or the wake hook (slot 0x220) is called through `rt_call` before the slot returns,
+  as the plan's disk decision said. Why: MAME measured the hooks' context (`disk-hooks.txt`,
+  `loader-services.md` open question 5): the movie callback runs 3,122 times with a0 = 0, and
+  each of the 64 waits is followed by one wake, which changes only the sleeping task's record
+  +0xC; so a synchronous call is harmless provided the slot never calls wait, which in the
+  loader's transfer path (section 4) would put the caller to sleep through the game's
+  scheduler from inside a loader call. Cost if wrong: a hook that depends on running at
+  interrupt level or after the slot has returned would see other state, and the movie
+  streamer or the sound loads would take another path, which the boot comparisons would
+  show.
+- C2. **Measured device values are quoted into the documents, marked measured, before they
+  become constants** (the gun's no-input values and the register at 0x17F00000, into
+  `hardware-usage.md`, "Measured values the runtime answers with"). Why: the same rule as
+  ruling 17 for Task 6's input defaults, so every constant the runtime answers with cites a
+  documented measurement. Cost if wrong: none in behaviour; a wrong value would be wrong in
+  the document and the code together, traceable to its fixture.
+- C3. **A slot that raises an interrupt line calls `vclock_reload` afterwards**, so the line
+  is delivered at the next check point. Why: the delivery-latency finding of Task 4's review
+  (a line raised outside a clock event waited up to 1,000,000 checks, 100 ms of virtual time)
+  and ruling 15 (a), which documented the rule for devices. Cost if wrong: at most a slice
+  reloaded once more than needed.
 
 19. **Task 7 is extended in a second commit** when two Voodoo reads could not be answered from
     the fixtures: (1) the DAC read-back is modelled as the controller recalled MAME's Voodoo

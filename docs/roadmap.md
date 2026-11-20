@@ -34,7 +34,7 @@ The first milestone, M0 (tools that extract the game's files and analyse its exe
 - The disk, read-only: the game reads its files from your raw image; its writes go to an overlay file and its settings to an NVRAM file.
 - The Voodoo: more than the plan expected. Glide's start-up reads back pixels the card drew, so the port has a software frame buffer and draws the start-up checks' triangles; everything attract mode draws afterwards is counted and dropped until M3.
 - The sound board: a responder that gives the replies MAME's sound board gave in attract mode. Nothing is played.
-- The program `carnevil`: done. It runs 150 seconds of game time into attract mode on macOS and on Linux, and its console output, the files it opens, its tasks and its first loader calls match MAME's.
+- The program `carnevil`: done. It runs 150 seconds of game time into attract mode on macOS, and on Linux as its implementation task reported (with the same trace as the Mac's; not repeated independently), and its console output, the files it opens, its tasks and its first loader calls match MAME's.
 - M2 report: done.
 
 **M3: graphics.** Voodoo 1 register writes become OpenGL draws, building on M2's frame buffer. Attract mode should match MAME frame for frame. This is also where the game gets a window and runs in real time.
