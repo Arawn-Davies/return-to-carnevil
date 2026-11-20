@@ -131,16 +131,16 @@ class PciTest(HwTestCase):
 
 class VoodooTest(HwTestCase):
     def test_lfb_readback(self):
-        """A 16-bit pixel written at an LFB address reads back, as do 32-bit writes and the
-        halves of one; a texture write is dropped and counted; a never-written pixel, a
-        texture read and a byte access stop."""
-        out, _ = self.drive([wr(2, 0xA8432064, 0xDEAD), rd(2, 0xA8432064),
-                             wr(4, 0xA8400000, 0x12345678), rd(4, 0xA8400000),
-                             rd(2, 0xA8400002), rd(2, 0x88432064),
+        """LFB writes of halfwords and words are accepted; an LFB read stops, even of a pixel
+        just written, because the card's frame-buffer addresses alias (the start-up memory
+        test read 0xFFFF where it had written 0xDEAD: hardware-usage.md, "Voodoo frame buffer
+        reads") and the sink does not model its memory layout; a texture write is dropped and
+        counted; a texture read and a byte access stop."""
+        out, _ = self.drive([wr(2, 0xA8432064, 0xDEAD), wr(4, 0xA8400000, 0x12345678),
                              wr(4, 0xA8800000, 0x11111111), wr(4, 0xA8FFFFFC, 2), "counts 0"])
-        self.assertEqual(self.rds(out), [0xDEAD, 0x12345678, 0x1234, 0xDEAD])
         self.assertEqual(out.all("counts"), [["0", "0", "2", "0"]])
-        self.stops([rd(2, 0xA8400800)], "physical 0x08400800", "never written")
+        self.stops([wr(2, 0xA8432064, 0xDEAD), rd(2, 0xA8432064)], "physical 0x08432064",
+                   "LFB read", "alias")
         self.stops([wr(4, 0xA8800000, 1), rd(4, 0xA8800000)], "physical 0x08800000",
                    "texture")
         self.stops([wr(1, 0xA8432064, 1)], "physical 0x08432064", "1 byte")
@@ -193,6 +193,52 @@ class VoodooTest(HwTestCase):
         self.stops([wr(4, VOODOO + 0x4104, 1)], "physical 0x08004104", "bits 14 to 19")
         self.stops([wr(2, VOODOO + 0x104, 1)], "physical 0x08000104", "2 bytes")
         self.stops([rd(1, VOODOO + 0x210)], "physical 0x08000210", "1 byte")
+
+
+DACDATA = 0x22C
+FBIINIT2 = 0x218
+# The dacData writes and fbiInit2 reads of the game's DAC routines (hardware-usage.md, "The
+# DAC"; read): None is a read of fbiInit2. ICS detect 0x8015906C: DAC register 7 = 0x0B, 0x01,
+# 0x07 in turn, each followed by two read requests of register 5, each with a read.
+ICS_DETECT = [0x70B, 0xD00, None, 0xD00, None, 0x701, 0xD00, None, 0xD00, None,
+              0x707, 0xD00, None, 0xD00, None]
+
+
+def pll_set(r4, m, n):
+    """The PLL routines 0x8015A1D0 (register 4 = 0x0A) and 0x80159A28 (register 4 = 0x00):
+    register 7 = 0x0E, a read request of register 5 and a read, then register 4, register 5
+    twice (m and n, from a table), register 4 = 0x0E and register 5 again, with the byte read
+    & 0xEF (or'ed with more bits in 0x80159A28); here that byte is the measured 0."""
+    return [0x70E, 0xD00, None, 0x400 | r4, 0x500 | m, 0x500 | n, 0x40E, 0x500]
+
+
+def dac_cmds(seq):
+    return [rd(4, VOODOO + FBIINIT2) if w is None else wr(4, VOODOO + DACDATA, w) for w in seq]
+
+
+class DacTest(HwTestCase):
+    def test_dac_readback(self):
+        """dacData stores its byte in the DAC register of bits 8 to 10 without the read flag
+        (bit 11), and with it latches the register's value, register 5 answering 0x55, 0x71 or
+        0x79 while register 7 holds 0x01, 0x07 or 0x0B; fbiInit2 reads the latch while
+        initEnable bit 2 is set and its own value when it is clear. The game's ICS detect and
+        PLL sequences give the measured 0x79, 0x79, 0x55, 0x55, 0x71, 0x71, then 0 (register
+        5's power-on value) and 0 again after the PLL routine wrote register 5; a written
+        register reads back; dacData writes are counted."""
+        out, _ = self.drive(cfg_write(0x40, 5) + dac_cmds(ICS_DETECT) + cfg_write(0x40, 3)
+                            + [rd(4, VOODOO + FBIINIT2)] + cfg_write(0x40, 5)
+                            + dac_cmds(pll_set(0x0A, 0x12, 0x34)) + cfg_write(0x40, 3)
+                            + cfg_write(0x40, 5) + dac_cmds(pll_set(0x00, 0x56, 0x78))
+                            + dac_cmds([0x303, 0xB00, None]) + cfg_write(0x40, 3)
+                            + ["counts 8B"])
+        self.assertEqual(self.rds(out), [0x79, 0x79, 0x55, 0x55, 0x71, 0x71, 0x80000040,
+                                         0x00, 0x00, 0x03])
+        self.assertEqual(out.all("counts"), [["25", "0", "0", "0"]])
+        self.stops(cfg_write(0x40, 5) + [rd(4, VOODOO + FBIINIT2)], "DAC", "no DAC read")
+        self.stops(cfg_write(0x40, 5) + dac_cmds([0xB00, None]), "DAC register 3",
+                   "never written")
+        self.stops(cfg_write(0x40, 5) + dac_cmds([0x70B, 0xD00]) + [rd(4, VOODOO + 0x21C)],
+                   "fbiInit3", "DAC")
 
 
 class DmaTest(HwTestCase):
@@ -382,9 +428,10 @@ class BusTest(HwTestCase):
         self.stops([rd(4, 0xB7F00000)], "physical 0x17F00000", "4 bytes")
 
     def test_hw_reset(self):
-        """hw_reset returns the LFB, the registers, the counters and the PCI space to power-on."""
-        self.stops([wr(2, 0xA8400000, 1), wr(4, VOODOO + 0x104, 1), "reset",
-                    rd(2, 0xA8400000)], "never written")
+        """hw_reset returns the registers, the DAC, the counters and the PCI space to
+        power-on."""
+        self.stops(cfg_write(0x40, 5) + dac_cmds([0x303, 0xB00]) + ["reset"]
+                   + cfg_write(0x40, 5) + dac_cmds([0xB00, None]), "DAC register 3")
         self.stops([wr(4, VOODOO + 0x104, 1), "reset", rd(4, VOODOO + 0x104)], "never written")
         out, _ = self.drive([wr(4, 0xB3000000, 1), wr(4, 0xA8800000, 1), wr(4, VOODOO + 0x104, 1),
                              "reset", "counts 41", rd(4, VOODOO + 0x210)])
@@ -417,9 +464,11 @@ class VoodooFactsTest(HwTestCase):
         the fbiInit registers' power-on values are their first measured reads, and exactly
         the reads made while initEnable bit 2 was set are the remapped fbiInit2 ones.
 
-        The game's writes are not in the fixture (they come from running its code, a later
-        task), so the reads cannot be replayed after the writes that preceded them; this is
-        what the fixture supports (task 7 report, concerns)."""
+        voodoo-reads.txt has no writes. For the first 2 s after the entry,
+        test_voodoo_replay_like_mame replays the captured writes (voodoo-ramp.txt) before each
+        read. This weaker form covers the 15 s and so is all that checks the reads after that
+        span (the DAC windows at 7.93 s, fbiInit reads from 7.93 s and the mode registers at
+        9.29 s); test_dac_reads_like_mame covers every DAC read."""
         values = collections.defaultdict(list)
         status = set()
         remap = 0
@@ -488,6 +537,80 @@ class VoodooFactsTest(HwTestCase):
                for line in out.lines if line[0] in ("ret", "dump")]
         self.assertEqual(len(want), 44 + 21)
         self.assertEqual(got, want)
+
+
+    def test_dac_reads_like_mame(self):
+        """Every fbiInit2 read the game made under initEnable bit 2 (voodoo-reads.txt) is
+        reproduced, in order, by the dacData sequences read from the routine each window
+        belongs to (the return address of its initEnable write of 5): the ICS detect, the two
+        PLL routines, and 0x8015A900, which writes DAC register 6 and reads nothing."""
+        routines = {0x8015858C: ICS_DETECT, 0x8015A1F8: pll_set(0x0A, 0x12, 0x34),
+                    0x80159A20: pll_set(0x00, 0x56, 0x78), 0x8015A92C: [0x650]}
+        cmds, measured, remap = [], [], False
+        for f in fact_lines("voodoo-reads.txt"):
+            if len(f) == 10 and f[1] == "0x0F8" and int(f[2], 16) == 0x40:
+                value = int(f[8], 16)
+                cmds += cfg_write(0x40, value)
+                remap = bool(value & 4)
+                if remap:
+                    cmds += dac_cmds(routines[int(f[9], 16)])
+            elif len(f) == 4 and remap and int(f[1], 16) == VOODOO_PHYS + FBIINIT2:
+                measured.append(int(f[2], 16))
+        self.assertEqual(len(measured), 9)
+        out, _ = self.drive(cmds)
+        self.assertEqual(self.rds(out), measured)
+
+
+VOODOO_PHYS = 0x08000000
+
+
+@requires_file("mame", "m2-facts", "voodoo-ramp.txt")
+@requires_file("mame", "m2-facts", "voodoo-reads.txt")
+class VoodooReplayTest(HwTestCase):
+    def test_voodoo_replay_like_mame(self):
+        """The game's own Voodoo writes and reads of voodoo-ramp.txt (its first 2 s after the
+        entry), merged in time order with the PCI configuration writes of voodoo-reads.txt,
+        replayed into the sink. Every register read returns what MAME returned, except status
+        (the virtual clock is not MAME's: test_voodoo_reads_like_mame covers it). Every LFB
+        read stops: the first, of the start-up memory test, is checked to stop; the replay then
+        goes on without the LFB reads (9 of the memory test, 8,228 of the triangle-drawn
+        ramp)."""
+        events = []
+        for f in fact_lines("voodoo-reads.txt"):
+            if len(f) == 10 and f[1] == "0x0F8":
+                events.append((int(f[0]), 0, cfg_write(int(f[2], 16), int(f[8], 16))))
+        last = 0
+        for f in fact_lines("voodoo-ramp.txt"):
+            last = int(f[0])
+            events.append((last, 1, (f[1], int(f[2], 16), int(f[3], 16))))
+        events = [e for e in sorted(events, key=lambda e: (e[0], e[1])) if e[0] <= last]
+        cmds, want, lfb_reads, first_lfb, before_lfb = [], [], 0, None, None
+        for t, _, e in events:
+            if isinstance(e, list):
+                cmds += e
+                continue
+            kind, addr, value = e
+            lfb = VOODOO_PHYS + 0x400000 <= addr < VOODOO_PHYS + 0x800000
+            if kind == "W":
+                # the game's LFB stores are halfwords (hardware-usage.md, "Voodoo LFB")
+                cmds.append(wr(2 if lfb else 4, 0xA0000000 | addr, value))
+            elif lfb:
+                lfb_reads += 1
+                if first_lfb is None:
+                    first_lfb, before_lfb = addr, list(cmds)
+            elif addr != VOODOO_PHYS:
+                cmds.append(rd(4, 0xA0000000 | addr))
+                want.append(value)
+        self.assertEqual(lfb_reads, 9 + 8228)
+        # the same register reads as voodoo-reads.txt shows for that span
+        same = [int(f[2], 16) for f in fact_lines("voodoo-reads.txt")
+                if len(f) == 4 and int(f[0]) <= last
+                and VOODOO_PHYS < int(f[1], 16) < VOODOO_PHYS + 0x400000]
+        self.assertEqual(want, same)
+        out, _ = self.drive(cmds)
+        self.assertEqual(self.rds(out), want)
+        self.stops(before_lfb + [rd(2, 0xA0000000 | first_lfb)],
+                   f"physical 0x{first_lfb:08X}", "LFB read")
 
 
 @requires_file("mame", "m2-facts", "dma0.txt")

@@ -598,17 +598,55 @@ runtime's sink:
   between an initEnable write of 5 and the next of 3 returned single bytes, 0x79, 0x79, 0x55,
   0x55, 0x71, 0x71 and three of 0x00, and no other register was read in those windows.
   Inferred: bit 2 remaps fbiInit2 onto the DAC's read data, which depends on the game's
-  dacData writes. Those writes are not in any capture, so the sink does not model the DAC
-  and such a read stops; for want of evidence, so does a read of fbiInit3 while bit 2 is set.
+  dacData writes (next paragraph). For want of evidence, a read of fbiInit3 while bit 2 is
+  set stops.
 
-**Voodoo frame buffer reads** (measured, `voodoo-reads.txt`). Of the 8,237 LFB reads, 9 read
-back the memory-test patterns the game had written with 16-bit LFB writes (0xFFFF at
-0x08432100, 0xDEAD at 0x08432064, 0xAA55 at 0x084DA164, three times each); the other 8,228
-were word reads of 0x08400000, 0x08400004, 0x08400800, 0x08400804, 0x08401000, 0x08401004,
-0x08401800 and 0x08401804 (0x8015B384 to 0x8015B954, from 6.55 s) that returned colour ramps
-(0x00000000, 0x00200000, 0x08210020 and on) no LFB write had stored. Inferred: pixels the card
-drew and the game read back. The sink draws nothing, so a read of an LFB byte never written
-stops.
+**The DAC** (the writes read from the code, the values measured, the model inferred). Every
+fbiInit2 read under initEnable bit 2 follows dacData (0x22C) writes made through the helper
+0x8015DB04, each followed by the idle wait 0x8015D56C, and is made through 0x8015DB0C:
+- the ICS detect 0x8015906C (read): 0x070B, then 0x0D00 and a read twice, 0x0701, 0x0D00 and a
+  read twice, 0x0707, 0x0D00 and a read twice; it succeeds if the first read of each pair was
+  0x79, 0x55 and 0x71 (0x801592AC to 0x801592C8). Measured, `voodoo-reads.txt`: 0x79, 0x79,
+  0x55, 0x55, 0x71, 0x71 at 5.19 s after power-on, and the routine was entered once.
+- the PLL routines 0x8015A1D0 and 0x80159A28 (read): 0x070E, 0x0D00 and a read, then 0x040A
+  (0x0400 in 0x80159A28), 0x05mm and 0x05nn (two values from a table), 0x040E and 0x0500 with
+  the byte read and 0xEF. Measured: the read gave 0x00 each of the three times.
+- 0x8015A934 (read): one write, 0x0650 or 0x0670, and no read.
+The model: a dacData write puts its bits 0 to 7 into DAC register (bits 8 to 10) unless bit 11
+is set; with bit 11 it latches that register's value, except that register 5 answers 0x55,
+0x71 or 0x79 while register 7 holds 0x01, 0x07 or 0x0B; fbiInit2 read under initEnable bit 2
+returns the latch. Register 5 starts at 0, since the first plain read of it, before any write
+to it, returned 0. The basis for the model is the coordinator's recollection of MAME's
+Voodoo DAC, which was not re-read. It reproduces all 9 measured reads in order: the six of
+the ICS detect, and three of 0x00 (register 5 as last written, its byte read & 0xEF). The
+capture `voodoo-ramp.txt` (below) holds the first 23 dacData writes, which are exactly these
+sequences, and replaying them reproduces the reads of its first 2 s.
+
+**Voodoo frame buffer reads** (measured, `voodoo-reads.txt` and `voodoo-ramp.txt`). Of the
+8,237 LFB reads, 9 are the start-up memory test's (0x8015C0A8 to 0x8015C224, 6.553 s after
+power-on). It writes halfwords under lfbMode 0x8F, 0x10 and 0x40 in turn and reads them back.
+In one case it wrote 0xDEAD at 0x08432100, then 0xFFFF at 0x0852BE3C and other addresses, and
+read 0xFFFF at 0x08432100. So LFB addresses alias in the card's frame-buffer memory, by its
+layout (row pitch, buffer offsets and memory size, set by the fbiInit registers). The other
+8,228 are a dither ramp, read 0x8015B250 to 0x8015B468. For each of 258 triangles, it draws
+one flat-coloured triangle, with vertices (0, 0), (36, 0) and (0, 36) in 12.4 fixed point,
+fbzColorPath 0x2 (color1), fbzMode 0x300 (dither and RGB write) and lfbMode 0. color1 steps
+from 0x000000 to 0xFFFFFF by 0x010101. The triangle is drawn with triangleCMD, never
+fastfillCMD (the one fastfillCMD before it, at 6.5529 s, cleared with color1 0 under fbzMode
+0x600). After each triangle the routine reads the 4 by 4 pixels at the origin through the LFB
+(eight words, each read four times). From 0x8015B39C it sums the 16 pixels' red, green and
+blue into tables at 0x801AB190 and 0x801AF190 indexed by the sums, and returns 0 when they
+disagree (read, in outline). Inferred: a calibration of the card's dither. The sink models
+neither the memory layout nor the rasteriser, so every LFB read stops. Without that stop, a
+plain memory would answer 0xDEAD where MAME answered 0xFFFF.
+
+**`voodoo-ramp.txt`** (measured, `tools/mame/voodooramp.lua`): every access of physical
+0x08000000 to 0x08FFFFFF by GAME.EXE code from its entry to 2 emulated seconds after it, in
+order. That is 5,276 writes and 274,967 reads. Its reads are `voodoo-reads.txt`'s for the
+same span, the same addresses and values in the same order, with times that differ by at
+most 1 ns of rounding; it has one more read, at the span's end. So the two runs agree. A write by the
+GT64010's DMA is not a CPU access and is not in it; the first DMA chain starts at 9.30 s,
+after the span.
 
 **GT64010 DMA channel 0** (measured, `dma0.txt`; the fit is inferred). Every one of the
 1,376,343 records of the 3,580 chains has a word count and word-aligned addresses; 575,067

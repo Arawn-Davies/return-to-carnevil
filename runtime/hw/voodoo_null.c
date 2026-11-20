@@ -15,14 +15,16 @@
  *    fbiInit4, which start at the values the game first read (measured);
  * 2. status, computed: FIFOs free, idle, no swap pending, and the vertical-retrace bit
  *    for the first RETRACE_NS of each VBLANK period on the virtual clock;
- * 3. fbiInit2 (and, for want of evidence either way, fbiInit3) while PCI initEnable bit 2
- *    is set: the DAC's read data, which depends on dacData writes MAME's trace does not
- *    show, so those reads stop.
+ * 3. fbiInit2 while PCI initEnable bit 2 is set: the DAC's latched read data (the doc's "The
+ *    DAC": a dacData write stores a byte in a DAC register, or with its read flag latches
+ *    one, register 5 answering by register 7's value). fbiInit3 in that state stops, for
+ *    want of evidence either way.
  * Any other read stops, as does a read of a storage register never written since reset,
  * and any read after an alternate-map write (the alternate order is not decoded, so the
- * register read may have been written through it). Writes are counted per register; the
- * LFB is memory (a read of a byte never written stops: pixels the card would draw are not
- * drawn here); texture writes are counted and dropped.
+ * register read may have been written through it). Writes are counted per register; LFB
+ * writes are accepted and every LFB read stops (the card's frame-buffer addresses alias and
+ * its pipeline draws, neither modelled here: the doc's "Voodoo frame buffer reads"); texture
+ * writes are counted and dropped.
  */
 #include <string.h>
 
@@ -38,7 +40,17 @@
 #define ALT_MAP 0x200000u
 #define CHIP_SHIFT 10
 #define CHIP_FBI 1u
-#define LFB_BYTES (VOODOO_TEX - VOODOO_LFB)
+#define REG_DACDATA (0x22Cu / 4)
+
+/* The DAC behind dacData (hardware-usage.md, "The DAC"): data in bits 0 to 7, the DAC register
+ * in bits 8 to 10, the read flag in bit 11. Register 5 read while register 7 holds 0x01, 0x07
+ * or 0x0B answers 0x55, 0x71 or 0x79 (inferred, matching every measured read); register 5's
+ * power-on value is 0 (the first plain read of it returned 0, measured). */
+#define DAC_READ 0x800u
+#define DAC_REG5_POWER_ON 0x00u
+static const struct {
+    uint8_t reg7, answer;
+} DAC_REG5[] = {{0x01, 0x55}, {0x07, 0x71}, {0x0B, 0x79}};
 
 /* status as MAME returned it when idle: PCI FIFO free 0x3F, memory FIFO free 0xFFFF, no
  * busy bit, no swap pending; and the vertical-retrace bit (hardware-usage.md, "Measured
@@ -76,9 +88,35 @@ static struct {
     uint64_t tex_writes;
     uint32_t cfg[64];
     int bar0_set;
-    uint8_t lfb[LFB_BYTES];
-    uint8_t lfb_set[LFB_BYTES / 8];
+    uint8_t dac[8], dac_set;   /* the DAC registers, and which have a value (bit n) */
+    int latched;               /* a read has been latched since reset */
+    uint8_t latch;
 } v;
+
+/* A dacData write (stored as a register as well). */
+static void dac_write(cpu_t *c, uint32_t value)
+{
+    uint32_t reg = (value >> 8) & 7u, data = value & 0xFFu;
+    if (value & ~0xFFFu)
+        hw_stop(c, VOODOO_PHYS + 4 * REG_DACDATA, 4, 1, value, "dacData with bits above 11 "
+                "set, which the game never wrote");
+    if (!(value & DAC_READ)) {
+        v.dac[reg] = (uint8_t)data;
+        v.dac_set |= (uint8_t)(1u << reg);
+        return;
+    }
+    if (reg == 5 && (v.dac_set & 0x80u))
+        for (size_t i = 0; i < sizeof DAC_REG5 / sizeof DAC_REG5[0]; i++)
+            if (DAC_REG5[i].reg7 == v.dac[7]) {
+                v.latch = DAC_REG5[i].answer, v.latched = 1;
+                return;
+            }
+    if (!(v.dac_set >> reg & 1u))
+        hw_stop(c, VOODOO_PHYS + 4 * REG_DACDATA, 4, 1, value, "a read request of DAC register "
+                "%u, never written since reset: its power-on value is not measured",
+                (unsigned)reg);
+    v.latch = v.dac[reg], v.latched = 1;
+}
 
 static int readable(uint32_t regnum)
 {
@@ -130,10 +168,15 @@ static uint32_t reg_read(cpu_t *c, uint32_t off, int size)
     if (!readable(n))
         hw_stop(c, phys, 4, 0, 0, "Voodoo register 0x%03X is not one the game read in MAME "
                 "(voodoo-reads.txt), so what it reads as is not known", (unsigned)(4 * n));
-    if ((n == REG_FBIINIT2 || n == REG_FBIINIT3) && (v.cfg[CFG_INIT_ENABLE] & INIT_REMAP_DAC))
-        hw_stop(c, phys, 4, 0, 0, "fbiInit%u read with PCI initEnable bit 2 set: it reads the "
-                "DAC, whose answers depend on dacData writes MAME's trace does not show (not "
-                "modelled)", n == REG_FBIINIT2 ? 2u : 3u);
+    if (n == REG_FBIINIT2 && (v.cfg[CFG_INIT_ENABLE] & INIT_REMAP_DAC)) {
+        if (!v.latched)
+            hw_stop(c, phys, 4, 0, 0, "fbiInit2 read with PCI initEnable bit 2 set reads the "
+                    "DAC's latched data, and no DAC read was requested since reset");
+        return v.latch;
+    }
+    if (n == REG_FBIINIT3 && (v.cfg[CFG_INIT_ENABLE] & INIT_REMAP_DAC))
+        hw_stop(c, phys, 4, 0, 0, "fbiInit3 read with PCI initEnable bit 2 set: whether it "
+                "reads the DAC too is not measured (the game never made such a read)");
     if (v.alt_used)
         hw_stop(c, phys, 4, 0, 0, "Voodoo register 0x%03X read after a write through the "
                 "alternate register map, whose order the sink does not decode: the register "
@@ -164,32 +207,22 @@ static void reg_write(cpu_t *c, uint32_t off, int size, uint32_t value)
     if (chips == 0 || (chips & CHIP_FBI)) {
         v.reg[n] = value;
         v.written[n] = 1;
+        if (n == REG_DACDATA)
+            dac_write(c, value);
     }
-}
-
-static int lfb_is_set(uint32_t i)
-{
-    return v.lfb_set[i / 8] >> (i % 8) & 1;
 }
 
 uint32_t voodoo_read(cpu_t *c, uint32_t off, int size)
 {
-    uint32_t phys = VOODOO_PHYS + off, value = 0;
+    uint32_t phys = VOODOO_PHYS + off;
     if (off < VOODOO_LFB)
         return reg_read(c, off, size);
     if (off >= VOODOO_TEX)
         hw_stop(c, phys, size, 0, 0, "a texture memory read: the game made none in MAME");
-    if ((size != 2 && size != 4) || (off & (uint32_t)(size - 1)))
-        hw_stop(c, phys, size, 0, 0, "LFB reads are aligned halfwords and words");
-    off -= VOODOO_LFB;
-    for (int i = size - 1; i >= 0; i--) {
-        if (!lfb_is_set(off + (uint32_t)i))
-            hw_stop(c, phys, size, 0, 0, "LFB byte at 0x%08X never written since reset: what "
-                    "the card would have drawn there is not drawn by the sink",
-                    (unsigned)(phys + (uint32_t)i));
-        value = value << 8 | v.lfb[off + (uint32_t)i];
-    }
-    return value;
+    hw_stop(c, phys, size, 0, 0, "an LFB read: the card's frame-buffer addresses alias (the "
+            "start-up memory test read 0xFFFF at 0x08432100 after writing 0xDEAD there) and "
+            "its pipeline draws (the dither ramp), and the sink models neither "
+            "(hardware-usage.md, \"Voodoo frame buffer reads\")");
 }
 
 void voodoo_write(cpu_t *c, uint32_t off, int size, uint32_t value)
@@ -203,13 +236,9 @@ void voodoo_write(cpu_t *c, uint32_t off, int size, uint32_t value)
         v.tex_writes++;
         return;
     }
+    /* accepted and dropped: nothing reads them back (voodoo_read) */
     if ((size != 2 && size != 4) || (off & (uint32_t)(size - 1)))
         hw_stop(c, phys, size, 1, value, "LFB writes are aligned halfwords and words");
-    off -= VOODOO_LFB;
-    for (uint32_t i = 0; i < (uint32_t)size; i++, value >>= 8) {
-        v.lfb[off + i] = (uint8_t)value;
-        v.lfb_set[(off + i) / 8] |= (uint8_t)(1u << ((off + i) % 8));
-    }
 }
 
 uint32_t voodoo_reg_writes(uint32_t regnum)
@@ -268,6 +297,8 @@ int voodoo_cfg_write(uint32_t word, uint32_t value, const char **why)
 void voodoo_reset(void)
 {
     memset(&v, 0, sizeof v);
+    v.dac[5] = DAC_REG5_POWER_ON;
+    v.dac_set = 1u << 5;
     for (size_t i = 0; i < sizeof POWER_ON / sizeof POWER_ON[0]; i++) {
         v.reg[POWER_ON[i].reg / 4] = POWER_ON[i].value;
         v.written[POWER_ON[i].reg / 4] = 1;

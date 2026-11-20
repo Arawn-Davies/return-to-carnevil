@@ -375,6 +375,20 @@ entry; `$CARNEVIL_M2_PLAY` = 1 is the play run: only the break hooks, the catch-
 0x6905 are armed, and the inputs are those of `tasksw.lua`'s `PLAY_STEPS` (run B of
 `task-switch.md`) at the same emulated times, with the same snapshots.
 
+**`voodooramp.lua`**: every Voodoo access GAME.EXE's own code makes, written and read, from
+its entry to `$CARNEVIL_RAMP_SECONDS` (2.0) emulated seconds after it. That span covers the
+start-up memory test, the dither ramp and the first two DAC sequences of
+`docs/analysis/hardware-usage.md`. A write and a read watchpoint on physical 0x08000000 to
+0x08FFFFFF, limited to pcs inside GAME.EXE, log `VR W` and `VR R` lines in execution order.
+It was run once, with facts-A2's options in a folder of its own (blank NVRAM): 37 s wall
+time, 19% speed. `voodoo-ramp.txt` is cut from its `debug.log` (its header names the fields;
+cycles converted as below).
+
+```
+cd <scratch>/ramp && timeout 3600 mame carnevil <the same options> \
+  -autoboot_script <repo>/tools/mame/voodooramp.lua
+```
+
 In this build only the first breakpoint that hits at an address acts, so where one address
 needs both a `printf` and a Lua stop (the 0x7301 write path), the two breakpoints have
 complementary conditions. Debugger reads of the GT64010's TIMER_CONTROL, TIMER1 and TIMER2 at
@@ -414,6 +428,7 @@ cycles converted as above), or from the M2 measurements where those already held
   `dma0.txt` (`M2 GW`, `M2 GR`, `M2 CHAIN`, `M2 RECS`, `M2 B4`), `disk-hooks.txt` (`M2 MCB`,
   `M2 WAIT`, `M2 WAKE`, `M2 WAKED`, `M2 MOV`), `spin.txt` (`M2 SPIN`), and with facts-P
   `breaks.txt` (`M2 BRK`, `M2 BRKR`, `M2 CATCH`, `M2 6905`);
+- from the `voodooramp.lua` run: `voodoo-ramp.txt` (`VR W`, `VR R`; the raw run was not kept);
 - from dcs-A: `dcs-trace.txt` (`DT R`, `DT W`, `DT E`, `DT I3`, `DT H3`);
 - from `m2-measure`: `opens.txt` (loader-A's `loader-calls-first.txt` and the `LS` lines of
   its `debug.log.gz`), `loader-first.txt` (`loader-calls-first.txt`), `tasks.txt` (`TS CR`
