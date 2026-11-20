@@ -29,7 +29,13 @@ void trace_attach(uint8_t *ram, cpu_t *c, uint64_t frames, int quiet);
  * rt_exit(0) (which runs trace_close). */
 _Noreturn void trace_end(const char *how);
 
-/* trace_close: the counts of the run and the tasks alive, then the file is closed. */
+/* trace_interrupted: the end of a run that a signal interrupted (machine.h, rt_catch_signals
+ * gives it the signal): an "end interrupted SIGNAME" line, unless quiet a line on stderr with
+ * the signal and the time, then rt_exit(RT_INTERRUPT_STATUS), 130 (which runs trace_close). */
+_Noreturn void trace_interrupted(int sig);
+
+/* trace_close: the counts of the run and the tasks alive, then the file is closed, which
+ * flushes its buffered tail; a failed write or flush stops, naming the file. */
 void trace_close(void);
 
 #endif

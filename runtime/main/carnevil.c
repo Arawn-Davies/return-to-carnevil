@@ -15,7 +15,13 @@
  *
  * Exit status: 0 when the requested time has run, 2 for a usage or file error (one line on
  * stderr naming the file), 3 for a stop of the runtime (rt_stop: "carnevil: stop: ..." names
- * what was not modelled).
+ * what was not modelled, or the host file that could not be written), 130 when SIGINT,
+ * SIGTERM or SIGHUP ended the run. A signal only sets a flag; the run then ends at the next
+ * check point through the same path as a run that reached its limit (trace_interrupted): the
+ * NVRAM is saved, the overlay flushed and the trace's totals written and the file closed,
+ * after an "end interrupted SIGNAME" line and, unless --quiet, "carnevil: interrupted by
+ * SIGNAME at N ns of guest time" on stderr. SIGKILL cannot be caught: what survives it is in
+ * docs/getting-started.md.
  *
  * Start-up, in this order:
  * 1. The options, then the four resets, each once: machine_reset first (the clock, its event
@@ -69,7 +75,9 @@
 #define EXIT_FILES 2
 
 static const char USAGE[] = "usage: carnevil --disk FILE [--overlay FILE] [--nvram FILE] "
-                            "[--seconds N | --frames N] [--trace FILE] [--quiet]";
+                            "[--seconds N | --frames N] [--trace FILE] [--quiet]; exit status "
+                            "0 at the limit, 2 for a usage or file error, 3 for a stop, 130 "
+                            "when interrupted by a signal";
 
 static struct {
     const char *disk, *overlay, *nvram, *trace;
@@ -279,6 +287,8 @@ int main(int argc, char **argv)
     hw_reset();
     loader_reset();
     tasks_reset();
+    /* from here a signal only sets a flag; the first check point after it ends the run */
+    rt_catch_signals(trace_interrupted);
 
     check_disk();
     check_nvram();

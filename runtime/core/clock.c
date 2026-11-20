@@ -108,6 +108,7 @@ void vclock_run_due(void)
 void rt_tick(uint8_t *ram, cpu_t *c)
 {
     machine.ram = ram;
+    rt_poll_signal(); /* a check point: no guest instruction is in progress */
     vclock_account(c);
     vclock_run_due();
     if (irq_deliverable()) {

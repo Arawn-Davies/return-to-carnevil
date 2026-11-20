@@ -5,10 +5,14 @@
  * such an address; read and write move n bytes from the position onwards, clamped at the end
  * of the CMOS, and never advance the position.
  */
+#define _POSIX_C_SOURCE 200809L
+
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "loader.h"
 #include "machine.h"
@@ -30,22 +34,57 @@ void ld_cmos_reset(void)
     saving = 0;
 }
 
-/* Writes buf to file through file.tmp and a rename; who names the caller in a stop. */
+/* Writes buf to file through file.tmp and a rename; who names the caller in a stop. The
+ * temporary file is synced (fsync) before the rename, so the rename never makes a file whose
+ * data has not reached the host disk the NVRAM; the folder is synced after it where the host
+ * allows (an fsync of a folder that the system refuses with EINVAL or ENOTSUP is skipped),
+ * so the rename itself is on the disk too. A failure anywhere stops, naming the file and the
+ * system's reason, and leaves the NVRAM file as it was. */
 static void write_file(const char *who, const char *file, const uint8_t *buf)
 {
-    char *tmp = malloc(strlen(file) + 5);
-    FILE *f;
+    char *tmp = malloc(strlen(file) + 5), *dir;
+    size_t done = 0;
+    int fd;
     if (!tmp)
         rt_stop(RT_STOP_STATUS, "%s: out of host memory", who);
     strcpy(tmp, file);
     strcat(tmp, ".tmp");
-    f = fopen(tmp, "wb");
-    if (!f || fwrite(buf, 1, CMOS_SIZE, f) != CMOS_SIZE || fclose(f) != 0)
+    fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    if (fd < 0)
+        rt_stop(RT_STOP_STATUS, "%s: cannot write %s: %s", who, tmp, strerror(errno));
+    while (done < CMOS_SIZE) {
+        ssize_t n = write(fd, buf + done, CMOS_SIZE - done);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n <= 0)
+            rt_stop(RT_STOP_STATUS, "%s: cannot write %s: %s", who, tmp,
+                    n < 0 ? strerror(errno) : "a write wrote nothing");
+        done += (size_t)n;
+    }
+    if (fsync(fd) != 0)
+        rt_stop(RT_STOP_STATUS, "%s: cannot sync %s: %s", who, tmp, strerror(errno));
+    if (close(fd) != 0)
         rt_stop(RT_STOP_STATUS, "%s: cannot write %s: %s", who, tmp, strerror(errno));
     if (rename(tmp, file) != 0)
         rt_stop(RT_STOP_STATUS, "%s: cannot rename %s to %s: %s", who, tmp, file,
                 strerror(errno));
     free(tmp);
+    dir = malloc(strlen(file) + 2);
+    if (!dir)
+        rt_stop(RT_STOP_STATUS, "%s: out of host memory", who);
+    strcpy(dir, file);
+    if (strrchr(dir, '/'))
+        strrchr(dir, '/')[1] = '\0';
+    else
+        strcpy(dir, ".");
+    fd = open(dir, O_RDONLY | O_CLOEXEC);
+    if (fd >= 0) {
+        if (fsync(fd) != 0 && errno != EINVAL && errno != ENOTSUP)
+            rt_stop(RT_STOP_STATUS, "%s: cannot sync the folder %s: %s", who, dir,
+                    strerror(errno));
+        close(fd);
+    }
+    free(dir);
 }
 
 void cmos_save(void)
@@ -62,12 +101,14 @@ void cmos_load(const char *file)
     static uint8_t loaded[CMOS_SIZE];
     char *name = malloc(strlen(file) + 1);
     FILE *f = fopen(file, "rb");
+    int open_errno = errno; /* fopen's reason, before anything else can change errno */
     if (!name)
         rt_stop(RT_STOP_STATUS, "cmos_load: out of host memory");
     strcpy(name, file);
     if (!f) {
-        if (errno != ENOENT)
-            rt_stop(RT_STOP_STATUS, "cmos_load: cannot open %s: %s", file, strerror(errno));
+        if (open_errno != ENOENT)
+            rt_stop(RT_STOP_STATUS, "cmos_load: cannot open %s: %s", file,
+                    strerror(open_errno));
         memset(loaded, CMOS_BLANK, sizeof loaded); /* a blank NVRAM, created now */
         write_file("cmos_load", file, loaded);
     } else {

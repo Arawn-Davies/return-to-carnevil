@@ -83,12 +83,26 @@ exit statuses and file errors are checked by `tests/test_boot.py`, `MainTest`, a
    `--frames`), and the call of the entry 0x800C4000. It does not return: `_start` calls
    `main`, which calls the scheduler, which runs for ever.
 
-A run ends in one of three ways. At the limit, the end event calls `rt_exit(0)`, which runs
+A run ends in one of four ways. At the limit, the end event calls `rt_exit(0)`, which runs
 the at-stop functions and exits 0, after one line on stderr, `carnevil: ran N ns of guest
 time; RAM SHA-256 H` (left out with `--quiet`). A file or usage error before the game starts
 exits 2 with one line naming the file. Anything the runtime does not model calls `rt_stop`,
 which prints `carnevil: stop: ` and the reason, runs the same at-stop functions (so the NVRAM
-and the overlay are saved) and exits 3.
+and the overlay are saved) and exits 3. SIGINT, SIGTERM or SIGHUP (`rt_catch_signals`,
+`exc.c`) only set a flag; `rt_poll_signal`, at the start of every `rt_tick` and in the
+Voodoo's hold loop, sees it and calls `trace_interrupted`, which writes `end interrupted
+SIGNAME` and ends through `rt_exit(130)`, the same path as the limit (since the whole-branch
+review of M2, finding I1; `tests/test_clock_irq.py`,
+`test_signal_ends_the_run_at_the_next_check_point`, and `tests/test_boot.py`,
+`test_interrupted_run_saves_and_closes` and `test_interrupted_boot`).
+
+The at-stop functions run once, on the thread that ends the run. A stop inside one of them
+(the NVRAM save failing, the trace not written) is printed and traced like any other stop and
+no longer skips the rest: the others still run and the program exits 3 (finding M10,
+`test_failed_at_stop_function_does_not_skip_the_rest`). The NVRAM is written to a temporary
+file, synced to the disk, renamed over the old one and its folder synced; the trace's
+buffered tail is written when it is closed, and a failed write or flush is a stop naming
+the file.
 
 ## The clock
 

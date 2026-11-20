@@ -28,9 +28,14 @@
  *   reload               vclock_reload
  *   atstop               rt_at_stop of two functions that print "at_stop 1" and "at_stop 2"
  *                        on stderr
+ *   atfail               rt_at_stop of a function that prints "at_stop fail" on stderr and
+ *                        then stops (rt_stop) with "at_stop fail: the save failed"
  *   stophook             rt_set_stop_hook of a function that prints "stop_hook STATUS MESSAGE"
  *                        on stderr
  *   exit STATUS          rt_exit(STATUS) (decimal)
+ *   signals              rt_catch_signals with an end function that prints "interrupted SIG"
+ *                        on stderr and calls rt_exit(RT_INTERRUPT_STATUS)
+ *   kill SIG             the signal SIG (decimal) sent to this process, then "killed"
  *   vbhook               irq_set_vblank_hook of a function that prints "vblank_hook NOW"
  *   advanceby NS         vclock_advance(c, NS) (decimal), then "advancedby NOW SLICE"
  *   state                the state
@@ -58,10 +63,14 @@
  * recomp_lookup then also finds the generated functions it knows, so "call" runs them as
  * recompiled code.
  */
+#define _POSIX_C_SOURCE 200809L
+
 #include <inttypes.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "machine.h"
 
@@ -166,9 +175,21 @@ static void at_stop_2(void)
     fputs("at_stop 2\n", stderr);
 }
 
+static void at_stop_fail(void)
+{
+    fputs("at_stop fail\n", stderr);
+    rt_stop(RT_STOP_STATUS, "at_stop fail: the save failed");
+}
+
 static void stop_hook(int status, const char *message)
 {
     fprintf(stderr, "stop_hook %d %s\n", status, message);
+}
+
+static _Noreturn void on_interrupt(int sig)
+{
+    fprintf(stderr, "interrupted %d\n", sig);
+    rt_exit(RT_INTERRUPT_STATUS);
 }
 
 static void vblank_hook(void)
@@ -324,6 +345,14 @@ int main(void)
         } else if (strcmp(key, "atstop") == 0) {
             rt_at_stop(at_stop_1);
             rt_at_stop(at_stop_2);
+        } else if (strcmp(key, "atfail") == 0) {
+            rt_at_stop(at_stop_fail);
+        } else if (strcmp(key, "signals") == 0) {
+            rt_catch_signals(on_interrupt);
+        } else if (strcmp(key, "kill") == 0) {
+            if (kill(getpid(), (int)dec()) != 0)
+                die("kill failed", NULL);
+            puts("killed");
         } else if (strcmp(key, "stophook") == 0) {
             rt_set_stop_hook(stop_hook);
         } else if (strcmp(key, "exit") == 0) {

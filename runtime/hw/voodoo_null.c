@@ -401,6 +401,9 @@ static uint64_t hold_check_ps(void)
 static void hold(cpu_t *c, uint32_t phys, int size, uint32_t value)
 {
     while (v.stalled) {
+        /* a signal ends the run here too (machine.h, rt_poll_signal): the held store is
+         * already queued, so the guest instruction is complete as far as anything can see */
+        rt_poll_signal();
         uint64_t t = to_ns(hold_check_ps()), now = vclock_now(c);
         if (t > now) {
             vclock_advance(c, t - now);

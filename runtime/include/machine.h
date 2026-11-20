@@ -123,12 +123,19 @@ void irq_set_vblank_hook(void (*fn)(void));
 /* --- stopping (exc.c) ------------------------------------------------------------------- */
 
 /* rt_stop: prints "carnevil: stop: " and the message on stderr, runs the functions given to
- * rt_at_stop in the order they were given, and exits with status. */
+ * rt_at_stop in the order they were given, and exits with status.
+ *
+ * The at-stop functions run once, whichever way the run ends (rt_stop, rt_exit). A stop
+ * inside one of them (a save that fails) is printed and given to the stop hook like any
+ * other, and does not skip the others: the remaining functions still run, and the program
+ * then exits with RT_STOP_STATUS whatever status it was ending with. */
 _Noreturn void rt_stop(int status, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 void rt_at_stop(void (*fn)(void));
 /* rt_set_stop_hook: fn (or NULL) is called by rt_stop with its status and its message (as
  * printed, without the prefix, at most RT_STOP_MESSAGE_MAX - 1 bytes), after printing it and
- * before the at-stop functions; for the runtime's trace. machine_reset clears it.
+ * before the at-stop functions (for a stop inside an at-stop function: before the next
+ * one); for the runtime's trace. A stop inside the hook itself does not call it again.
+ * machine_reset clears it.
  * rt_exit: the end of a run that did not stop: runs the at-stop functions as rt_stop does,
  * prints nothing, and exits with status. */
 void rt_set_stop_hook(void (*fn)(int status, const char *message));
@@ -136,6 +143,18 @@ _Noreturn void rt_exit(int status);
 #define RT_STOP_MESSAGE_MAX 2048
 #define RT_STOP_STATUS 3 /* every stop of the clock, interrupt and exception code */
 #define RT_AT_STOP_MAX 16
+
+/* Signals (final review I1). rt_catch_signals: from now on SIGINT, SIGTERM and SIGHUP only
+ * set a flag (a volatile sig_atomic_t); the handler does nothing else. rt_poll_signal: when
+ * the flag is set, calls end(signal), which must end the run (through rt_exit, so that the
+ * at-stop functions run once, on the thread that polls); if end returns, or none was given,
+ * rt_exit(RT_INTERRUPT_STATUS). It is called where the program is certain to pass regularly
+ * with no guest instruction in progress, or with one that is complete as far as the guest
+ * can see: at the start of rt_tick, and in every host loop that can run long (the Voodoo's
+ * hold of a CPU store). */
+#define RT_INTERRUPT_STATUS 130
+void rt_catch_signals(void (*end)(int sig));
+void rt_poll_signal(void);
 
 /* --- the state -------------------------------------------------------------------------- */
 

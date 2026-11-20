@@ -25,7 +25,8 @@
  *   T pending N SLOT IRQ A0 A1 A2 A3 SP
  *                                at a stop, each loader call still running, outermost first
  *   T stop STATUS MESSAGE        rt_stop (STATUS decimal)
- *   T end HOW                    the run reached its limit: "seconds N" or "frames N"
+ *   T end HOW                    the run reached its limit, "seconds N" or "frames N", or was
+ *                                ended by a signal, "interrupted SIGINT" (SIGTERM, SIGHUP)
  * and at the end of every run, from trace_close (values decimal):
  *   T count vblank N             VBLANK interrupts raised (irq.c, vblank_raise)
  *   T count spin_max N           the largest VBLANK-wait spin count (below)
@@ -60,6 +61,7 @@
  */
 #include <errno.h>
 #include <inttypes.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -83,6 +85,7 @@
 #define IOCTL_CMDS 0x10000u
 
 static FILE *out;
+static const char *trace_path;
 static uint8_t *g_ram;
 static cpu_t *g_cpu;
 static uint64_t frame_limit;
@@ -345,8 +348,25 @@ _Noreturn void trace_end(const char *how)
     rt_exit(0);
 }
 
+_Noreturn void trace_interrupted(int sig)
+{
+    const char *name = sig == SIGINT    ? "SIGINT"
+                       : sig == SIGTERM ? "SIGTERM"
+                       : sig == SIGHUP  ? "SIGHUP"
+                                        : "a signal";
+    if (out) {
+        line_head("end");
+        fprintf(out, " interrupted %s\n", name);
+    }
+    if (!end_quiet)
+        fprintf(stderr, "carnevil: interrupted by %s at %" PRIu64 " ns of guest time\n", name,
+                now());
+    rt_exit(RT_INTERRUPT_STATUS);
+}
+
 void trace_close(void)
 {
+    FILE *f = out;
     if (!out)
         return;
     scan_tasks();
@@ -406,8 +426,13 @@ void trace_close(void)
         line_head("alive");
         fprintf(out, " 0x%08" PRIX32 " 0x%08" PRIX32 "\n", seen[i].record, seen[i].fn);
     }
-    fclose(out);
+    /* the buffered tail is flushed by the close; a failed write or flush is a stop (which,
+     * from an at-stop function, does not skip the others: machine.h) */
     out = NULL;
+    errno = 0;
+    if (ferror(f) | fclose(f))
+        rt_stop(RT_STOP_STATUS, "the trace %s could not be written: %s", trace_path,
+                errno ? strerror(errno) : "a write failed");
 }
 
 int trace_open(const char *path, char *err, size_t errlen)
@@ -417,6 +442,7 @@ int trace_open(const char *path, char *err, size_t errlen)
         snprintf(err, errlen, "cannot write the trace %s: %s", path, strerror(errno));
         return -1;
     }
+    trace_path = path;
     setvbuf(out, NULL, _IOFBF, 1u << 20);
     return 0;
 }

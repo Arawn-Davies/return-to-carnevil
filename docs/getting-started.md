@@ -92,7 +92,7 @@ The options:
 
 - `--disk FILE` (required): your raw image. It is only ever opened for reading; the program checks its size and that its `GAME.EXE` is the supported revision before it creates any other file.
 - `--overlay FILE`: where the game's writes to its disk go (audits, adjustments, high scores). Created on the first run, reused afterwards, and refused if it was made for another image.
-- `--nvram FILE`: the game's settings memory (CMOS), 32 KB. Created blank on the first run, saved at the end of every run.
+- `--nvram FILE`: the game's settings memory (CMOS), 32 KB. Created blank on the first run. It is saved when the run ends, whether it reached its limit, stopped, or was interrupted (below); a run killed with `SIGKILL` (or by a crash of the machine) cannot save it.
 - `--seconds N` or `--frames N`: stop after N seconds of game time, or at the N-th frame (VBLANK interrupt). Without either, the game runs until something stops it.
 - `--trace FILE`: write a log of what the game did, one line per event (see [analysis/runtime.md](analysis/runtime.md), "Reading a trace").
 - `--quiet`: keep the game's console output out of the terminal.
@@ -104,6 +104,10 @@ What a run prints: the game's own console lines, from the `Mother GOOSE - R5000`
 Game time is not real time: there is no window yet, so the program runs as fast as it can, and its clock is not the arcade board's pace either ([analysis/runtime.md](analysis/runtime.md), "The clock").
 
 Exit status 2 means a problem with your files, named in one line on stderr. Exit status 3, with a line starting `carnevil: stop:`, means the game asked for something the port does not model yet, such as a hardware access or a loader service attract mode never uses; the message names it. The port never guesses an answer, so a stop is expected whenever the game goes somewhere it was not checked: anything outside attract mode with a blank NVRAM and no input. In attract mode, 150 seconds run without a stop.
+
+Ending a run early: Ctrl-C (`SIGINT`), `kill` (`SIGTERM`) or closing the terminal (`SIGHUP`) ends the run cleanly at the next point where the game is between instructions, which comes within a fraction of a second: the NVRAM is saved, the overlay's writes are pushed to the disk, and the trace gets an `end interrupted SIGINT` line (or `SIGTERM`, `SIGHUP`) and its totals before it is closed. The program then prints `carnevil: interrupted by SIGINT at N ns of guest time` (not with `--quiet`) and exits with status 130, which is distinct from 0 (the limit was reached), 2 (a file or usage error) and 3 (a stop). The next run on the same files starts normally.
+
+`SIGKILL` (`kill -9`) cannot be caught, so a run killed that way, or one that dies with the machine, saves nothing at its end. What it leaves: the overlay holds every sector write the game finished before the kill, and the next run reads it as it is; the NVRAM file is the one the previous run saved (or the blank one this run created), so every CMOS write of the killed run is lost; the trace ends wherever its last buffered megabyte was written out, without its totals. When a first run was killed this way in the milestone's review, the next run on its files behaved as a first boot again (it reset the high scores once more) and ran normally; other combinations have not been tried.
 
 ## 8. Run the tests
 

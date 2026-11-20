@@ -22,9 +22,11 @@ import collections
 import dataclasses
 import os
 import shutil
+import signal
 import struct
 import subprocess
 import tempfile
+import time
 import tomllib
 import unittest
 
@@ -80,7 +82,7 @@ class Trace:
         self.console, self.opens, self.loader, self.switches, self.tasks = [], [], [], [], []
         self.interp, self.tolerated, self.stops, self.alive = [], [], [], []
         self.pending, self.dma, self.spins = [], [], []
-        self.counts, self.end = {}, None
+        self.counts, self.end, self.kinds = {}, None, []
         with open(path, encoding="latin-1") as f:
             for line in f:
                 self.add(line.rstrip("\n"))
@@ -89,6 +91,7 @@ class Trace:
     def add(self, line):
         t, kind, rest = (line.split(" ", 2) + [""])[:3]
         int(t)
+        self.kinds.append(kind)
         if kind == "console":
             fd, n, text = rest.split(" ", 2)
             self.console.append((int(fd, 16), text))
@@ -187,6 +190,21 @@ def run(program, args, timeout):
     return subprocess.run([program, *args], capture_output=True, text=True, timeout=timeout)
 
 
+def interrupted(program, args, sig, after, timeout=120):
+    """The program run with args and sent sig after `after` seconds of wall time; a
+    CompletedProcess with stdout and stderr as bytes."""
+    proc = subprocess.Popen([program, *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        time.sleep(after)
+        proc.send_signal(sig)
+        out, err = proc.communicate(timeout=timeout)
+    except BaseException:
+        proc.kill()
+        proc.communicate()
+        raise
+    return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
+
+
 def files_in(folder, raw=None, trace=True, quiet=True):
     """The options for an overlay, an NVRAM file and (if trace) a trace in folder."""
     args = ["--overlay", os.path.join(folder, "carnevil.overlay"),
@@ -203,16 +221,17 @@ def files_in(folder, raw=None, trace=True, quiet=True):
 MSG = b"hello\r\n\0"
 
 
-def synthetic_exe(path, message=MSG, then=0x0C0):
+def synthetic_exe(path, message=MSG, then=0x0C0, then_fd=5, then_len=0):
     """GAME.EXE at the entry: write(1, message, len) through the stub block's slot 0x0C0,
-    then a call of the stub block at offset `then` with a0 = 5 (another write by default,
-    of 0 bytes to fd 5), then a loop for ever; the image runs past the stub block, with the
-    message after it."""
+    then a call of the stub block at offset `then` with a0 = then_fd, a1 = the message and
+    a2 = then_len (by default another write, of 0 bytes to fd 5; with then_fd 3, a write of
+    the message's first then_len bytes to the CMOS), then a loop for ever; the image runs past
+    the stub block, with the message after it."""
     msg = STUB_END
     words = [A("lui", rt=A1, imm=msg >> 16), A("ori", rt=A1, rs=A1, imm=msg & 0xFFFF),
              A("addiu", rt=A0, rs=0, imm=1), A("addiu", rt=A2, rs=0, imm=len(message) - 1),
              A("jal", target=STUB + 0x0C0), 0,
-             A("addiu", rt=A0, rs=0, imm=5), A("addiu", rt=A2, rs=0, imm=0),
+             A("addiu", rt=A0, rs=0, imm=then_fd), A("addiu", rt=A2, rs=0, imm=then_len),
              A("jal", target=STUB + then), 0,
              A("beq", rs=0, rt=0, imm=-1), 0]
     words += [0] * ((msg - ENTRY) // 4 - len(words))
@@ -235,11 +254,12 @@ class MainTest(unittest.TestCase):
     """The program on a synthetic GAME.EXE and disk (no game data)."""
 
     @classmethod
-    def synthetic(cls, name, then=0x0C0):
-        """(program, disk image, SHA-256) for synthetic_exe(then), under the class's folder."""
+    def synthetic(cls, name, then=0x0C0, **kw):
+        """(program, disk image, SHA-256) for synthetic_exe(then, **kw), under the class's
+        folder."""
         folder = os.path.join(cls.dir, name)
         os.makedirs(os.path.join(folder, "disk"))
-        image = synthetic_exe(os.path.join(folder, "GAME.EXE"), then=then)
+        image = synthetic_exe(os.path.join(folder, "GAME.EXE"), then=then, **kw)
         analysis = functions.analyse(image, ENTRY, (), [(STUB, STUB_END)])
         analysis = dataclasses.replace(analysis, exe_sha256=image.sha256)
         gen = os.path.join(folder, "generated")
@@ -367,6 +387,52 @@ class MainTest(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(sorted(os.listdir(folder)),
                          ["carnevil.nvram", "carnevil.overlay", "carnevil.raw"])
+
+    def test_interrupted_run_saves_and_closes(self):
+        """SIGTERM, SIGINT and SIGHUP part-way through a run without a limit (final review
+        I1): exit status 130; the NVRAM file holds the CMOS write the program made before the
+        signal; the trace is complete to the interruption and ends with the "end
+        interrupted" line and the totals; a following run on the same files starts
+        normally."""
+        program, raw, _sha = self.synthetic("cmos", then_fd=3, then_len=7)
+        for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            with self.subTest(sig=sig.name):
+                folder = tempfile.mkdtemp(dir=self.dir)
+                res = interrupted(program, files_in(folder, raw, quiet=False), sig, 1.0)
+                self.assertEqual(res.returncode, 130, res.stderr)
+                self.assertEqual(res.stdout, b"hello\r\n")
+                self.assertRegex(res.stderr, rb"^carnevil: interrupted by " + sig.name.encode()
+                                 + rb" at [0-9]+ ns of guest time\n$")
+                with open(os.path.join(folder, "carnevil.nvram"), "rb") as f:
+                    self.assertEqual(f.read(), MSG[:7] + b"\xFF" * (0x8000 - 7))
+                trace = Trace(os.path.join(folder, "trace.txt"))
+                self.assertEqual(trace.console, [(1, "hello\\x0D\\x0A")])
+                self.assertEqual([t[1] for t in trace.loader], [0x0C0, 0x0C0])
+                self.assertEqual(trace.end, f"interrupted {sig.name}")
+                self.assertEqual(trace.counts["loader_calls"], 2)
+                after_end = trace.kinds[trace.kinds.index("end") + 1:]
+                self.assertIn("count", after_end)
+                self.assertLessEqual(set(after_end), {"count", "alive"})
+                # the next run on the same overlay and NVRAM starts and ends normally
+                again = run(program, files_in(folder, raw) + ["--seconds", "1"], 120)
+                self.assertEqual((again.returncode, again.stderr), (0, ""))
+
+    def test_failed_nvram_save_keeps_the_rest(self):
+        """The NVRAM save failing at the end of a run (its temporary file's name taken by a
+        folder) stops with a message naming the file (final review M10): the overlay is still
+        flushed and the trace still gets its stop line and its totals; exit 3."""
+        good = files_in(self.tmp, self.raw)
+        self.assertEqual(run(self.program, good + ["--seconds", "1"], 120).returncode, 0)
+        os.mkdir(os.path.join(self.tmp, "carnevil.nvram.tmp"))
+        res = run(self.program, good + ["--seconds", "1"], 120)
+        self.assertEqual(res.returncode, 3, res.stderr)
+        self.assertRegex(res.stderr, r"^carnevil: stop: cmos_save: cannot write \S*"
+                                     r"carnevil.nvram.tmp: ")
+        trace = Trace(os.path.join(self.tmp, "trace.txt"))
+        self.assertEqual(trace.end, "seconds 1")
+        self.assertEqual(len(trace.stops), 1)
+        self.assertTrue(trace.stops[0].startswith("3 cmos_save: cannot write"), trace.stops)
+        self.assertEqual(trace.counts["loader_calls"], 2)
 
 
 # --- with the game -------------------------------------------------------------------------
@@ -551,6 +617,48 @@ class BootTest(unittest.TestCase):
         trace = Trace(os.path.join(frames_dir, "trace.txt"))
         self.assertEqual(trace.end, "frames 100")
         self.assertEqual(trace.counts["vblank"], 100)
+
+    def test_interrupted_boot(self):
+        """A run without a limit sent SIGTERM after 4 s of wall time (final review I1): exit
+        130; its trace up to the "end interrupted SIGTERM" line is the shared 150 s run's
+        trace up to there, and the totals follow; its NVRAM is what the game wrote up to the
+        signal: the NVRAM of a run ended by --frames at the VBLANK before the signal or the
+        one after (the game rewrites a running count in the CMOS about once a second, so the
+        state between two VBLANKs is one of the two); a second run on the same files starts
+        as a second boot."""
+        long_trace = os.path.join(long_run()[2], "trace.txt")
+        folder = os.path.join(_game["tmp"], "sigterm")
+        os.makedirs(folder)
+        res = interrupted(game_program(), files_in(folder, work_path("carnevil.raw")),
+                          signal.SIGTERM, 4.0)
+        self.assertEqual(res.returncode, 130, res.stderr[-2000:])
+        with open(os.path.join(folder, "trace.txt"), encoding="latin-1") as f:
+            lines = f.read().splitlines()
+        trace = Trace(os.path.join(folder, "trace.txt"))
+        self.assertEqual(trace.end, "interrupted SIGTERM")
+        end = trace.kinds.index("end")
+        self.assertLessEqual(set(trace.kinds[end + 1:]), {"count", "alive"})
+        with open(long_trace, encoding="latin-1") as f:
+            reference = [next(f).rstrip("\n") for _ in range(end)]
+        self.assertEqual(lines[:end], reference)
+        self.assertEqual(trace.console, mame_console())  # all 25 come within 3 s of game time
+        frames = trace.counts["vblank"]
+        nvrams = []
+        for n in (frames, frames + 1):
+            ref = os.path.join(_game["tmp"], f"sigterm-frames{n}")
+            os.makedirs(ref)
+            r = run(game_program(), files_in(ref, work_path("carnevil.raw"), trace=False)
+                    + ["--frames", str(n)], SHORT_TIMEOUT)
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            with open(os.path.join(ref, "carnevil.nvram"), "rb") as f:
+                nvrams.append(f.read())
+        with open(os.path.join(folder, "carnevil.nvram"), "rb") as f:
+            self.assertIn(f.read(), nvrams)
+        self.assertNotEqual(nvrams[0], b"\xFF" * 0x8000)
+        r, second = game_run(SHORT_SECONDS, "sigterm-second", files_from=folder)
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        console = Trace(os.path.join(second, "trace.txt")).console
+        self.assertNotIn("reseting high scores", " ".join(text for _fd, text in console))
 
     def test_spin_counter_sane(self):
         spin = self.trace().counts["spin_max"]

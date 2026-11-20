@@ -649,6 +649,46 @@ class ClockIrqTest(unittest.TestCase):
                              text=True, timeout=120)
         self.assertEqual((res.returncode, res.stderr), (5, ""))
 
+    def test_failed_at_stop_function_does_not_skip_the_rest(self):
+        """A stop inside an at-stop function (a failed NVRAM save, final review M10) is
+        reported, the remaining at-stop functions still run, and the program exits with the
+        stop status, whatever ended the run; the stop hook hears every stop."""
+        fail = "carnevil: stop: at_stop fail: the save failed"
+        res = subprocess.run([self.exe], input="reset\natfail\natstop\nexit 0\n",
+                             capture_output=True, text=True, timeout=120)
+        self.assertEqual((res.returncode, res.stderr.splitlines()),
+                         (3, ["at_stop fail", fail, "at_stop 1", "at_stop 2"]))
+        res = subprocess.run([self.exe], input="reset\nstophook\natfail\natstop\n"
+                             "break 80100024 407\n", capture_output=True, text=True,
+                             timeout=120)
+        lines = res.stderr.splitlines()
+        self.assertEqual(res.returncode, 3, res.stderr)
+        self.assertTrue(lines[0].startswith("carnevil: stop: break 0x407"), lines)
+        message = lines[0][len("carnevil: stop: "):]
+        self.assertEqual(lines[1:], [f"stop_hook 3 {message}", "at_stop fail", fail,
+                                     "stop_hook 3 at_stop fail: the save failed",
+                                     "at_stop 1", "at_stop 2"])
+
+    def test_signal_ends_the_run_at_the_next_check_point(self):
+        """rt_catch_signals (final review I1): SIGTERM, SIGINT and SIGHUP only set a flag; the
+        next rt_tick calls the end function, which ends the run through rt_exit with status
+        130 (the at-stop functions run once); with no tick, nothing happens."""
+        for sig in (15, 2, 1):
+            with self.subTest(sig=sig):
+                res = subprocess.run([self.exe], input=f"reset\natstop\nsignals\nkill {sig}\n"
+                                     "state\ntick\nstate\n", capture_output=True, text=True,
+                                     timeout=120)
+                self.assertEqual(res.returncode, 130, res.stderr)
+                self.assertEqual(res.stderr.splitlines(),
+                                 [f"interrupted {sig}", "at_stop 1", "at_stop 2"])
+                out = Out(res.stdout)
+                self.assertEqual(out.all("killed"), [[]])
+                self.assertEqual(len(out.all("m")), 1)  # the state after the tick never came
+        # without a tick the flag is only set
+        res = subprocess.run([self.exe], input="reset\natstop\nsignals\nkill 15\nstate\n",
+                             capture_output=True, text=True, timeout=120)
+        self.assertEqual((res.returncode, res.stderr), (0, ""))
+
     def test_vblank_hook_counts_raised_vblanks(self):
         """irq_set_vblank_hook: called at each vblank_raise that raises IP6 (the VBLANK
         enable set by line 0's handler), not at a retrace with the enable clear."""

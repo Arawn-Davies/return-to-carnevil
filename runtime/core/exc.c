@@ -6,21 +6,42 @@
  * an exception, so a handler must leave the resume pc (frame + 0x110) at that instruction's
  * pc + 4; any other resume pc stops, naming it, rather than being guessed at.
  */
+#define _POSIX_C_SOURCE 200809L
+
+#include <setjmp.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "machine.h"
 
 /* --- stopping --------------------------------------------------------------------------- */
 
-static void run_at_stop(void)
+/* While an at-stop function runs, a stop inside it comes back here instead of exiting, so
+ * the others still run (machine.h, rt_stop). One thread ends the run: the one holding the
+ * task baton, which is the only one running guest or runtime code. */
+static jmp_buf at_stop_return;
+static int in_at_stop, in_stop_hook;
+
+static _Noreturn void finish(int status)
 {
-    if (!machine.stopping) { /* a stop from a stop function does not run them again */
+    volatile int end_status = status;
+    if (!machine.stopping) { /* a stop after the at-stop functions does not run them again */
         machine.stopping = 1;
-        for (int i = 0; i < machine.n_at_stop; i++)
-            machine.at_stop[i]();
+        for (volatile int i = 0; i < machine.n_at_stop; i++) {
+            in_at_stop = 1;
+            if (setjmp(at_stop_return) == 0)
+                machine.at_stop[i]();
+            else
+                end_status = RT_STOP_STATUS; /* it stopped: reported, go on with the next */
+            in_at_stop = 0;
+        }
     }
+    fflush(stdout);
+    fflush(stderr);
+    exit(end_status);
 }
 
 _Noreturn void rt_stop(int status, const char *fmt, ...)
@@ -33,20 +54,55 @@ _Noreturn void rt_stop(int status, const char *fmt, ...)
     va_end(ap);
     fprintf(stderr, "carnevil: stop: %s\n", message);
     fflush(stderr);
-    if (machine.stop_hook && !machine.stopping) {
-        void (*hook)(int, const char *) = machine.stop_hook;
-        machine.stop_hook = NULL; /* a stop inside the hook does not call it again */
-        hook(status, message);
+    if (machine.stop_hook && !in_stop_hook) { /* a stop inside the hook does not call it */
+        in_stop_hook = 1;
+        machine.stop_hook(status, message);
+        in_stop_hook = 0;
     }
-    run_at_stop();
-    exit(status);
+    if (in_at_stop)
+        longjmp(at_stop_return, 1);
+    finish(status);
 }
 
 _Noreturn void rt_exit(int status)
 {
     fflush(stdout);
-    run_at_stop();
-    exit(status);
+    finish(status);
+}
+
+/* --- signals ------------------------------------------------------------------------------ */
+
+static volatile sig_atomic_t signal_pending;
+static void (*signal_end)(int sig);
+
+static void on_signal(int sig)
+{
+    signal_pending = sig; /* nothing else: the run ends at the next rt_poll_signal */
+}
+
+void rt_catch_signals(void (*end)(int sig))
+{
+    static const int sigs[] = {SIGINT, SIGTERM, SIGHUP};
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = on_signal;
+    sa.sa_flags = SA_RESTART;
+    sigemptyset(&sa.sa_mask);
+    signal_end = end;
+    for (size_t i = 0; i < sizeof sigs / sizeof sigs[0]; i++)
+        if (sigaction(sigs[i], &sa, NULL) != 0)
+            rt_stop(RT_STOP_STATUS, "rt_catch_signals: sigaction(%d) failed", sigs[i]);
+}
+
+void rt_poll_signal(void)
+{
+    int sig = signal_pending;
+    if (!sig)
+        return;
+    signal_pending = 0;
+    if (signal_end)
+        signal_end(sig);
+    rt_exit(RT_INTERRUPT_STATUS);
 }
 
 void rt_set_stop_hook(void (*fn)(int status, const char *message))
