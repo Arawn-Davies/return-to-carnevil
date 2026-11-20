@@ -23,6 +23,9 @@ RESET_REPLY_NS = 2027000  # dcs_stub.c, DCS_RESET_REPLY_NS
 # as block data (the 1,230,931 SOUNDOUT writes less 191 command, header and argument words)
 EARLY_READS = {"0040": "17978", "0080": "45", "8000": "495782"}
 DATA_WORDS = 1230740
+# The same for the 600 s capture: 24 more reads with 0x80 recorded clear (the polls right
+# after each of the 40 later words that find the board busy) and 11 more with 0x8000 clear
+EARLY_READS_600 = {"0040": "17978", "0080": "69", "8000": "495793"}
 # The argument words each pinned command was sent with in the trace (dcs-handshake.md, "Which
 # replies are rules and which are recorded values"), and its state
 PINNED = [(0x55AA, (0xC837,), "entry"), (0x55AA, (0xC837,), "program"),
@@ -172,6 +175,38 @@ class DcsTest(test_hw.HwTestCase):
                     self.stops(setup + out_words(word, *bad[:i + 1]), f"0x{word:04X}",
                                f"0x{bad[i]:04X}", state, f"ra 0x{CALLER_RA:08X}")
 
+    def test_commands_whose_reply_cannot_be_seen(self):
+        """The 600 s capture's commands 0x00BB, 0x00B7 and 0x0059, and 0x00B9 sent again, all
+        with 0x00B9's arguments (0xFF7F, 0x8000) and always while the word the first 0x00B9
+        raised waits unread (dcs-handshake.md, "After 150 s"): taken with every status bit as
+        it was, since a reply would change nothing the game reads, and nothing queued; the
+        acknowledgement that would show whether they replied stops, naming the command; a
+        reset makes the queue known again. Sent with no word waiting, or with other
+        arguments, they stop."""
+        b9 = out_words(0x00B9, 0xFF7F, 0x8000)
+        for word in (0x00BB, 0x00B7, 0x0059, 0x00B9):
+            with self.subTest(word=hex(word)):
+                out, _ = self.drive(self.program() + b9 + read(SOUNDSTAT) + ["dcs"]
+                                    + out_words(word, 0xFF7F, 0x8000) + read(SOUNDSTAT)
+                                    + read(INTSTAT) + ["dcs"])
+                before, after, intstat = self.words(out)[-3:]
+                self.assertEqual(after, before)
+                self.assertEqual(before & 0x80C0, 0x80C0)
+                self.assertEqual(intstat & 0x40, 0x40)
+                self.assertEqual([d[0] for d in out.all("dcs")], ["1", "1"])
+                self.stops(self.program() + b9 + out_words(word, 0xFF7F, 0x8000)
+                           + write(SOUNDIN_W, 0), "acknowledged", f"0x{word:04X}",
+                           f"ra 0x{CALLER_RA:08X}")
+                # a reset empties the queue: acknowledgements are known again
+                self.drive(self.program() + b9 + out_words(word, 0xFF7F, 0x8000)
+                           + board_reset(20000000))
+                self.stops(self.program() + b9 + out_words(word, 0xFF7F, 0x7FFF), f"0x{word:04X}",
+                           "0x7FFF", "program")
+        for word in (0x00BB, 0x00B7, 0x0059):
+            with self.subTest(word=hex(word), waiting=False):
+                self.stops(self.program() + out_words(word, 0xFF7F, 0x8000), f"0x{word:04X}",
+                           "no word waiting")
+
     def test_soundctl_measured_values(self):
         """SOUNDCTL takes the values the game wrote in the trace (0x0000, 0x0001, 0x000F);
         another stops naming it."""
@@ -223,6 +258,31 @@ class DcsReplayTest(test_hw.HwTestCase):
         self.assertEqual(len(ip3), 1)
         self.assertEqual(out.all("dcsraise"), [[ip3[0][1]]])
         self.assertEqual(len(out.all("dcsfifo")), 1)
+
+    @requires_file("mame", "m2-facts", "dcs-trace-600.txt")
+    def test_replays_mame_exchange_600(self):
+        """The 600 s capture (dcs-trace-600.txt, the same run options and script with
+        CARNEVIL_DCS_SECONDS=600) by the same standard: every result exact, the timing bits
+        one-sided, IP3 raised once where MAME took it. Its first 150 s hold the same events as
+        dcs-trace.txt; after them the game sends only 0x55AE and the commands 0x00BB, 0x00B7,
+        0x0059 and 0x00B9 (40 words) and polls SOUNDSTAT (64 reads, 11 of them with 0x8000
+        clear). Early reads and the data-word count pinned for this trace."""
+        path = work_path("mame", "m2-facts", "dcs-trace-600.txt")
+        out, _ = self.drive([f"dcsreplay {path} {vt.ENTRY_NS} {FIFO_WRITES}"])
+        reads = {r[0]: r[1:] for r in out.all("dcsread")}
+        for kind, total in (("6907", 10), ("690A", 112), ("690E", 2), ("6910", 8)):
+            with self.subTest(kind=kind):
+                self.assertEqual(reads[kind][:2], [str(total), str(total)], reads[kind])
+        self.assertEqual(out.all("dcsstate"), [["1679896", "1679896", "0"]])
+        for bit, late, early, first in out.all("dcsbit"):
+            with self.subTest(bit=bit):
+                self.assertEqual(late, "0", f"first at trace line {first}")
+                self.assertEqual(early, EARLY_READS_600[bit])
+        self.assertEqual(out.all("dcsorphan"), [["0"]])
+        self.assertEqual(out.all("dcsdata"), [[str(DATA_WORDS)]])
+        ip3 = out.all("dcsip3")
+        self.assertEqual(len(ip3), 1)
+        self.assertEqual(out.all("dcsraise"), [[ip3[0][1]]])
 
 
 if __name__ == "__main__":

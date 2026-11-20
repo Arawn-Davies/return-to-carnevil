@@ -48,6 +48,7 @@ STUB, STUB_END = 0x800C408C, 0x800C42CC
 SUPPORTED_SHA256 = "f9455ce801d2e5c26a7b6e00eff88efa573deb7ab15fa29f9c90100623bfd3a6"
 ATTRACT = 0x800CB084  # the `attract` task's function (task-switch.md, section 1)
 RUN_SECONDS, SHORT_SECONDS = 150, 20
+HORIZON_SECONDS = 1800  # the measured horizon: no stop up to here (final review I2)
 RUN_TIMEOUT, SHORT_TIMEOUT = 3600, 1200
 # sp of MAME's interrupt-time loader calls, on the loader's exception stack: 0x800C1320 to
 # 0x800C1368 inclusive (loader-calls.md, measured)
@@ -703,6 +704,27 @@ class BootTest(unittest.TestCase):
         trace = Trace(os.path.join(frames_dir, "trace.txt"))
         self.assertEqual(trace.end, "frames 100")
         self.assertEqual(trace.counts["vblank"], 100)
+
+    def test_runs_to_the_documented_horizon(self):
+        """The measured horizon (final review I2; getting-started.md, step 7, and M2-report.md,
+        "What runs"): with a blank NVRAM and no input the port runs 1,800 s of virtual time,
+        the cap that measurement used, without a stop, and is still in attract mode at the
+        end. No stop is known beyond it because none was looked for; a change that makes the
+        run stop sooner fails here."""
+        game_program()
+        folder = os.path.join(_game["tmp"], "horizon")
+        os.makedirs(folder)
+        res = run(game_program(), files_in(folder, work_path("carnevil.raw"))
+                  + ["--seconds", str(HORIZON_SECONDS)], RUN_TIMEOUT)
+        self.assertEqual(res.returncode, 0, res.stderr[-2000:])
+        trace = Trace(os.path.join(folder, "trace.txt"))
+        self.assertEqual(trace.end, f"seconds {HORIZON_SECONDS}")
+        self.assertEqual(trace.stops, [])
+        self.assertIn(ATTRACT, [fn for _rec, fn in trace.alive])
+        # the sound commands MAME's 600 s capture added (dcs-handshake.md, "After 150 s") were
+        # sent and taken: more SOUNDOUT words than the 150 s run's
+        self.assertGreater(trace.counts[("ioctl", 0x6908)],
+                           long_run()[1].counts[("ioctl", 0x6908)])
 
     def test_host_write_error_stops(self):
         """A host write to the overlay that fails (the file-size limit RLIMIT_FSIZE reached

@@ -120,6 +120,36 @@ means a command word followed by a header and data words, sent back to back.
     waiting, which the game never read, so its value and when in those 110 s it came are
     unknown.)
 
+### After 150 s (measured, `dcs-trace-600.txt`)
+
+A second capture, dcs-600 (2026-11-20, for the whole-branch review's finding I2), ran the
+same script with the same options for 600 s from the entry (`CARNEVIL_DCS_SECONDS=600`;
+5,408 s of wall time, 11.2% speed; `mame/m2-facts/dcs-trace-600.txt`, 2,911,079 events, cut
+by `scripts/derive_dcs600.py`, which reproduces `dcs-trace.txt` byte for byte from dcs-A's
+log; the raw run is in `raw/dcs-600/`). Its first 150 s have exactly the event counts of
+run A's. After them the game sends 40 words and reads SOUNDSTAT 64 times, and nothing else
+on the DCS ioctls (no SOUNDIN read, no acknowledgement, no SOUNDCTL or INTCTL write):
+
+- `0x55AE 0x0100` at 132.459, 214.438, 244.148, 251.409, 361.601, 443.580, 473.289, 480.551
+  and 590.743 s (with the one at 132.459 s of step 15, 9 in all);
+- four commands of 0x00B9's shape, each with the arguments 0xFF7F, 0x8000: 0x00BB at 177.966
+  and 407.108 s, 0x00B7 at 234.060 and 463.201 s, 0x0059 at 244.148 and 473.289 s, and
+  0x00B9 again at 251.741 and 480.883 s. The sequence from 132.459 s repeats 229.141 s later.
+
+Every one of these words was sent while the word 0x00B9 raised at 22.6 s was still waiting
+unread: all 64 SOUNDSTAT reads have bit 0x40 set. So nothing the game reads shows whether the
+board answered any of them. Bit 0x80 is clear at the read right after each word and set at
+the next (the board taking the word), and bit 0x8000 is clear in 11 of the reads (0x02F0 and
+0x0270, around the words at 234.060, 251.409 and 361.601 s) and set in the others, which the
+responder, setting it throughout the program state, counts as early reads. The responder takes the four
+commands with exactly these arguments only while a word already waits, changes nothing the
+game can read, and from then on treats the depth of its reply queue as unknown: an
+acknowledgement, which would show it, stops, as does any of the four sent with no word
+waiting or with other arguments (`dcs_stub.c`, `A_UNSEEN`; `tests/test_dcs.py`,
+`test_commands_whose_reply_cannot_be_seen`, `test_replays_mame_exchange_600`). That is the
+responder's modelled horizon: the game's attract-mode exchange as far as it reads it, with
+the reply values to 0x00B9, 0x00BB, 0x00B7 and 0x0059 unknown.
+
 The replies the game reads are therefore, per occasion:
 
 - after a reset: 0x000A (constant);

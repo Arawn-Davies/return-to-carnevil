@@ -433,6 +433,10 @@ cycles converted as above), or from the M2 measurements where those already held
   left in `/tmp/m2f/ramp` on the machine that ran MAME, not copied to `raw/` on the share, so
   it lasts only as long as that `/tmp`;
 - from dcs-A: `dcs-trace.txt` (`DT R`, `DT W`, `DT E`, `DT I3`, `DT H3`);
+- from dcs-600 (2026-11-20: `dcstap.lua` with dcs-A's options and
+  `CARNEVIL_DCS_SECONDS=600`, 5,408 s of wall time, 11.2% speed, the only MAME running):
+  `dcs-trace-600.txt`, the same fields, cut by `scripts/derive_dcs600.py` (which gives
+  `dcs-trace.txt` byte for byte from dcs-A's log); the raw run is in `raw/dcs-600/`;
 - from `m2-measure`: `opens.txt` (loader-A's `loader-calls-first.txt` and the `LS` lines of
   its `debug.log.gz`), `loader-first.txt` (`loader-calls-first.txt`), `tasks.txt` (`TS CR`
   and `TS X` of `tasksw-A/debug.log`), and `console.txt`: the 25 console writes of loader-A,

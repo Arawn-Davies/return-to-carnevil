@@ -3,8 +3,10 @@
 Milestone M2 (19 and 20 November 2026) built a native runtime under the recompiled game. The
 program `carnevil` loads `GAME.EXE` from the user's own disk image, runs it with no picture,
 no sound and no input for a chosen span of virtual time, and in the 150 s checked against
-MAME it reaches attract mode and stays there, with its console output, its file opens, its
-task activity and its first loader calls matching MAME's. This page says what now works, how
+MAME it reaches attract mode, with its console output, its file opens, its task activity and
+its first loader calls matching MAME's. It stays in attract mode, with no stop, for the 1,800
+s of virtual time measured after the whole-branch review (the limit ends that run; what
+comes later is untried). This page says what now works, how
 strongly each claim is established, what was decided during the work and what each decision
 costs if it is wrong, and what is still unknown. How the runtime is put together is in
 [runtime](runtime.md); the plan it reports against is
@@ -58,6 +60,20 @@ attract loop with its movie streaming from the disk. At 150 s five tasks are ali
 `loadfram`, `utime`, `volume`, `ccproc` and `attract` (function 0x800CB084) (run); MAME's task
 events, which the port's equal, leave the same five (MAME, `tasks.txt`; inferred). The
 game's tasks run on host threads, one at a time.
+
+How long it runs (the whole-branch review's finding I2): until that review a run without a
+limit stopped at 164.27 s of virtual time, on SOUNDOUT 0x00BB, a sound command MAME's 150 s
+capture never showed, and nothing said so. A 600 s MAME capture (`dcs-trace-600.txt`) showed
+the sound exchange after 150 s: 0x55AE and four commands of 0x00B9's shape (0x00BB, 0x00B7,
+0x0059, 0x00B9), repeating every 229.1 s, all sent while an unread word waits, so that no
+reply to them can be seen; the responder takes them on that condition only (ruling 39).
+With that, a run of `--seconds 1800` (the cap of the measurement) exits 0 with no stop, in
+attract mode at its end with the same five tasks, 97,376 VBLANK interrupts and 1,231,074
+SOUNDOUT words (143 more than the 150 s run's), ending only at the limit (run, Mac, 2:00 of
+wall time; `test_runs_to_the_documented_horizon`). The measured horizon is therefore at least
+1,800 s, and nothing is known to end attract mode; the port's 1,800 s cover more of the
+game's attract cycle than MAME's 600 s did, since the port's pace is not the board's ("The
+clock"), and anything new in them would have stopped the run.
 
 What "runs" does not mean: nothing is drawn beyond what Glide's start-up checks read back,
 nothing is played, no input is taken, and the program's pace is neither the board's nor real
@@ -403,6 +419,10 @@ concerns M1, not this milestone.
     says which; an inexact crash-audit pc is accepted in M2 since the trap ends the program
     either way. Cost: the game's crash record names a stale pc. Left for the final review to
     triage whether the emitter should always store the pc before an FP divide (Open items).
+    **Superseded 2026-11-20** by ruling 36 (the whole-branch review's finding I3): the cost
+    was understated, since the generated code never stored the pc at all and every interrupt
+    frame recorded the game's entry address; the emitter now stores the pc before every FP
+    divide and at every check point that ticks.
 13. **Task 4 may edit `call.c`, `interp.c`, `recomp.h` and the stubs** minimally to route a
     call or jump outside RAM to a new entry, `rt_bad_target`, because the plan requires a
     jump to the reset vector to stop and M1 had left that to M2. Cost: none recorded.
@@ -450,12 +470,16 @@ Carried into the Task 7 dispatch (ledger, the Task 7 dispatch line; no "Ruling" 
   as the plan's disk decision said. Why: MAME measured the hooks' context (`disk-hooks.txt`,
   `loader-services.md` open question 5): the movie callback runs 3,122 times with a0 = 0, and
   each of the 64 waits is followed by one wake, which changes only the sleeping task's record
-  +0xC; so a synchronous call is harmless provided the slot never calls wait, which in the
-  loader's transfer path (section 4) would put the caller to sleep through the game's
-  scheduler from inside a loader call. Cost if wrong: a hook that depends on running at
-  interrupt level or after the slot has returned would see other state, and the movie
-  streamer or the sound loads would take another path, which the boot comparisons would
-  show.
+  +0xC (MAME, `disk-hooks.txt`, the `waked` lines); so a synchronous call is harmless provided
+  the slot never calls wait, which in the loader's transfer path (read, `loader-services.md`
+  section 4) would put the caller to sleep through the game's scheduler from inside a loader
+  call (inferred). Cost if wrong: a hook that depends on running at interrupt level or after
+  the slot has returned would see other state, and the movie streamer or the sound loads
+  would take another path, which the boot comparisons would show. The whole-branch review
+  found the cost understated: the hooks ran with EXL clear, so an interrupt could be delivered
+  inside them, and without the FPRs and FCSR restored, both unlike the board's interrupt-level
+  path (MAME, `disk-hooks.txt`: Status 0x30015C03, EXL set, in every callback and wake). Both
+  are fixed by ruling 37; what remains different is in its cost.
 - C2. **Measured device values are quoted into the documents, marked measured, before they
   become constants** (the gun's no-input values and the register at 0x17F00000, into
   `hardware-usage.md`, "Measured values the runtime answers with"). Why: the same rule as
@@ -580,6 +604,54 @@ Carried into the Task 7 dispatch (ledger, the Task 7 dispatch line; no "Ruling" 
 35. **The trace stays small**: loader-call lines are limited (the first 2,000), with totals at
     the end, so a 150 s trace is about 1.8 MB instead of 556 MB; `--frames` gets a test. Cost:
     loader calls after the first 2,000 are visible only as counts.
+
+### After the whole-branch review (2026-11-20)
+
+The controller's decisions on the review's findings, taken as rulings:
+
+36. **The generated code stores the guest pc on the slow path of every check point and before
+    every FP divide** (finding I3; supersedes ruling 12). `RT_CHECK(ram, c, at)` stores `at`,
+    the address execution goes on at (the function's address at an entry check, the target
+    at a backward-transfer check), just before `rt_tick`; the interpreter passes the same
+    addresses, so an interrupt frame's resume pc and EPC are an address the game really goes
+    on at, the same in both modes. One deviation from the decision as written: it said to
+    emit what the interpreter already had in `c->pc` at each check, but that was the
+    instruction it ran last (at an entry, the caller's delay slot, which the emitted callee
+    cannot know; at a back edge, the branch's delay slot, which as an EPC would re-run the
+    slot and fall through), so the interpreter was changed to pass the resume address too.
+    Why: the stale 0x800C4000 was a value nobody measured written into guest memory, and the
+    two modes wrote different frames. Cost if wrong: the generated code changes at every check
+    site (3,161) and before 320 divides; the 150 s trace, overlay and NVRAM are byte for byte
+    unchanged (run), only the RAM hash differs, so nothing the game did in attract mode read
+    the frame's pc.
+37. **The disk hooks run at the exception level, with the dispatcher's registers restored**
+    (finding M9 and ruling C1). `exc_hook_call` sets EXL for the hook's duration and puts back
+    what the board's dispatcher restores (every GPR but k0, HI, LO, Status, the FPRs when CU1
+    is set, FCSR) through the dispatcher's own restore. It writes no frame and keeps the
+    caller's stack, where the board runs the hooks on the exception stack (sp 0x800C1358 in
+    every call measured, `disk-hooks.txt`). Why: the board calls them from its IDE interrupt
+    (MAME, Status 0x30015C03 in all 3,186 calls). Cost if wrong: none known; the 150 s boot is
+    byte for byte the same before and after (run).
+38. **A host I/O error on the overlay or the NVRAM stops the program** (finding M2): a failed
+    or short read, write or sync of the raw image or the overlay, and a failed NVRAM save,
+    stop with a message naming the file, the sector and the system's reason, instead of
+    reaching the game as the loader's -1. Why: it is not the game's disk error, and the game
+    carried on silently with failed writes before (test, RED of `test_host_write_error_stops`:
+    exit 0). Cost if wrong: a full disk ends the run with a message rather than letting the
+    game see a failed write.
+39. **The run's horizon is extended by evidence, then stated** (finding I2). The controller's
+    decision: capture the sound exchange for 600 s in MAME, model what follows by the
+    responder's rules, leave a stop where a reply cannot be given by a rule, then measure how
+    far the port runs and write it down. The new commands 0x00BB, 0x00B7 and 0x0059 (and
+    0x00B9 sent again) have no reply the game ever reads; they are taken, with their one
+    measured argument pattern, only while an unread word already waits, because then every
+    bit the game reads is the same whether the board replied or not, and an acknowledgement,
+    the one thing that would show the difference, stops. No reply value is invented. This
+    is a judgement within the decision (the reply cannot be given, but none is needed), and
+    the alternative was to leave 0x00BB a stop and the horizon at 164 s. Cost if wrong: the
+    horizon may still be finite, past 1,800 s, or in a run that differs from attract mode
+    with a blank NVRAM; and a play session that acknowledges a word after these commands
+    stops instead of going on.
 
 ### Where the plan was wrong (plan notes)
 

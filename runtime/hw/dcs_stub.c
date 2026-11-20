@@ -81,7 +81,8 @@ enum action {
     A_BANK_BLOCK, /* header start high, start low, end high, end low: the data, their sum */
     A_BOOTED,     /* 0x000C, and the program runs */
     A_VERSION,    /* 0x0223 */
-    A_UNREAD,     /* a reply whose value was never measured */
+    A_UNREAD,     /* a reply whose value was never measured; once a word waits, as A_UNSEEN */
+    A_UNSEEN,     /* whether it replies cannot be seen: taken only while a word waits */
 };
 
 struct command {
@@ -112,7 +113,13 @@ static const struct command COMMANDS[] = {
     {0x55B2, IN(B_PROGRAM), 1, A_NONE, 1, {0xBB44}},               /* 2: steps 11, 13 */
     {0x55AE, IN(B_PROGRAM), 1, A_NONE, 1, {0x0100}},               /* 2: steps 13, 15 */
     {0x55D7, IN(B_PROGRAM), 3, A_NONE, 1, {0x0000, 0xFF00, 0x0000}}, /* 1: step 14 */
-    {0x00B9, IN(B_PROGRAM), 2, A_UNREAD, 1, {0xFF7F, 0x8000}},     /* 1: step 15 */
+    {0x00B9, IN(B_PROGRAM), 2, A_UNREAD, 1, {0xFF7F, 0x8000}},     /* 1: step 15 (3 in 600 s) */
+    /* The 600 s capture (mame/m2-facts/dcs-trace-600.txt; dcs-handshake.md, "After 150 s"):
+     * three more commands of 0x00B9's shape and arguments, each sent while the word the first
+     * 0x00B9 raised still waits unread, so nothing the game reads shows whether they reply */
+    {0x00BB, IN(B_PROGRAM), 2, A_UNSEEN, 1, {0xFF7F, 0x8000}},     /* 2 in 600 s */
+    {0x00B7, IN(B_PROGRAM), 2, A_UNSEEN, 1, {0xFF7F, 0x8000}},     /* 2 in 600 s */
+    {0x0059, IN(B_PROGRAM), 2, A_UNSEEN, 1, {0xFF7F, 0x8000}},     /* 2 in 600 s */
 };
 #define N_COMMANDS (sizeof COMMANDS / sizeof COMMANDS[0])
 
@@ -138,6 +145,7 @@ static struct {
     uint64_t data_left; /* a guest-given length: only ever counted down */
     uint16_t sum;
     uint32_t fifo;      /* sound FIFO words written, never drained (see dcs_fifo_write) */
+    uint16_t unseen;    /* the A_UNSEEN command after which the queue's depth is not known */
     uint64_t data_words;
     uint32_t raises;
 } d;
@@ -291,8 +299,23 @@ static void command_done(cpu_t *c)
         reply(c, REPLY_VERSION, DCS_VERSION_REPLY_NS);
         break;
     case A_UNREAD: /* bit 0x40 came up after 0x00B9's last word; its value was never read and
-                    * its time is unknown (somewhere in 22.6 to 132.5 s): at once */
-        reply(c, WORD_UNMEASURED, 0);
+                    * its time is unknown (somewhere in 22.6 to 132.5 s): at once. Its later
+                    * sends (251.7 and 480.9 s in the 600 s capture) find that word still
+                    * waiting, so they are A_UNSEEN */
+        if (waiting(vclock_now(c)))
+            d.unseen = k->word;
+        else
+            reply(c, WORD_UNMEASURED, 0);
+        break;
+    case A_UNSEEN: /* the board may or may not queue a reply: while a word already waits, every
+                    * status bit the game reads is the same either way (0x40 is set by the
+                    * waiting word, 0x80 is the board's readiness); only the queue's depth is
+                    * unknown, and the acknowledgement that would show it stops (dcs_ioctl) */
+        if (!waiting(vclock_now(c)))
+            ld_stop("sound board: 0x%04X with no word waiting: whether it replies, and what, "
+                    "was never seen (in MAME's 600 s it always came while 0x00B9's word "
+                    "waited)", (unsigned)k->word);
+        d.unseen = k->word;
         break;
     default:
         break;
@@ -361,6 +384,7 @@ static void soundctl(cpu_t *c, uint32_t v)
     if ((old & 1u) && !(v & 1u)) {
         d.board = B_HELD;
         d.cmd = NULL;
+        d.unseen = 0; /* the reset empties the queue, whatever it held */
         drop_queue(now);
     } else if (!(old & 1u) && (v & 1u)) {
         d.board = B_BOOT;
@@ -422,6 +446,10 @@ int dcs_ioctl(cpu_t *c, uint32_t cmd, uint32_t arg)
         if ((arg & 0xFFFFu) != 0)
             ld_stop("sound board: SOUNDIN write 0x%04X (the game writes 0 only)",
                     (unsigned)(arg & 0xFFFFu));
+        if (d.unseen)
+            ld_stop("sound board: SOUNDIN acknowledged after 0x%04X, whose reply (if any) was "
+                    "never seen: whether another word then waits is not known",
+                    (unsigned)d.unseen);
         if (waiting(now)) {
             d.latch = d.queue[0].word; /* SOUNDIN keeps it */
             for (int i = 1; i < d.queued; i++)

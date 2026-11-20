@@ -448,7 +448,11 @@ the boot loader's 0x001A blocks and 0x002A, the program's 0x55D0 and 0x55D1 bloc
 the commands without a reply). A block's reply is the 16-bit sum of its data words (a rule
 inferred from the trace and holding for all 30 blocks, measured); 0x000A, 0x000C and 0x0223
 are recorded values with no known rule. Commands with fixed argument words accept only the
-measured words. Any other command word stops.
+measured words. Any other command word stops. Since MAME's 600 s capture (the whole-branch
+review's finding I2; `dcs-handshake.md`, "After 150 s") it also takes 0x00BB, 0x00B7 and 0x0059
+and a repeated 0x00B9, with 0x00B9's arguments, only while an unread word already waits: then
+nothing the game reads depends on whether they reply, and the queue's depth becomes unknown,
+so an acknowledgement after them stops.
 
 Its timing is not the board's. A reply appears after the shortest delay MAME showed for its
 kind, bit 0x80 (the board can take a word) is always set, and bit 0x8000 is set throughout the
@@ -458,7 +462,9 @@ and INTSTAT bit 0x08; the FIFO is never drained (inferred from MAME's one IP3 in
 150 s). The tests are in `tests/test_dcs.py`: `test_no_reply_without_command`,
 `test_unknown_command_stops`, `test_block_rules`, `test_reply_timing`, `test_fifo_and_ip3`,
 `test_pinned_arguments`, `test_soundctl_measured_values`, `test_intctl_enables_limited`, and
-`test_replays_mame_exchange` (the replay of MAME's 2.9 million recorded events).
+`test_replays_mame_exchange` (the replay of MAME's 2.9 million recorded events),
+`test_commands_whose_reply_cannot_be_seen` and `test_replays_mame_exchange_600` (the 600 s
+capture by the same standard).
 
 ## The disk and the user's files
 
