@@ -195,11 +195,15 @@ def run(program, args, timeout):
     return subprocess.run([program, *args], capture_output=True, text=True, timeout=timeout)
 
 
-def interrupted(program, args, sig, after, timeout=120):
-    """The program run with args and sent sig after `after` seconds of wall time; a
+def interrupted(program, args, sig, after, timeout=120, ready=None):
+    """The program run with args and sent sig `after` seconds of wall time after ready()
+    first returns true (polled every 0.1 s, at most `timeout` seconds; None: at once); a
     CompletedProcess with stdout and stderr as bytes."""
     proc = subprocess.Popen([program, *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
+        deadline = time.monotonic() + timeout
+        while ready and not ready() and time.monotonic() < deadline and proc.poll() is None:
+            time.sleep(0.1)
         time.sleep(after)
         proc.send_signal(sig)
         out, err = proc.communicate(timeout=timeout)
@@ -748,9 +752,11 @@ class BootTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
 
     def test_interrupted_boot(self):
-        """A run without a limit sent SIGTERM after 10 s of wall time (final review I1; 10 s
-        so that a slow host is past the 25 console lines too): exit 130; its trace up to the "end interrupted SIGTERM" line is the shared 150 s run's
-        trace up to there, and the totals follow; its NVRAM is what the game wrote up to the
+        """A run without a limit sent SIGTERM 2 s of wall time after its overlay holds the
+        first boot's 1,426 records (final review I1; a host where the records' fsyncs are
+        slow, the Linux container's ZFS, needs that long to get past the 25 console lines): exit 130; its
+        trace up to the "end interrupted SIGTERM" line is the shared 150 s run's trace up to
+        there, and the totals follow; its NVRAM is what the game wrote up to the
         signal: the NVRAM of a run ended by --frames at the VBLANK before the signal or the
         one after (the game rewrites a running count in the CMOS about once a second, so the
         state between two VBLANKs is one of the two); a second run on the same files starts
@@ -758,8 +764,13 @@ class BootTest(unittest.TestCase):
         long_trace = os.path.join(long_run()[2], "trace.txt")
         folder = os.path.join(_game["tmp"], "sigterm")
         os.makedirs(folder)
+        overlay = os.path.join(folder, "carnevil.overlay")
+        full = os.path.getsize(os.path.join(long_run()[2], "carnevil.overlay"))
+
+        def records_written():
+            return os.path.exists(overlay) and os.path.getsize(overlay) >= full
         res = interrupted(game_program(), files_in(folder, work_path("carnevil.raw")),
-                          signal.SIGTERM, 10.0)
+                          signal.SIGTERM, 2.0, timeout=600, ready=records_written)
         self.assertEqual(res.returncode, 130, res.stderr[-2000:])
         with open(os.path.join(folder, "trace.txt"), encoding="latin-1") as f:
             lines = f.read().splitlines()
