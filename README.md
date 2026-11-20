@@ -1,4 +1,4 @@
-# reincarnevilation
+# Return to CarnEvil
 
 A native port of CarnEvil (Midway, 1998, Seattle arcade hardware) by static recompilation:
 the game's own MIPS code is translated to C ahead of time and linked against a runtime that
