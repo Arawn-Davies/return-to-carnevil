@@ -309,9 +309,18 @@ addresses, so a bad pointer from the game goes to the bus and stops there.
   partition 1, the only one the game selects), 0x128 hands out the partition table at the
   loader's own address 0x800B7160, 0x158 reads raw sectors from the image. Transfers complete
   inside the call; the completion callback (slot 0x1D8) or the wake hook (slot 0x220) is
-  called through `rt_call` before the slot returns, which MAME's measurement showed harmless
-  provided the slot never calls the game's wait routine (measured and inferred,
-  `loader-services.md`, open question 5), and it never does.
+  called before the slot returns, which MAME's measurement showed harmless provided the slot
+  never calls the game's wait routine (measured and inferred, `loader-services.md`, open
+  question 5), and it never does. Since the whole-branch review of M2 (finding M9) the hook
+  is called as the board calls it, at interrupt level (`exc_hook_call`, `irq.c`): Status has
+  EXL set for its duration (measured: `disk-hooks.txt`, Status 0x30015C03 in all 3,122
+  callback and 64 wake calls of facts-A2), so an interrupt that falls due is delivered at the
+  first check point after the slot returns, and the registers the dispatcher saves (every GPR
+  but k0, HI, LO, Status, the FPRs, FCSR) are put back afterwards by the dispatcher's own
+  restore (`regs_give`). Two differences from the board remain: the hook runs on the caller's
+  stack (the board's sp in every call measured is 0x800C1358, on the exception stack), and no
+  frame is written. The 150 s boot trace, overlay, NVRAM and RAM hash are byte for byte the
+  same before and after the change (measured on the Mac, 2026-11-20).
 - **Handler registrations** (0x1E0, 0x1E8, 0x1F0, 0x1F8, 0x200): fill the tables of the
   previous section. 0x1E8 also sets the FCSR enable bit, as the loader does (read); 0x200
   returns line × 4 (read and measured).
@@ -336,7 +345,8 @@ handler (`test_slots_from_handler`). In `tests/test_hw.py`: `pci:` and DMA (`tes
 `test_dma0_stops`, `test_dma0_delay_model`, `test_dma0_delay_fits_mame`); the PCI slots
 (`test_pci_probe`, `test_pci_probe_other`, `test_pci_config`, `test_pci_calls_like_mame`);
 the disk slots (`test_partition_table`, `test_raw_read_callback`, `test_raw_read_wake`,
-`test_disk_hooks_store`, `test_disk_slots_stop`, `test_movie_frame_read`).
+`test_disk_hooks_store`, `test_disk_slots_stop`, `test_movie_frame_read`,
+`test_hook_keeps_fp_registers_and_fcsr`, `test_vblank_during_a_hook_is_delivered_after_the_slot`).
 
 ## The bus and the devices
 

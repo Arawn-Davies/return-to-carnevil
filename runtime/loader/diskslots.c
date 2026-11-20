@@ -6,12 +6,14 @@
  * "The movie player", "Stand-in recommendation for the disk"), section 8, and open questions
  * 5 and 6 (measured). Transfers complete synchronously from the image (runtime/disk/disk.h);
  * the completion callback or the wake hook, which on the board run at interrupt level from
- * the IDE completion path, are called through rt_call before the slot returns, with the
- * argument in a0 and ra = LD_DISK_CALLBACK_RA, on the caller's stack (an interrupt taken
- * inside them uses the exception stack, so they must not be on it), and with every register
- * of the slot's caller restored afterwards. Open question 5 measured that this is harmless
- * provided the slot never calls wait(), which it never does; 0x1D8 and 0x220 then never
- * wait either. The selected partition (0x118) is kept but changes nothing yet: the file
+ * the IDE completion path, are called before the slot returns, with the argument in a0 and
+ * ra = LD_DISK_CALLBACK_RA, on the caller's stack, at the exception level (Status EXL set, so
+ * nothing is delivered inside them; measured: disk-hooks.txt, Status 0x30015C03 in every
+ * callback and wake call), and with the registers the dispatcher saves (every GPR but k0, HI,
+ * LO, Status, the FPRs, FCSR) put back afterwards by the dispatcher's own restore
+ * (exc_hook_call, machine.h; final review M9). Open question 5 measured that completing early
+ * is harmless provided the slot never calls wait(), which it never does; 0x1D8 and 0x220
+ * then never wait either. The selected partition (0x118) is kept but changes nothing yet: the file
  * system reads partition 1, the only one the game selects.
  *
  * The partition table copy lives at LD_PART_TABLE, 0x800B7160: the address the board's
@@ -21,8 +23,6 @@
  * frame at 0x80014328, the exception stack below 0x800C1400); keeping the board's address
  * keeps the pointer the game stores equal to MAME's.
  */
-#include <string.h>
-
 #include "../disk/disk.h"
 #include "loader.h"
 #include "machine.h"
@@ -57,17 +57,11 @@ static const uint8_t *header(uint32_t *count)
     return h;
 }
 
-/* fn(arg) as the IDE completion path calls it, keeping every register of the slot's caller
- * (the loader's dispatcher restores them after an interrupt). */
+/* fn(arg) as the IDE completion path calls it from its interrupt: exc_hook_call (machine.h),
+ * at the exception level and with the dispatcher's registers put back by its restore. */
 static void call_hook(cpu_t *c, uint32_t fn, uint32_t arg)
 {
-    uint32_t r[32], hi = c->hi, lo = c->lo;
-    memcpy(r, c->r, sizeof r);
-    c->r[4] = arg;
-    c->r[31] = LD_DISK_CALLBACK_RA;
-    rt_call(ld.ram, c, fn);
-    memcpy(c->r, r, sizeof r);
-    c->hi = hi, c->lo = lo;
+    exc_hook_call(ld.ram, c, fn, arg, LD_DISK_CALLBACK_RA);
 }
 
 /* 0x118 select partition(n): section 8; n above the table's count word returns 2 */

@@ -151,50 +151,83 @@ static void frame_sd(uint8_t *ram, uint32_t off, uint32_t v)
     frame_w32(ram, off + 4, v & 0x80000000u ? 0xFFFFFFFFu : 0);
 }
 
+/* The registers the dispatcher saves and restores, with Status as the save routine sees it
+ * (EXL already set). The frame holds them in guest RAM (frame_save, frame_restore); a disk
+ * hook's call keeps them in host memory (exc_hook_call), through the same two functions. */
+struct exc_regs {
+    uint32_t r[32], hi, lo, status, fpr[32], fcsr;
+};
+
+/* What the save routine 0x80004808 reads: every GPR (k0's value is not used), HI, LO,
+ * Status, the FPRs when Status has CU1, FCSR. */
+static void regs_take(const cpu_t *c, struct exc_regs *s)
+{
+    memcpy(s->r, c->r, sizeof s->r);
+    s->hi = c->hi;
+    s->lo = c->lo;
+    s->status = machine.status;
+    memcpy(s->fpr, c->fpr, sizeof s->fpr);
+    s->fcsr = rt_get_fcsr(c);
+}
+
+/* What the resume routine 0x80004BE0 and its eret put back: HI, LO, Status (eret then clears
+ * EXL), the FPRs if the restored Status has CU1, FCSR (which re-applies the host FP
+ * environment), every GPR but k0. ERL is not modelled: eret here always clears EXL. */
+static void regs_give(cpu_t *c, const struct exc_regs *s)
+{
+    c->hi = s->hi;
+    c->lo = s->lo;
+    machine.status = s->status & ~ST_EXL;
+    if (s->status & ST_CU1)
+        memcpy(c->fpr, s->fpr, sizeof c->fpr);
+    rt_set_fcsr(c, s->fcsr);
+    for (uint32_t n = 1; n < 32; n++)
+        if (n != 26)
+            c->r[n] = s->r[n];
+    c->r[0] = 0;
+}
+
 /* The save routine 0x80004808, with Status already carrying EXL. CP0 registers the runtime
  * does not model (all but Status, Cause and EPC) and FIR are written as 0. */
 static void frame_save(uint8_t *ram, const cpu_t *c, uint32_t cause, uint32_t epc)
 {
+    struct exc_regs s;
+    regs_take(c, &s);
     for (uint32_t n = 1; n < 32; n++)
         if (n != 26) /* k0 is not saved: its slot keeps stale data */
-            frame_sd(ram, 8 * n, c->r[n]);
-    frame_sd(ram, 0x100, c->lo);
-    frame_sd(ram, 0x108, c->hi);
+            frame_sd(ram, 8 * n, s.r[n]);
+    frame_sd(ram, 0x100, s.lo);
+    frame_sd(ram, 0x108, s.hi);
     frame_w32(ram, 0x110, epc); /* the resume pc, a 32-bit sw */
     for (uint32_t r = 0; r < 32; r++)
-        frame_sd(ram, 0x118 + 8 * r, r == 12 ? machine.status : r == 13 ? cause : r == 14 ? epc : 0);
-    if (machine.status & ST_CU1) {
+        frame_sd(ram, 0x118 + 8 * r, r == 12 ? s.status : r == 13 ? cause : r == 14 ? epc : 0);
+    if (s.status & ST_CU1) {
         /* sdc1 f(2k) with FR clear writes the pair f(2k), f(2k+1); +0x220 + 16k is not
          * written */
         for (uint32_t k = 0; k < 16; k++) {
-            frame_w32(ram, 0x218 + 16 * k, c->fpr[2 * k]);
-            frame_w32(ram, 0x21C + 16 * k, c->fpr[2 * k + 1]);
+            frame_w32(ram, 0x218 + 16 * k, s.fpr[2 * k]);
+            frame_w32(ram, 0x21C + 16 * k, s.fpr[2 * k + 1]);
         }
     }
     frame_w32(ram, 0x318, 0); /* FIR (cfc1 $0): not modelled */
-    frame_w32(ram, 0x31C, rt_get_fcsr(c));
+    frame_w32(ram, 0x31C, s.fcsr);
 }
 
-/* The resume routine 0x80004BE0 and its eret: HI, LO, Status (eret then clears EXL), the
- * FPRs if the restored Status has CU1, FCSR (which re-applies the host FP environment), every
- * GPR but k0. Returns the resume pc. ERL is not modelled: eret here always clears EXL. */
+/* The registers from the frame, put back as the resume routine does; returns the resume pc. */
 static uint32_t frame_restore(uint8_t *ram, cpu_t *c)
 {
-    uint32_t status = frame_r32(ram, 0x178);
-    c->hi = frame_r32(ram, 0x108);
-    c->lo = frame_r32(ram, 0x100);
-    machine.status = status & ~ST_EXL;
-    if (status & ST_CU1) {
-        for (uint32_t k = 0; k < 16; k++) {
-            c->fpr[2 * k] = frame_r32(ram, 0x218 + 16 * k);
-            c->fpr[2 * k + 1] = frame_r32(ram, 0x21C + 16 * k);
-        }
+    struct exc_regs s;
+    for (uint32_t n = 0; n < 32; n++)
+        s.r[n] = frame_r32(ram, 8 * n);
+    s.hi = frame_r32(ram, 0x108);
+    s.lo = frame_r32(ram, 0x100);
+    s.status = frame_r32(ram, 0x178);
+    for (uint32_t k = 0; k < 16; k++) {
+        s.fpr[2 * k] = frame_r32(ram, 0x218 + 16 * k);
+        s.fpr[2 * k + 1] = frame_r32(ram, 0x21C + 16 * k);
     }
-    rt_set_fcsr(c, frame_r32(ram, 0x31C));
-    for (uint32_t n = 1; n < 32; n++)
-        if (n != 26)
-            c->r[n] = frame_r32(ram, 8 * n);
-    c->r[0] = 0;
+    s.fcsr = frame_r32(ram, 0x31C);
+    regs_give(c, &s);
     return frame_r32(ram, 0x110);
 }
 
@@ -206,6 +239,28 @@ uint32_t exc_call(uint8_t *ram, cpu_t *c, uint32_t fn)
     c->r[31] = EXC_RETURN_RA;
     rt_call(ram, c, fn);
     return c->r[2];
+}
+
+void exc_hook_call(uint8_t *ram, cpu_t *c, uint32_t fn, uint32_t arg, uint32_t ra)
+{
+    struct exc_regs s;
+    if (machine.status & ST_EXL)
+        rt_stop(RT_STOP_STATUS, "disk hook 0x%08X called with Status EXL already set: on the "
+                "board it runs from the IDE completion interrupt, which is not taken inside "
+                "a handler, and what it does then is not modelled", (unsigned)fn);
+    machine.ram = ram;
+    regs_take(c, &s);
+    machine.status |= ST_EXL;
+    machine.intctl &= ~INTCTL_AFTER_EXCEPTION;
+    vclock_reload(c); /* a fresh slice, as for a handler (exc_raise) */
+    c->r[4] = arg;
+    c->r[31] = ra;
+    rt_call(ram, c, fn);
+    regs_give(c, &s);
+    machine.intctl |= INTCTL_AFTER_EXCEPTION;
+    /* EXL is clear again: a line that became pending in the hook (a VBLANK that came due) is
+     * delivered at the next check point, after the slot has returned */
+    vclock_reload(c);
 }
 
 /* The loader's default work 0x80005368 for IP bit n, after its line handler returned

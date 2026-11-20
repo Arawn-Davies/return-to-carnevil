@@ -13,6 +13,7 @@ import collections
 import os
 import unittest
 
+from carnevil_tools import vectors
 from tests import test_loader
 from tests import voodoo_timing as vt
 from tests.gamedata import requires_file, work_path
@@ -31,6 +32,7 @@ STATUS_RETRACE = 0x0FFFF07F    # ... with the vertical-retrace bit
 PART_TABLE = 0x800B7160
 CALLBACK_RA = 0x800124D4
 COOKIE = 0x803F75E0
+HOOK = 0x80320000  # a disk hook's guest code, interpreted
 # the power-on values of fbiInit0 to fbiInit4 (registers 0x210, 0x214, 0x218, 0x21C, 0x200)
 FBIINIT_POWER_ON = {0x210: 0x410, 0x214: 0x00201102, 0x218: 0x80000040, 0x21C: 0x001E4000,
                     0x200: 0x1}
@@ -490,6 +492,58 @@ class DiskTest(HwTestCase):
         self.assertEqual(out.v0s(), [0, 0, 1, 1, 0, 0, 0, 1])
         self.assertEqual([int(p[0], 16) for p in out.all("probe")], [COOKIE, 0])
         self.assertEqual(out.peeks(), [image[:SECTOR]])
+
+    def hook_code(self, loops):
+        """Guest code for a disk hook at HOOK: a probe, `loops` check points (a backward
+        branch each), every FP register half set to 0x40490FDB and FCSR to 3, a probe, and
+        back (ra kept in s7)."""
+        A, T0, T1, S7, RA = vectors.assemble, 8, 9, 23, 31
+        words = [A("or", rd=S7, rs=RA, rt=0), A("jal", target=PROBE), 0,
+                 A("lui", rt=T0, imm=loops >> 16), A("ori", rt=T0, rs=T0, imm=loops & 0xFFFF),
+                 A("addiu", rt=T0, rs=T0, imm=-1), A("bne", rs=T0, rt=0, imm=-2), 0,
+                 A("lui", rt=T1, imm=0x4049), A("ori", rt=T1, rs=T1, imm=0x0FDB)]
+        words += [A("mtc1", rt=T1, fs=k) for k in range(32)]
+        words += [A("ori", rt=T1, rs=0, imm=3), A("ctc1", rt=T1, fs=31),
+                  A("jal", target=PROBE), 0, A("or", rd=RA, rs=S7, rt=0), A("jr", rs=RA), 0]
+        return mem(HOOK, *words)
+
+    def test_hook_keeps_fp_registers_and_fcsr(self):
+        """The completion callback and the wake hook run as the board's dispatcher calls them
+        (final review M9): a hook that changes every FP register and FCSR leaves the slot's
+        caller with its own values, as the dispatcher's restore gives it."""
+        img, _image = self.disk()
+        fpr = [0x3F000000 + 0x10101 * k for k in range(32)]
+        state = [f"fpr {k:X} {v:08X}" for k, v in enumerate(fpr)] + ["fcsr 800001"]
+        for name, setup in (("callback", [call(0x1D8, HOOK)]),
+                            ("wake", mem(PROC, COOKIE) + [call(0x220, PROC, 0x80310000, HOOK)])):
+            with self.subTest(hook=name):
+                out, _ = self.drive(img + self.hook_code(3) + setup + state
+                                    + [f"r 1D {SP_TOP:X}", call(0x158, 0, BUF, 1), "fregs"])
+                self.assertEqual(len(out.all("probe")), 2)  # the hook ran
+                got = [int(x, 16) for x in out.all("fregs")[0]]
+                self.assertEqual(got, fpr + [0x00800001])
+
+    def test_vblank_during_a_hook_is_delivered_after_the_slot(self):
+        """A VBLANK that falls due while a hook runs (final review M9) stays pending, because
+        the hook runs at the exception level as on the board (Status EXL set:
+        disk-hooks.txt measures Status 0x30015C03 in every callback and wake call), and is
+        delivered at the first check point after slot 0x158 returns, never inside the
+        hook."""
+        img, _image = self.disk()
+        # the VBLANK handler: a probe, then v0 = 1, so the default work acknowledges it
+        A, V0, S7, RA = vectors.assemble, 2, 23, 31
+        vbl = HOOK + 0x400
+        handler = mem(vbl, A("or", rd=S7, rs=RA, rt=0), A("jal", target=PROBE), 0,
+                      A("or", rd=RA, rs=S7, rt=0), A("jr", rs=RA), A("ori", rt=V0, rs=0, imm=1))
+        out, _ = self.drive(img + self.hook_code(3000) + handler + [
+            call(0x200, 0, vbl), call(0x1D8, HOOK), f"r 1D {SP_TOP:X}", "vblankat 100000",
+            call(0x158, 0, BUF, 1), "advance 1000000"])
+        seq = [(line[0], int(line[3], 16) if line[0] == "probe" else None)
+               for line in out.lines if line[0] in ("probe", "ret")]
+        self.assertEqual(seq, [("ret", None), ("ret", None), ("probe", HOOK + 12),
+                               ("probe", HOOK + len(self.hook_code(0)) * 4 - 12),
+                               ("ret", None), ("probe", vbl + 12)])
+        self.assertGreaterEqual(int(out.all("probe")[-1][3]), 300000)  # after the hook's loop
 
     def test_disk_hooks_store(self):
         """Slots 0x1D8 and 0x220 store their arguments, never wait, and leave v0 as it was."""

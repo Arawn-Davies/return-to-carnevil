@@ -18,6 +18,10 @@
  *   dump ADDR N          "dump W0 .. W(N-1)", N RAM words from ADDR
  *   peek ADDR N          "peek HEX", N RAM bytes from ADDR as hexadecimal
  *   regs                 "regs R0 .. R31 HI LO"
+ *   fpr N V, fcsr V      FP register half N; FCSR as ctc1 writes it
+ *   fregs                "fregs F0 .. F31 FCSR" (FCSR as cfc1 reads it)
+ *   vblankat NS          vblank_raise as a clock event at NS (decimal), then vclock_reload: a
+ *                        VBLANK without the card's video timing
  *   advance NS           ticks as if each slice ran out until vclock_now reaches NS, then
  *                        "now NOW"
  *   checks K             K check points that do not reach 0 (slice -= K), then "now NOW"
@@ -100,6 +104,13 @@ static void probe(uint8_t *r, cpu_t *c)
 recomp_fn recomp_lookup(uint32_t addr)
 {
     return addr == PROBE ? probe : NULL;
+}
+
+/* "vblankat": a VBLANK (vblank_raise) as a clock event, without the card's video timing */
+static void on_vblank_event(void *arg)
+{
+    (void)arg;
+    vblank_raise();
 }
 
 /* --- input and output -------------------------------------------------------------------- */
@@ -379,6 +390,21 @@ int main(void)
             for (int i = 0; i < 32; i++)
                 printf(" %08" PRIX32, cpu.r[i]);
             printf(" %08" PRIX32 " %08" PRIX32 "\n", cpu.hi, cpu.lo);
+        } else if (strcmp(key, "fpr") == 0) {
+            uint32_t n = hex();
+            if (n > 31)
+                die("bad input", "fpr: register number above 31");
+            cpu.fpr[n] = hex();
+        } else if (strcmp(key, "fcsr") == 0) {
+            rt_set_fcsr(&cpu, hex());
+        } else if (strcmp(key, "fregs") == 0) {
+            fputs("fregs", stdout);
+            for (int i = 0; i < 32; i++)
+                printf(" %08" PRIX32, cpu.fpr[i]);
+            printf(" %08" PRIX32 "\n", rt_get_fcsr(&cpu));
+        } else if (strcmp(key, "vblankat") == 0) {
+            vclock_at(dec(), on_vblank_event, NULL);
+            vclock_reload(&cpu); /* as a device that schedules an event does */
         } else if (strcmp(key, "advance") == 0) {
             advance(dec());
         } else if (strcmp(key, "checks") == 0) {

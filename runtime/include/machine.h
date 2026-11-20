@@ -111,6 +111,20 @@ void exc_set_break_hook(int which, uint32_t fn);
  * else. An exception while EXL is set stops (the board reboots). */
 uint32_t exc_raise(uint8_t *ram, cpu_t *c, int code, uint32_t epc);
 
+/* exc_hook_call: fn(arg) with ra = ra, as the loader's IDE completion path calls the disk
+ * hooks (the completion callback of slot 0x1D8 and the wake hook of slot 0x220) from its
+ * interrupt (final review M9, ruling C1): at the exception level, so nothing is delivered
+ * inside the hook (measured: disk-hooks.txt, Status 0x30015C03, EXL set, in all 3,186
+ * callback and wake calls of facts-A2), and with the registers the dispatcher saves put back
+ * afterwards by the dispatcher's own restore (every GPR but k0, HI, LO, Status, the FPRs when
+ * CU1 is set, FCSR). Unlike an interrupt it writes no frame (the registers are kept in host
+ * memory: the frame's contents on the board would be another code's, which is not modelled)
+ * and the hook runs on the caller's stack (on the board, on the exception stack, sp
+ * 0x800C1358 in every call measured). INTCTL bit 14 is clear while it runs, as during any
+ * handler. A call with EXL already set stops. A line that becomes pending meanwhile is
+ * delivered at the next check point after the call. */
+void exc_hook_call(uint8_t *ram, cpu_t *c, uint32_t fn, uint32_t arg, uint32_t ra);
+
 /* vblank_raise: the start of the Voodoo's vertical retrace, which is the board's VBLANK
  * source (runtime/hw/voodoo_null.c drives it from the card's video timing): raises IP6 if
  * the board's VBLANK enable is set (loader-services.md section 1, slot 0x200). */
