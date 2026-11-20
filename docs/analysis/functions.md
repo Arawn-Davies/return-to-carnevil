@@ -5,14 +5,22 @@ Produced by `python3 -m carnevil_tools functions GAME.EXE -o config/game.functio
 command prints every number below. It reads the hand-maintained
 `config/game.manual.toml` (the output's name with `.functions.toml` replaced
 by `.manual.toml`): the stub block, three function starts MAME showed, 16 jump
-tables read from the code ("Manual jump tables") and 2 functions left to the
-interpreter ("Jumps out of their function"), each with the evidence for it.
-`config/game.functions.toml` holds the result: `format = 2`, the SHA-256 of the
-EXE it came from, text bounds, the stub block, functions (address, size, name,
-sources), jump tables (the `jr`, the table address, 0 for a manual table, and
-the targets), the interpreted functions and the unreached ranges. Counts and
-addresses only. A game-data test checks that the committed file equals a fresh
-analysis.
+tables read from the code ("Manual jump tables") and 3 host-switch points of
+the game's task switch ("Jumps out of their function"), each with the evidence
+for it. `config/game.functions.toml` holds the result: `format = 3`, the SHA-256
+of the EXE it came from, text bounds, the stub block, functions (address, size,
+name, sources), jump tables (the `jr`, the table address, 0 for a manual table,
+and the targets), the interpreted functions (none since M2), the host-switch
+points and the unreached ranges. Counts and addresses only. A game-data test
+checks that the committed file equals a fresh analysis.
+
+Correction, 2026-11-20: until this date the paragraph above said `format = 2`
+and 2 functions left to the interpreter. M2 Task 2 replaced the two
+`[[interpreted]]` entries (0x80151AC0, 0x80151B50) with three `[[host_switch]]`
+entries (0x80151B48 yield, 0x80151B78 exit, 0x80151E88 resume) and moved the
+file to format 3; nothing else in the file changed (2,093 functions, the same
+sizes, the same 253 unreached ranges). [recompiler](recompiler.md), "The task
+switch: three host-switch points", has the detail.
 
 The numbers below are from the run with the full manual file of M1. The
 16 manual jump tables made 488 bytes of case blocks reached code; the counts
@@ -154,8 +162,10 @@ M1 changed this:
   No function was added, removed or resized; 0x8014BD78 gains the source
   `call` (a case block of the table at 0x80150174 calls it).
 - 91 jump tables instead of 75; no `jr` is left unresolved.
-- `interpreted` lists 0x80151AC0 and 0x80151B50. They stay in the function
-  list and the analysis descends into them as before.
+- `interpreted` listed 0x80151AC0 and 0x80151B50 in M1. They stayed in the
+  function list and the analysis descended into them as before. Since M2 the
+  list is empty and `host_switch` lists 0x80151B48, 0x80151B78 and
+  0x80151E88 instead (correction, 2026-11-20; see the top of this page).
 
 ## Where the algorithm departs from the brief, and why
 
@@ -314,11 +324,21 @@ into it with `jr ra` at 0x80151E88, and 0x80151E90 is where it carries on when
 a context switches back. A manual start at 0x80151E90 does not recompile:
 0x80151BC0 then jumps into the new function (`j 0x80151F9C` at 0x80151CF4) and
 the new function jumps back (`j 0x80151CE4` at 0x80151F94), neither target a
-function start. So 0x80151AC0 and 0x80151B50 are `[[interpreted]]` entries
-in the manual file: the recompiler emits each as a call of `interp_run`, and
-their `j` runs on in the interpreter. Returning into another context with
-`jr ra`, or switching stacks under a C call chain, is a runtime question for
-M2 whichever side runs the code.
+function start. In M1, 0x80151AC0 and 0x80151B50 were therefore
+`[[interpreted]]` entries in the manual file: the recompiler emitted each as a
+call of `interp_run`, and their `j` ran on in the interpreter. Returning into
+another context with `jr ra`, or switching stacks under a C call chain, was
+left to M2.
+
+Since M2 (correction, 2026-11-20) the manual file has no `[[interpreted]]`
+entry. The two `j 0x80151E90` (at 0x80151B48 in the yield and 0x80151B78 in
+the exit) and the scheduler's `jr ra` at 0x80151E88 are `[[host_switch]]`
+entries of kinds `yield`, `exit` and `resume`: the recompiler emits each as
+the delay slot followed by a call of the runtime's `rt_host_switch`, so the
+`j`s no longer leave their functions and all three functions are recompiled.
+The analysis takes the instruction after a resume's delay slot (0x80151E90)
+as reached; it already was, as the target of the two `j`s (read; the
+functions file is unchanged apart from these entries and its format).
 
 What the switch is for (read, M1): it is the game's cooperative task
 scheduler. `main` calls 0x80151BC0 once (0x800C4740). The task list starts

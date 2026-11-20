@@ -5,7 +5,7 @@ Start here.
 ## For people
 
 - [How it works](how-it-works.md): what static recompilation is and how this port is put together.
-- [Getting started](getting-started.md): going from your own CHD to a working folder, the game translated to C and linked, and running the tools and tests.
+- [Getting started](getting-started.md): going from your own CHD to a working folder, the game translated to C, built and run headless, and running the tools and tests.
 - [Tools reference](tools.md): every command in `carnevil_tools`, what it reads and what it writes.
 - [The arcade hardware](hardware.md): what is on the Seattle board and how the port deals with each part.
 - [Roadmap and status](roadmap.md): the milestones, what is done, and what has been learned so far.
@@ -16,6 +16,8 @@ Findings about the game's files and binary, written as the work goes. They hold 
 
 - [M0 report](analysis/M0-report.md): the summary of milestone M0, what it changed in the design, and the decisions it leaves for M1 and M2. Read this first.
 - [M1 report](analysis/M1-report.md): the summary of milestone M1, the recompiler: its numbers, what was checked against MAME and what was not, and the risks and decisions for M2, the game's task switch first.
+- [M2 report](analysis/M2-report.md): the summary of milestone M2, the runtime: what runs, every comparison with MAME and how strong it is, the decisions taken, the corrections to earlier notes, what M3 needs, and the open items.
+- [Runtime](analysis/runtime.md): how the runtime under the generated C is put together (the clock, interrupts, the game's tasks, the loader's stand-ins, the devices) and how to read a trace.
 - [Recompiler](analysis/recompiler.md): what the generated C looks like, the contract it shares with the interpreter and the runtime, the manual entries, and the results that are MAME's rather than the hardware's.
 - [Disk image format](analysis/disk-format.md): the partition table and the file system inside each partition.
 - [EXE format](analysis/exe-format.md): the 8-byte header and the flat image behind it.

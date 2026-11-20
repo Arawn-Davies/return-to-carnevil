@@ -31,7 +31,12 @@ Every fact below carries its basis, as in the [M0 report](M0-report.md):
   clean takes 3.8 s wall (28 s of CPU) on the Mac (Apple clang 21, arm64, 10 cores) and 27.1 s with GCC 14.2 in a
   4-core Debian container, with zero warnings under `-Wall -Werror` on both; an up-to-date
   rerun takes 0.04 s. `game_stub` is 4,806,904 bytes on the Mac (`__TEXT` 4,620,288) and
-  3,570,992 bytes on Linux x86-64 (text 3,445,765) (static, measured now).
+  3,570,992 bytes on Linux x86-64 (text 3,445,765) (static, measured now). Note, 2026-11-20:
+  "measured now" holds for the Mac figures only. The GCC figures (27.1 s, zero warnings,
+  3,570,992 bytes) were measured before the late M1 change that routed FP division through
+  `rc_div_s` and `rc_div_d`, and were not re-measured on the regenerated C; they are likely
+  unchanged, since the helpers are `static inline` around the same `/` (inferred). M2 built the
+  whole image and the runtime with GCC 14.2 in the Linux container again, with zero warnings (M2 report).
 - **Instruction vectors**: 1,369 cases from `carnevil_tools/vectors.py`, 12 random ones for
   each of the 98 mnemonics of the census plus 161 edge cases and 32 flush-to-zero cases (16
   with FCSR.FS = 1, each with an FS = 0 control). 1,352 ran in MAME (`tools/mame/insnvec.lua`,

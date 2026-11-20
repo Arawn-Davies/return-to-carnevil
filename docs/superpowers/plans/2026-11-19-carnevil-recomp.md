@@ -268,6 +268,7 @@ Inserted by the controller after Task 5 found a load-bearing defect in Task 1's 
 - Exit: `make recomp` produces `generated/` on the share and it links with zero unresolved functions.
 
 ### M2: Boots to the attract loop in the log
+- **Done** (complete on branch `m2-runtime`, pending its final review): the results, the comparisons with MAME, every ruling and departure from its plan, and what M3 needs are in [docs/analysis/M2-report.md](../../analysis/M2-report.md).
 - **Planned in detail in [2026-11-19-carnevil-recomp-m2.md](2026-11-19-carnevil-recomp-m2.md).** That plan replaces this outline: the loader is replaced by native stand-ins, so IDE, the GT64010's PCI and timers, the UART and the security PIC are not emulated as registers.
 - `runtime/`: memory map (8 MB RAM, KSEG0/KSEG1), COP0 and exceptions, GT64010 (PCI config, timers, interrupt cause/mask, DMA), IOASIC with UART to the host console, IDE backed by `carnevil.raw` with a write overlay, CMOS/NVRAM file, the external-call stand-ins from `boot-handoff.md`, security PIC if `hardware-usage.md` says it is used. Voodoo accepts and discards writes; vblank interrupts are generated.
 - Tests: device unit tests against register sequences captured from a MAME trace; a boot test asserting the UART log reaches the same milestones as MAME's, in order.

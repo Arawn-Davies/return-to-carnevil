@@ -47,9 +47,11 @@ two break hooks. In order:
 - n 4 to 13, 19, 20, 65 and 79: `write(2, ...)` of the banner and status lines (the console
   section below). The console lines after these go to fd 1 (11 writes, from n 808 on).
 - n 14 to 18: IOASIC ioctls on fd 4 (0x6902, 0x6903, 0x6901, 0x6900).
-- n 21 to 64: Glide's PCI work: vendor probe 0x108 (device 0x121A, a3 6 to 9; the fourth
-  finds it), device set-up 0x110 (returns 0xA8000000), configuration reads 0x0F0 and writes
-  0x0F8.
+- n 21 to 64: Glide's PCI work: vendor probe 0x108 (device 0x121A, a3 6 to 9; the third,
+  device 8, finds it), device set-up 0x110 (returns 0xA8000000), configuration reads 0x0F0
+  and writes 0x0F8. Correction, 2026-11-20: this line said the fourth probe finds it. Calls
+  21 to 24 of `loader-calls-first.txt` return 0, 0, 1 and 0 for a3 6, 7, 8 and 9 (measured),
+  and `mame/m2-facts/voodoo-reads.txt` gives device 8 as well.
 - n 66 to 78: `main`'s handler registrations, as `boot-handoff.md` lists them (CPU line 0
   0x800C6030 and line 3 0x8013F678, GT64010 bits, FPU causes 5 and 3, the break hooks), with
   ioctls 0x6910 and 0x690F on fd 4 between them.
@@ -100,6 +102,14 @@ for 0 to 10 s, 5,855,103 for 10 to 20 s, then 5,576 to 5,968 for every 10 s up t
 (448,852) on fd 5, all from 0x8016A47C to 0x8016A7A4, one word to the sound board per few
 calls (`main_init_sound(): Loading banks...` on the console, 10.24 s to 10.64 s and again
 12.39 s to 12.79 s).
+
+Correction, 2026-11-20, on the 0x6909 (SOUNDSTAT) count: 1,679,830 is what this run counted
+(`report.txt`, measured). The later run dcs-A of `dcs-handshake.md`, the same set-up, counted
+1,679,832 (`mame/m2-facts/dcs-trace.txt`, measured), 2 more, with every other DCS count
+identical. The figure is not a constant of the game: the game reads SOUNDSTAT in timed polling
+loops, and the runs' timing differs slightly (the debugger's script stops shift MAME's timing;
+`tools/mame/README.md`, "M2 facts"), so a poll count can differ by a few between runs
+(inferred). Use either figure as "about 1.68 million", not as an exact target.
 
 ioctl by descriptor and command over the run:
 

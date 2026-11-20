@@ -24,15 +24,19 @@ The translated C is not a decompilation. It is not meant to be read: every line 
 The game's code expects an arcade board. It writes to hardware registers to draw triangles and talks to a sound board. For files, the disk, settings and most devices it calls a loader that the boot ROM leaves in memory, and that loader also handles the interrupts. A **runtime** stands in for all of that:
 
 - **Memory:** 8 MB of RAM laid out the way the game expects.
-- **Graphics:** the game's writes to the Voodoo 1's registers are turned into OpenGL draw calls, so the GPU does the rendering.
+- **Graphics:** the game's writes to the Voodoo 1's registers are turned into OpenGL draw calls, so the GPU does the rendering. For now the runtime has a software model of the card that does just enough for the game's start-up checks, which draw a few triangles and read the pixels back; the rest is counted and dropped until the OpenGL work.
 - **The loader's services:** files, the disk, settings and device control. The port replaces each of the 29 services the game calls with native code, rather than running the loader on top of an emulated disk controller and system controller; the [M0 report](analysis/M0-report.md) sets out why. Every call into the loader reaches the runtime as one function call naming the service.
 - **Inputs:** the light guns, coin and start buttons, fed from a mouse or a game controller.
-- **Sound:** the DCS board has its own processor (an ADSP-2115) running its own program. That part is still emulated, on a separate thread. It is cheap.
+- **Sound:** the DCS board has its own processor (an ADSP-2115) running its own program. That part is still emulated, on a separate thread. It is cheap. Until then, a small stand-in answers the game's messages to the sound board the way the board answered them in MAME, so the game takes the same path; nothing is played.
 - **Everything else on the board:** interrupts, the battery-backed settings (which the game reads directly), and three values from the security chip, which the game asks the loader for instead of checking the chip itself.
 
 Every memory access the translated code makes checks whether the address is RAM; anything else goes to the runtime, which is where the graphics chip, the guns, the sound port and the settings memory are modelled.
 
-A small MIPS interpreter is kept as a safety net for any code that was not translated ahead of time. Whatever it has to run is logged, so it can be added to the translated set. Two hand-written functions of the game run in it on purpose: the game switches between its own tasks by swapping stacks, which ordinary translated C cannot follow, and making that work is part of the runtime's job ([M1 report](analysis/M1-report.md)).
+A small MIPS interpreter is kept as a safety net for any code that was not translated ahead of time. Whatever it has to run is logged, so it can be added to the translated set. In attract mode nothing runs in it.
+
+The game switches between its own tasks by swapping stacks, which ordinary translated C cannot follow, because the C keeps each call chain on the host's stack. The port gives each of the game's tasks a host thread of its own, and only one of them runs at a time: the three places where the game's hand-written switch jumps between a task and its scheduler are translated as calls into the runtime, which hands over from one thread to the other. Everything else about the switch stays the game's own translated code.
+
+The runtime as it stands (milestone M2) runs the game headless: no window, no sound, no input yet. Time inside it is a virtual clock that the translated code advances as it runs, so a run is the same every time and does not depend on the computer's speed. [The runtime notes](analysis/runtime.md) describe it in detail.
 
 ## Two phases
 
@@ -42,10 +46,10 @@ A small MIPS interpreter is kept as a safety net for any code that was not trans
 
 ## Checking the work
 
-MAME is the reference. The same disk image runs in MAME, and the port is compared against it: processor state at agreed checkpoints, the order of the game's debug messages, and rendered frames. The recompiler is checked in three ways: short instruction programs run on MAME's processor emulation, whose results both the translated C and the interpreter must reproduce exactly; the translated C against the interpreter on random inputs; and real game functions captured in MAME during attract mode and replayed through the translated C, which must leave every register and all 8 MB of RAM as MAME did.
+MAME is the reference. The same disk image runs in MAME, and the port is compared against it: processor state at agreed checkpoints, the order of the game's debug messages, and rendered frames. The recompiler is checked in three ways: short instruction programs run on MAME's processor emulation, whose results both the translated C and the interpreter must reproduce exactly; the translated C against the interpreter on random inputs; and real game functions captured in MAME during attract mode and replayed through the translated C, which must leave every register and all 8 MB of RAM as MAME did. The runtime is checked by running the whole game for 150 seconds of attract mode and comparing what it did with MAME's run in order: its console lines, the files it opened, the tasks it started and ended, and its first loader calls with their arguments and results. Each device model is also replayed against what MAME recorded of it, such as the Voodoo's 274,967 start-up reads and the sound board's exchange ([M2 report](analysis/M2-report.md)).
 
 ## What is in this repository, and what is not
 
-In: the tools that extract and analyse the game's files, the notes on what was found, the recompiler, the reference interpreter and the test runtimes, and later the runtime itself.
+In: the tools that extract and analyse the game's files, the notes on what was found, the recompiler, the reference interpreter, the test runtimes and the runtime itself.
 
 Not in: the game. No code, assets, ROMs or disk images are here, and the C generated from the game is never committed either, because it is a translation of the game's code. You bring your own CHD and everything game-specific is produced on your machine. See [Getting started](getting-started.md).

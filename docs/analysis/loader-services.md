@@ -359,6 +359,14 @@ file.**
   is non-zero, after queueing the loader calls `wait()` (unless the queue has already emptied,
   in which case it returns 0 at once), and on completion the IDE interrupt path calls
   `wake(cookie)` instead of the slot-0x1D8 callback.
+- Note, 2026-11-20: this entry and section 8 disagree on which hook runs when both a slot-0x1D8
+  callback and a process hook with a non-zero cookie are installed. This entry says the wake
+  replaces the callback; section 8 ("0x158 read_sectors") calls the callback first and the
+  wake only when no callback is set. The runtime follows section 8 (`runtime/loader/diskslots.c`,
+  `ld_slot_disk_read`). Which the loader does was not re-read. In run A the wake ran 64
+  times, from 12.79 s to 22.24 s, and the movie callback 3,122 times, from 22.60 s on
+  (measured, `disk-hooks.txt`); no transfer is known to have had both installed, so the
+  difference is not known to have been exercised (inferred).
 - Game: 0x800F5DA8 and 0x800F6F58 install (0x801A3118, 0x80149A44, 0x80149B40); five sites
   uninstall with zeros. 0x801A3118 holds the game's current process (0 at the hand-off, dump);
   0x80149A44 puts the current process to sleep through the game's scheduler (it calls
@@ -957,7 +965,9 @@ The code is the instruction word at EPC shifted right 6.
 - **0x158 read_sectors(lba, buf, count):** absolute LBA from the disk image; out of range: no
   transfer, callback(count) if installed, return count. In range: copy, then if a 0x1D8
   callback is set call it with 0 (1 on a host error) and return 0; else if disk info is set
-  with a non-zero cookie call wake(cookie) and return 0; else return count.
+  with a non-zero cookie call wake(cookie) and return 0; else return count. (Note,
+  2026-11-20: section 1, slot 0x220, gives the opposite order when both are installed; the
+  runtime follows this line. See the note there.)
 - **0x190 unlink(name):** remove from partition 1 (or refuse if the image is read-only, and say
   so); return 0 also when absent.
 - **0x198 exec(name, ...):** stop the runtime with a message naming the file.

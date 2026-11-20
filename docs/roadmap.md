@@ -1,10 +1,10 @@
 # Roadmap and status
 
-Last updated: 19 November 2026.
+Last updated: 20 November 2026.
 
 ## Where things stand
 
-The first milestone, M0 (tools that extract the game's files and analyse its executable), is complete and summarised in the [M0 report](analysis/M0-report.md). The second, M1 (the recompiler), is complete on its branch, pending its final review, and summarised in the [M1 report](analysis/M1-report.md). The next step is planning M2, the first runtime. Nothing is playable yet.
+The first milestone, M0 (tools that extract the game's files and analyse its executable), is complete and summarised in the [M0 report](analysis/M0-report.md). The second, M1 (the recompiler), is complete and summarised in the [M1 report](analysis/M1-report.md). The third, M2 (the runtime), is complete on its branch, pending its final review, and summarised in the [M2 report](analysis/M2-report.md): the game boots headless and runs its attract mode, matching MAME's console output, file activity and tasks. The next step is planning M3, the picture. Nothing is playable yet.
 
 ## Milestones
 
@@ -19,7 +19,7 @@ The first milestone, M0 (tools that extract the game's files and analyse its exe
 - Hardware usage census: done, checked against MAME memory taps.
 - M0 report: done. Still open: the MAME frame rate on the PS4, to be recorded the next time the PS4 is up.
 
-**M1: the recompiler** (done on its branch, pending the final review)
+**M1: the recompiler** (done)
 
 - Recompiler: done. A Python emitter, built on M0's decoder and function analysis, turns all 2,093 functions of `GAME.EXE` into C. Its output has the shape N64Recomp's has; N64Recomp itself does not handle this game's instructions or byte order.
 - Reference interpreter and the contract header the generated C, the interpreter and the runtime share: done.
@@ -28,9 +28,16 @@ The first milestone, M0 (tools that extract the game's files and analyse its exe
 - Real game code against MAME: done. From the entry, the recompiled code reaches the game's first loader call with MAME's registers and RAM, and 127 game functions captured in MAME's attract mode replay with MAME's results.
 - M1 report: done.
 
-**M2: boots without graphics.** A runtime with memory, interrupts and the loader's services: enough for the game to reach its attract loop, judged by its debug messages. From M1, its parts are known: native stand-ins for the 29 loader services behind `rt_loader`, the hardware the game touches itself (Voodoo, guns, sound port, settings memory) behind `bus_read` and `bus_write`, interrupt delivery to the handlers the game registers, and a way to run the game's own cooperative task switch, which swaps stacks underneath the translated code. The task switch is the first design decision (see the M1 report).
+**M2: boots without graphics** (done on its branch, pending the final review)
 
-**M3: graphics.** Voodoo 1 register writes become OpenGL draws. Attract mode should match MAME frame for frame.
+- Runtime: done. Native stand-ins for the 29 loader services, the hardware the game drives itself (the Voodoo, the guns, the sound port, the settings memory), interrupt delivery to the handlers the game registers, and the game's cooperative tasks, each on a host thread of its own with only one running at a time. [analysis/runtime.md](analysis/runtime.md) describes it.
+- The disk, read-only: the game reads its files from your raw image; its writes go to an overlay file and its settings to an NVRAM file.
+- The Voodoo: more than the plan expected. Glide's start-up reads back pixels the card drew, so the port has a software frame buffer and draws the start-up checks' triangles; everything attract mode draws afterwards is counted and dropped until M3.
+- The sound board: a responder that gives the replies MAME's sound board gave in attract mode. Nothing is played.
+- The program `carnevil`: done. It runs 150 seconds of game time into attract mode on macOS and on Linux, and its console output, the files it opens, its tasks and its first loader calls match MAME's.
+- M2 report: done.
+
+**M3: graphics.** Voodoo 1 register writes become OpenGL draws, building on M2's frame buffer. Attract mode should match MAME frame for frame. This is also where the game gets a window and runs in real time.
 
 **M4: input.** Guns from a mouse or controller, coin and start. A level is playable.
 
@@ -44,7 +51,7 @@ The first milestone, M0 (tools that extract the game's files and analyse its exe
 
 ## What has been learned so far
 
-The [M0 report](analysis/M0-report.md) and the [M1 report](analysis/M1-report.md) have the full summaries, with the evidence for each point.
+The [M0 report](analysis/M0-report.md), the [M1 report](analysis/M1-report.md) and the [M2 report](analysis/M2-report.md) have the full summaries, with the evidence for each point.
 
 About the disk:
 
@@ -78,6 +85,14 @@ About the hardware:
 
 - The game itself drives the Voodoo 1 (registers, frame buffer and texture memory), the light guns and the sound data port, and reads the settings memory directly. Everything else (disk, system controller, the rest of the I/O chip, writes to the settings memory) goes through the loader.
 - The game does not talk to the security chip. It asks the loader for three values the loader read from the chip at start-up.
+- Most of attract mode's drawing reaches the Voodoo not from the processor but by DMA: on every pass of its scheduler the game hands the system controller a chain of records that copies register writes and movie frames to the card.
+- At start-up, Glide tests the card by drawing and reading back pixels: a frame-buffer memory test, a dither calibration from 256 small triangles, and a texture-unit check from 2 more.
+- The board's VBLANK interrupt is the Voodoo's vertical retrace, which starts only once the game programs the card's video timing.
+- The sound board is talked to through a small protocol: the game resets it, uploads its program and sample banks in checksummed blocks, and asks for its version.
+
+About the tasks:
+
+- The game runs 6 or fewer tasks at once in attract mode, switching about a hundred times a second, and its scheduler is paced by the VBLANK interrupt.
 
 ## Target hardware
 

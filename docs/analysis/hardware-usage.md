@@ -887,9 +887,11 @@ Every one of its 274,967 reads returns the value MAME returned (`tests/test_vood
   twice its low-water mark (fbiInit0 bits 6 to 10) makes the card hold its writer. The write
   itself is queued.
 - The hold ends when, with the memory FIFO on, it is below its high-water mark, or, with it
-  off, the PCI FIFO has more than its low-water mark free, or when the card is idle. MAME
-  checks at the running command's end and at a swap; the model checks at the earlier of the
-  two.
+  off, the PCI FIFO has more than twice its low-water mark (fbiInit0 bits 6 to 10) in free
+  entries, or when the card is idle. MAME checks at the running command's end and at a
+  swap; the model checks at the earlier of the two. (Correction, 2026-11-20: this item said
+  "more than its low-water mark free"; the code, `check_release` in `voodoo_null.c`, holds
+  while the free entries are at most twice the mark, the same quantity that starts the hold.)
 - A CPU store returns only when the hold ends: virtual time passes in the store
   (`vclock_advance`, machine.h) while the card runs its queue. The clock's events run on the
   way at their own times, so the retrace raises VBLANK during a long hold. The interrupt is
@@ -898,11 +900,20 @@ Every one of its 274,967 reads returns the value MAME returned (`tests/test_vood
   polls the card at the next time the hold may end, and goes on from the word it stopped at.
   The CPU runs meanwhile. Cause bit 4 is raised at the measured completion time (`dma0.txt`,
   the fit above), or when the last word goes in, if that is later.
-- Measured agreement (the 150 s attract run, `tests/test_boot.py`): the card held the CPU 187
-  times, for 3.38 s of virtual time in all, most of them behind a swap that waits for the
-  retrace. It held the DMA channel 3,273 times, once in each chain of the movie shape (130
-  small records and 256 of 0x640 bytes). No chain finished later than its measured
-  completion: every chain of every shape completed within 5 ns of MAME's times.
+- Measured agreement (the 150 s attract run, `tests/test_boot.py`; the counts are the trace's
+  `hold_cpu`, `hold_cpu_ns` and `hold_dma` totals). The two CPU figures count different sets:
+  - 187 is the number of holds a CPU store started, that is, the stalls that began with a
+    CPU write while the card was not already holding;
+  - 3.38 s (3,378,204,411 ns) is the virtual time of every wait of a CPU store, including the
+    stores that arrived while a hold the DMA had started was in force. A 20 s run already
+    counts 187 holds and 0.35 s (measured, its trace, 2026-11-20); since the run is
+    deterministic, most of the 3.38 s is CPU waits behind DMA-started holds after 20 s
+    (inferred).
+  The card held the DMA channel 3,273 times, once in each chain of the movie shape (130 small
+  records and 256 of 0x640 bytes). No chain finished later than its measured completion:
+  every chain of every shape completed within 5 ns of MAME's times. (Correction, 2026-11-20:
+  this item first paired the 187 and the 3.38 s as one set, "held the CPU 187 times, for
+  3.38 s in all, most of them behind a swap", which the counters do not show.)
 - A DMA enable while a chain is still being delivered or its cause bit 4 is pending stops.
   MAME's model ignores the enable of an active channel and does not queue it (read,
   gt64xxx.cpp); the game never makes one.
@@ -991,6 +1002,14 @@ fastfillCMD and 7,159 nopCMD.
   - What would show it: an LFB read of aux pixels there after the memory FIFO held entries.
     MAME would answer with its FIFO's encoding, the model with the pixels. The capture has no
     such read.
+- A CPU store that arrives while the card is holding the DMA channel (a hold the DMA
+  started) is queued at once and then held until the release (read, `enqueue` and `hold` in
+  `voodoo_null.c`). MAME's model instead saves the CPU's write without passing it to the
+  card, stalls the CPU, and re-issues the saved write when the card releases (from MAME's
+  model: gt64xxx.cpp, `master_mem0_w` and `pci_stall`, read 2026-11-20). The
+  order in which the card sees the CPU's word and the remaining DMA words can therefore
+  differ from MAME's. What would show it: a read-back or a status value that depends on that
+  order; none of the comparisons covers it (added 2026-11-20).
 
 ## Constants that are not addresses
 
