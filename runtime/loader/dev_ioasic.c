@@ -2,19 +2,17 @@
  *
  * docs/analysis/loader-services.md section 3 (`ioasic:`): plain register accessors; a read
  * stores register & 0xFFFF through arg, a write takes arg & 0xFFFF. The input ports start
- * at the measured no-input values and ioasic_set_inputs replaces them; INTCTL is machine_t's word (the dispatcher clears and sets its
- * bit 14 around every exception); the sound-board commands go to dcs_ioctl. Section 2: only
- * init and ioctl, so open, close, read and write are the shared return-0 routine.
+ * at the measured no-input values and ioasic_set_inputs replaces them; INTCTL is machine_t's
+ * word (the dispatcher clears and sets its bit 14 around every exception), and a write of it
+ * re-derives the IP3 level; INTSTAT and the sound-board commands come from the sound board's
+ * model (runtime/hw/dcs_stub.c). Section 2: only init and ioctl, so open, close, read and
+ * write are the shared return-0 routine.
  */
 #include <stdio.h>
 
+#include "hw.h"
 #include "loader.h"
 #include "machine.h"
-
-/* INTSTAT (bus word 7) at the game's entry, measured (loader-services.md, open question 1).
- * Nothing in this task raises an IOASIC interrupt, so it is also every later read's value;
- * the sound-board task owns its dynamic bits. */
-#define IOASIC_INTSTAT_IDLE 0x20C9u
 
 /* PORT0 to PORT3 with no input, as the game read them in MAME (measured: loader-services.md
  * section 3, `ioasic:`, "With no input"). */
@@ -39,13 +37,6 @@ void ld_ioasic_reset(void)
     ports[3] = PORT3_IDLE;
 }
 
-/* The sound-board task replaces this definition. */
-int dcs_ioctl(cpu_t *c, uint32_t cmd, uint32_t arg)
-{
-    (void)c, (void)arg;
-    ld_stop("sound board ioctl 0x%04X is not implemented yet", (unsigned)cmd);
-}
-
 /* ioctl: section 3, `ioasic:` */
 static int ioasic_ioctl(int fd, uint32_t cmd, uint32_t arg)
 {
@@ -68,10 +59,11 @@ static int ioasic_ioctl(int fd, uint32_t cmd, uint32_t arg)
     case 0x6911: /* SOUNDIN write, the acknowledgement */
         return dcs_ioctl(ld.c, cmd, arg);
     case 0x690E: /* INTSTAT read */
-        ld_put32(arg, IOASIC_INTSTAT_IDLE & 0xFFFFu);
+        ld_put32(arg, dcs_intstat(ld.c) & 0xFFFFu);
         return 0;
-    case 0x690F: /* INTCTL write */
+    case 0x690F: /* INTCTL write: its enables decide the IP3 level (dcs_stub.c) */
         machine.intctl = arg & 0xFFFFu;
+        dcs_irq_update(ld.c);
         return 0;
     case 0x6910: /* INTCTL read */
         ld_put32(arg, machine.intctl & 0xFFFFu);

@@ -219,10 +219,9 @@ static void default_work(uint8_t *ram, cpu_t *c, int n)
         irq_clear(6);
         return;
     case 3:
-        /* IOASIC: clears INTCTL bit 0. Nothing models the IOASIC's interrupt output yet, so
-         * the pending IP3 bit is lowered here too (otherwise a raised, unmasked IP3 would be
-         * delivered at every check for ever); the sound-board task derives the IP3 level
-         * from the IOASIC model instead. */
+        /* IOASIC: clears INTCTL bit 0. The IOASIC model's IP3 level (runtime/hw/dcs_stub.c,
+         * dcs_irq_update) needs INTCTL bit 0, so with it clear the line follows the model
+         * low; it rises again only when the game sets the bit with a source pending. */
         machine.intctl &= ~1u;
         irq_clear(3);
         return;

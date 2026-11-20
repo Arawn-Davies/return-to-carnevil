@@ -47,6 +47,18 @@ read from code.
   0x0088 to 0x83B0; measured). No game code tests them (read: the masks above are the only
   ones applied to a SOUNDSTAT result in 0x8016A42C to 0x8016AAA8). So a stand-in that returns
   0x8080, with 0x40 added while a reply waits, satisfies every test the game makes (inferred).
+- Bits 0x0038 follow the sound FIFO's fill (measured): 0x0008 at every one of the 411,004
+  reads before the IP3 handler's FIFO writes (12.790 s), 0x0030 at every one of the 1,268,828
+  after them. `hardware-usage.md` measured 512 such writes, all by the game's streamer; read
+  as 0x0008 empty, 0x0010 half full and 0x0020 full (the names are inferred; that 0x0010 starts
+  at half of 512 words is inferred, since no fill between 0 and 512 was observed).
+- Bits 0x0100 and 0x0200 change when the board posts certain replies, at the board's times
+  (measured): 0x0100 comes with the 0x000C reply (first seen at trace lines 61,580 and 452,676)
+  and goes with a reset and with the reply to 0x00B9 (line 2,910,972); 0x0200 comes with the
+  first two block sums of each sound load (lines 77,977, 84,662, 469,073, 474,821) and goes
+  with the 0x0223 reply (lines 83,981, 399,699, 474,140). Not modelled: these bits are returned
+  as the idle pattern (clear); the game is not known to test them (read: the routines of
+  `loader-services.md` section 5).
 
 ## The exchange in attract mode (measured)
 
@@ -54,9 +66,16 @@ In order, with emulated seconds since power-on. Words are hexadecimal 16-bit val
 means a command word followed by a header and data words, sent back to back.
 
 1. 9.290 s: INTCTL read 0x4000, written 0x4000 (fd 4, 0x6910/0x690F).
-2. 10.137 s: SOUNDOUT 0x55AA, 0xC837. No reply.
+2. 10.137 s: SOUNDOUT 0x55AA, 0xC837. No reply. (Correction, 2026-11-20: a word of the
+   board's was already waiting before this, from before the game's entry: the first SOUNDSTAT
+   read, trace line 4, is 0x00C8 with bit 0x40, and INTSTAT at the entry is 0x20C9 with its
+   0x0040. The game never read it; the reset of step 3 dropped it, line 14 reads 0x0088.)
 3. Reset: SOUNDCTL read 0x0001, written 0x0000, read 0x0000, written 0x0001, each about 1 ms
-   apart; then INTCTL read and written 0x4000. **Reply 0x000A** about 4 ms later.
+   apart; then INTCTL read and written 0x4000. **Reply 0x000A** about 4 ms later. (Correction,
+   2026-11-20: 2.03 to 11.21 ms after the SOUNDCTL 0x0001 write, not about 4 ms: 5.152 ms for
+   this reset (write at trace line 11, first seen at line 4,029), 11.208 ms for the second
+   (lines 4,035 and 13,913), 2.028 ms and 4.491 ms at the second sound load (lines 399,705 and
+   400,700; 400,706 and 404,084), for the same writes at the same spacing each time.)
 4. A second reset, the same; **reply 0x000A** again.
 5. Four boot-load blocks, each `0x001A, start, end, space` followed by the data: (end − start
    + 1) words when space is 1, twice that when space is 0 (blocks of 1,028, 9,732, 12,292 and
@@ -77,7 +96,9 @@ means a command word followed by a header and data words, sent back to back.
     banks...`), **reply = its data sum**.
 11. 10.641 s: SOUNDOUT 0x55AA, 0xC837, 0x55B2, 0xBB44, 0x55D3; nothing more until the task
     `loadwave` starts at 12.29 s, where the game reads the five stale words of step 8 and
-    acknowledges, sends 0x55D4 and gets **0x0223**.
+    acknowledges, sends 0x55D4 and gets **0x0223**. (Correction, 2026-11-20: the five reads
+    return 0xBF10, trace lines 395,536 to 395,540, the last reply before them (the sum of the
+    last 0x55D0 block, line 395,520), as the stale-SOUNDIN rule says; not step 8's 0xE000.)
 12. 12.295 s to 12.790 s: steps 3 to 10 again, word for word, with the same replies
     (the second `main_init_sound` block on the console).
 13. 12.790 s: SOUNDOUT 0x55AA, 0xC837, 0x55B2, 0xBB44, 0x55AE, 0x0100 (no reply); SOUNDCTL
@@ -88,7 +109,12 @@ means a command word followed by a header and data words, sent back to back.
     its header the first time, 9 the other three) and a long `0x55D1` block (22,288 to 560,227
     words), **each block answered by its data sum**.
 15. 22.600 s: SOUNDOUT 0x00B9, 0xFF7F, 0x8000, 0x55AE, 0x0100. No reply. Nothing more was
-    sent or read on the DCS ioctls up to 155 s.
+    sent or read on the DCS ioctls up to 155 s. (Correction, 2026-11-20: 0x00B9, 0xFF7F and
+    0x8000 were written at 22.5997 s (trace lines 2,910,965 to 2,910,971), but 0x55AE and 0x0100
+    at 132.459 s (lines 2,910,973 and 2,910,975). And the board did reply to 0x00B9 0xFF7F
+    0x8000: the next SOUNDSTAT read, at 132.459 s (line 2,910,972, 0x82F0), has bit 0x40, a word
+    waiting, which the game never read, so its value and when in those 110 s it came are
+    unknown.)
 
 The replies the game reads are therefore, per occasion:
 
@@ -102,7 +128,8 @@ The replies the game reads are therefore, per occasion:
 ## Which replies are rules and which are recorded values
 
 - **Rules** (inferred from the trace; every instance fits): the block checksums. For all 4
-  `0x001A` blocks and all 22 `0x55D0`/`0x55D1` blocks of the run, the reply is the sum of the
+  `0x001A` blocks of each sound load (8 in the run; correction, 2026-11-20: the count was per
+  load) and all 22 `0x55D0`/`0x55D1` blocks of the run, the reply is the sum of the
   data words (the words after the 4- or 5-word header) modulo 0x10000. The block lengths follow
   from the headers as given in steps 5 and 7, so a stand-in can compute the reply from the
   words it receives without knowing their meaning.
@@ -115,14 +142,25 @@ The replies the game reads are therefore, per occasion:
   plausibly a firmware version (the console says "requesting version number" just before;
   inferred).
 - The words the game sends without a reply (0x55AA 0xC837, 0x55B2 0xBB44, 0x55AE 0x0100,
-  0x55D2, 0x55D3, 0x55D7 and its three words, 0x00B9 0xFF7F 0x8000) are recorded, not
-  interpreted.
+  0x55D2, 0x55D3, 0x55D7 and its three words) are recorded, not interpreted. (Correction,
+  2026-11-20: 0x00B9 0xFF7F 0x8000 was answered by a word the game never read; step 15.)
 
 ## Timing (measured)
 
 - The board raised bit 0x40 within 0.001 to 0.009 ms of the last word of a block, 1 to 2 ms
   after 0x002A, 4 to 6 ms after 0x55D4, and 2 to 4 ms after the end of a reset. Each is well
-  inside the game's 25 ms read timeout (`loader-services.md`, section 5).
+  inside the game's 25 ms read timeout (`loader-services.md`, section 5). (Correction,
+  2026-11-20: after a reset it was 2.03 to 11.21 ms from the releasing SOUNDCTL write, step 3;
+  after 0x55D4 4.29 to 6.20 ms, trace lines 77,989 to 83,981, 395,543 to 399,699 and 469,085
+  to 474,140. A block's sum was at the first poll after its last word in all 30 blocks.)
+- Bit 0x80 was clear at 45 of the reads, one to three polls (1.1 to 3.3 us) after a command
+  word, never after a block's data word. The same word at the same delay differs by the
+  board's state: 0x55AA read with 0x80 set 1.2 us after its write at line 4 (before any
+  download) and clear at line 395,524 (program running).
+- Bit 0x8000 is never set before line 61,279 (10.2197 s, 0.74 ms after the first 0x002A, line
+  60,565), and from there on it is clear for about 1 ms every 7 to 8 ms, on a 1 ms lattice whose
+  phase shifts after longer gaps (for example lines 224,321 to 224,362): 831 transitions, none
+  explained by a word the game sent. It is clear between each reset and the next 0x002A.
 - No DCS routine returned 0xEEEE in the whole run (breakpoints on the `jr ra` of the seven
   routines that can, conditioned on v0).
 
@@ -187,9 +225,39 @@ without sound. Answering by the rules and recorded values above (0x000A after a 
 after each boot block, the block sums, 0x000C after 0x002A, 0x0223 after 0x55D4, SOUNDSTAT
 0x8080 with 0x40 while a reply waits) reproduces the exchange of run A.
 
+## Known gaps in the responder
+
+The runtime's responder, `runtime/hw/dcs_stub.c`, answers by the rules and recorded values
+above with a state machine over the words the game sends; `tests/test_dcs.py` replays this
+page's trace through it. Every SOUNDIN, SOUNDCTL, INTSTAT and INTCTL result of the trace comes
+out as recorded, and so do SOUNDSTAT's FIFO bits, with the IP3 handler's 512 FIFO writes fed
+after its first INTSTAT read (measured, the replay). What it does not reproduce:
+
+- **The timing bits are not the board's.** When the board takes a word and when its reply
+  appears are decided by its own processor, which the runtime does not emulate. The responder
+  is never slower than the board instead: a reply appears after the shortest delay the trace
+  shows for its kind (2.027 ms after a reset, 1.047 ms after 0x002A, 4.293 ms after 0x55D4,
+  none after a block), bit 0x80 is always set, and bit 0x8000 is set throughout the program
+  state, from the 0x002A write to the next reset. In the replay every SOUNDSTAT read the board
+  answered with one of these bits set is answered with it set too, and the model shows the bit
+  where the board did not at 17,978 reads for 0x40, 45 for 0x80 and 495,782 for 0x8000
+  (measured). Bits 0x0100 and 0x0200 are left clear (not modelled, see "The status bits"):
+  1,611,974 reads differ in them, none tested by the game (read).
+- **What would show it** (inferred): the game polls SOUNDSTAT fewer times than in MAME, so the
+  counts of SOUNDSTAT reads and of loader calls during the downloads differ from
+  `loader-calls.md`'s, and every wait ends sooner, so the download and the sound loads finish
+  earlier in emulated time than in run A. A game path that depends on a wait taking long (a
+  timeout that is meant to fire, or a poll count used as a delay) would behave differently;
+  none is known.
+- **The FIFO is never drained** (inferred from the one IP3 in 150 s): once full it stays full,
+  and a word written to a full FIFO stops. Play, where the streamer runs on, needs the board's
+  consumption of the FIFO.
+- Emulating the sound processor (its boot ROM and the downloaded program) removes these gaps.
+
 ## Not done
 
 - Play: the DCS exchange during a game (sound commands for effects and music) was not traced;
-  attract mode sends nothing after 22.6 s on these ioctls.
+  attract mode sends nothing on these ioctls between 22.6 s and 132.459 s, and nothing after
+  132.459 s (correction, 2026-11-20: the text said nothing after 22.6 s; see step 15).
 - The sound FIFO's contents and its interrupt timing beyond the one IP3 above.
 - MAME's `dcs.cpp` was not read (no source in the Linux container).

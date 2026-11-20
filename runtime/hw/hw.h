@@ -1,6 +1,7 @@
 /* hw.h: the hardware GAME.EXE touches directly, behind bus_read and bus_write
  * (runtime/core/bus.c): the Voodoo Graphics sink and its PCI configuration (voodoo_null.c),
- * the gun registers (gun.c), the sound FIFO and the register at 0x17F00000 (misc.c).
+ * the gun registers (gun.c), the sound FIFO and the register at 0x17F00000 (misc.c); and the
+ * DCS sound board's responder (dcs_stub.c), which the `ioasic:` sound ioctls reach.
  *
  * docs/analysis/hardware-usage.md is the reference: "GAME.EXE", the two "Dynamic check"
  * sections, "Measured values the runtime answers with" and "Decisions for the runtime",
@@ -22,9 +23,11 @@
  * it before the first access (until then the state is all zero, which is not the board's);
  * machine_reset and loader_reset do not call it. */
 void hw_reset(void);
-/* The parts of it, one per file with state (hw_reset is in misc.c). */
+/* The parts of it, one per file with state (hw_reset is in misc.c). dcs_reset: the sound
+ * board as at the game's entry (dcs_stub.c). */
 void voodoo_reset(void);
 void misc_reset(void);
+void dcs_reset(void);
 
 /* hw_stop: the stop of an access no device models: names the physical address, the size,
  * read or write (with the value of a write), c->pc (the pc as last stored, exact only in a
@@ -160,5 +163,21 @@ void sndfifo_write(cpu_t *c, int size, uint32_t value);
 uint64_t sndfifo_writes(void);
 uint32_t arst_read(cpu_t *c, int size);
 void arst_write(cpu_t *c, int size, uint32_t value);
+
+/* --- the DCS sound board's responder and the IOASIC's sound state (dcs_stub.c) ------------ */
+
+/* docs/analysis/dcs-handshake.md is the reference. The `ioasic:` sound commands reach it
+ * through dcs_ioctl (runtime/loader/loader.h), the sound FIFO's words through sndfifo_write,
+ * which calls dcs_fifo_write. dcs_intstat: IOASIC INTSTAT (bus word 7) now. dcs_irq_update:
+ * IP3 to the level INTSTAT and INTCTL (machine_t's) give, with vclock_reload(c) when it rises
+ * (c is NULL from a clock event). For reports and tests: dcs_queued, the board's words not
+ * yet acknowledged; dcs_data_words, the words taken as block data since dcs_reset;
+ * dcs_ip3_raises, how often the model raised IP3 since then. */
+void dcs_fifo_write(cpu_t *c);
+uint32_t dcs_intstat(cpu_t *c);
+void dcs_irq_update(cpu_t *c);
+int dcs_queued(void);
+uint64_t dcs_data_words(void);
+uint32_t dcs_ip3_raises(void);
 
 #endif

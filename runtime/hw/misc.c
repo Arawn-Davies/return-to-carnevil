@@ -2,7 +2,8 @@
  *
  * docs/analysis/hardware-usage.md, "GAME.EXE" and "Dynamic check: the other hardware": the
  * game feeds the DCS2 sound FIFO with word writes (0x8013FF98) and never reads it; here the
- * writes are counted and dropped until the sound board is modelled. 0x17F00000 (MAME's "ASIC
+ * writes are counted and go to the IOASIC's FIFO state in dcs_stub.c (its fill, which the
+ * status bits and INTSTAT show); the words themselves are dropped. 0x17F00000 (MAME's "ASIC
  * reset", inferred to be the gun flash control) is read once with lb and written once with
  * sb by the game ("Measured values the runtime answers with": it read 0x0E and wrote 0x1E,
  * the value read with bit 4 set); here it is a byte register that starts at the value the
@@ -27,6 +28,7 @@ void hw_reset(void)
 {
     voodoo_reset();
     misc_reset();
+    dcs_reset();
 }
 
 void sndfifo_write(cpu_t *c, int size, uint32_t value)
@@ -34,6 +36,7 @@ void sndfifo_write(cpu_t *c, int size, uint32_t value)
     if (size != 4)
         hw_stop(c, SNDFIFO_PHYS, size, 1, value, "the game writes the sound FIFO with sw only");
     m.fifo_writes++;
+    dcs_fifo_write(c);
 }
 
 uint64_t sndfifo_writes(void)

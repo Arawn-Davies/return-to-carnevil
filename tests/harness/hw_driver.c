@@ -31,6 +31,13 @@
  *   delay N BYTES        "delay NS": dma0_delay_ns(N, BYTES), N and BYTES decimal
  *   counts REG           "counts STD ALT TEX FIFO": voodoo_reg_writes(REG),
  *                        voodoo_alt_writes(REG), voodoo_tex_writes(), sndfifo_writes()
+ *   dcs                  "dcs QUEUED DATA RAISES CAUSE_IP": dcs_queued(), dcs_data_words(),
+ *                        dcs_ip3_raises() (decimal) and the pending IP bits
+ *   dcsreplay PATH ENTRY FIFO   replays a DCS trace (mame/m2-facts/dcs-trace.txt's format)
+ *                        through ioctl slot 0x0C8 on fd 4 at its times less ENTRY (ns), with
+ *                        FIFO sound-FIFO word writes through the bus (0xB3000000) right after
+ *                        the IP3 handler's first INTSTAT read; prints the summary lines its
+ *                        comment lists
  * A stop (rt_stop) ends the run with status 3 and its message on stderr.
  *
  * recomp_lookup knows one function, PROBE (0x80300000), which prints "probe A0 SP RA NOW"
@@ -144,6 +151,142 @@ static void advance(uint64_t until)
         rt_tick(ram, &cpu);
     }
     printf("now %" PRIu64 "\n", vclock_now(&cpu));
+}
+
+/* --- the DCS trace replay ---------------------------------------------------------------- */
+
+#define REPLAY_BUF 0x80202000u
+
+static uint32_t replay_ioctl(uint32_t cmd, uint32_t arg)
+{
+    uint32_t w;
+    cpu.r[4] = 4;
+    cpu.r[5] = cmd;
+    cpu.r[6] = arg;
+    rt_loader(ram, &cpu, 0x0C8);
+    if (cpu.r[2] != 0)
+        die("dcsreplay: an ioctl returned non-zero", NULL);
+    memcpy(&w, ram + (REPLAY_BUF & 0x1FFFFFFFu), 4);
+    return w;
+}
+
+/* The summary, one line each:
+ *   dcsread KIND MATCHED TOTAL FIRST_BAD_LINE GOT WANT   per result kind 0x6907, 0x690A,
+ *                        0x690E, 0x6910 (FIRST_BAD_LINE 0 and GOT WANT 0 when all match)
+ *   dcsstate MATCHED TOTAL FIRST_BAD_LINE   SOUNDSTAT reads whose state bits (0x38) match
+ *   dcsbit BIT LATE EARLY FIRST_LATE_LINE   per timing bit of SOUNDSTAT: LATE reads recorded
+ *                        set and modelled clear, EARLY modelled set and recorded clear
+ *   dcsother DIFF        SOUNDSTAT reads differing outside 0x38, 0x40, 0x80 and 0x8000
+ *   dcsorphan N          SOUNDSTAT reads with 0x40 modelled set and nothing queued
+ *   dcsip3 LINE PREV     each ip3 event and the line of the event fed before it
+ *   dcsraise LINE        each raise of IP3 by the model, at the line whose event caused it
+ *   dcsfifo LINE         where the FIFO writes went in (after that line's INTSTAT read)
+ *   dcsdata N            dcs_data_words() at the end */
+static void dcs_replay(const char *path, uint64_t entry, uint32_t fifo)
+{
+    static const uint32_t kinds[4] = {0x6907, 0x690A, 0x690E, 0x6910};
+    static const uint32_t bits[3] = {0x40, 0x80, 0x8000};
+    uint64_t matched[4] = {0}, total[4] = {0}, bad_line[4] = {0}, got[4] = {0}, want[4] = {0};
+    uint64_t st_ok = 0, st_total = 0, st_bad = 0, other = 0, orphan = 0;
+    uint64_t late[3] = {0}, early[3] = {0}, late_line[3] = {0};
+    uint64_t line = 0, prev_fed = 0;
+    uint32_t raises = dcs_ip3_raises();
+    int in_handler = 0;
+    static char buf[4096];
+    FILE *f = fopen(path, "r");
+    if (!f)
+        die("dcsreplay: cannot open", path);
+    while (fgets(buf, sizeof buf, f)) {
+        uint64_t t;
+        char kind[16];
+        uint32_t v;
+        if (!strchr(buf, '\n') && !feof(f))
+            die("dcsreplay: a line longer than the buffer", NULL);
+        line++;
+        if (buf[0] == '#')
+            continue;
+        if (sscanf(buf, "%" SCNu64 " %15s %" SCNx32, &t, kind, &v) != 3)
+            die("dcsreplay: bad line", buf);
+        if (t < entry)
+            die("dcsreplay: an event before the entry", buf);
+        vclock_account(&cpu);
+        if (t - entry < machine.now)
+            die("dcsreplay: an event before the virtual clock", buf);
+        machine.now = t - entry;
+        if (strcmp(kind, "ip3") == 0) {
+            printf("dcsip3 %" PRIu64 " %" PRIu64 "\n", line, prev_fed);
+            continue;
+        }
+        if (strcmp(kind, "h3") == 0) {
+            in_handler = 1;
+            continue;
+        }
+        if (strcmp(kind, "eeee") == 0)
+            die("dcsreplay: an eeee event (none in run A)", buf);
+        uint32_t cmd = (uint32_t)strtoul(kind, NULL, 16);
+        switch (cmd) {
+        case 0x6906: case 0x6908: case 0x6911: case 0x690F:
+            replay_ioctl(cmd, v);
+            break;
+        case 0x6909: {
+            uint32_t m = replay_ioctl(cmd, REPLAY_BUF) & 0xFFFFu;
+            st_total++;
+            if ((m & 0x38u) == (v & 0x38u))
+                st_ok++;
+            else if (!st_bad)
+                st_bad = line;
+            for (int i = 0; i < 3; i++) {
+                if ((v & bits[i]) && !(m & bits[i]) && !late[i]++)
+                    late_line[i] = line;
+                if (!(v & bits[i]) && (m & bits[i]))
+                    early[i]++;
+            }
+            if ((m ^ v) & ~0x80F8u)
+                other++;
+            if ((m & 0x40u) && dcs_queued() == 0)
+                orphan++;
+            break;
+        }
+        default: {
+            int i = 0;
+            while (i < 4 && kinds[i] != cmd)
+                i++;
+            if (i == 4)
+                die("dcsreplay: an unknown event kind", buf);
+            uint32_t m = replay_ioctl(cmd, REPLAY_BUF) & 0xFFFFu;
+            total[i]++;
+            if (m == v) {
+                matched[i]++;
+            } else if (!bad_line[i]) {
+                bad_line[i] = line;
+                got[i] = m;
+                want[i] = v;
+            }
+            if (cmd == 0x690E && in_handler) {
+                /* the handler's FIFO writes come after its first INTSTAT read */
+                for (uint32_t n = 0; n < fifo; n++)
+                    mem_w32(ram, &cpu, 0xB3000000u, 0);
+                printf("dcsfifo %" PRIu64 "\n", line);
+                in_handler = 0;
+            }
+        }
+        }
+        prev_fed = line;
+        for (; raises < dcs_ip3_raises(); raises++)
+            printf("dcsraise %" PRIu64 "\n", line);
+    }
+    if (ferror(f))
+        die("dcsreplay: read error", path);
+    fclose(f);
+    for (int i = 0; i < 4; i++)
+        printf("dcsread %04" PRIX32 " %" PRIu64 " %" PRIu64 " %" PRIu64 " %04" PRIX64
+               " %04" PRIX64 "\n", kinds[i], matched[i], total[i], bad_line[i], got[i], want[i]);
+    printf("dcsstate %" PRIu64 " %" PRIu64 " %" PRIu64 "\n", st_ok, st_total, st_bad);
+    for (int i = 0; i < 3; i++)
+        printf("dcsbit %04" PRIX32 " %" PRIu64 " %" PRIu64 " %" PRIu64 "\n", bits[i], late[i],
+               early[i], late_line[i]);
+    printf("dcsother %" PRIu64 "\ndcsorphan %" PRIu64 "\ndcsdata %" PRIu64 "\n", other, orphan,
+           dcs_data_words());
 }
 
 int main(void)
@@ -265,6 +408,15 @@ int main(void)
             printf("counts %" PRIu32 " %" PRIu32 " %" PRIu64 " %" PRIu64 "\n",
                    voodoo_reg_writes(reg), voodoo_alt_writes(reg), voodoo_tex_writes(),
                    sndfifo_writes());
+        } else if (strcmp(key, "dcs") == 0) {
+            printf("dcs %d %" PRIu64 " %" PRIu32 " %08" PRIX32 "\n", dcs_queued(),
+                   dcs_data_words(), dcs_ip3_raises(), machine.cause_ip);
+        } else if (strcmp(key, "dcsreplay") == 0) {
+            static char path[1024];
+            uint64_t entry;
+            word(path, sizeof path);
+            entry = dec();
+            dcs_replay(path, entry, (uint32_t)dec());
         } else {
             die("bad input: unknown command", key);
         }

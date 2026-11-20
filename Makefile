@@ -56,10 +56,11 @@ LOADER_SRCS := $(addprefix $(ROOT)/runtime/loader/,slots.c fd.c dev_file.c dev_c
                dev_cmos.c dev_pic.c dev_timer.c dev_ioasic.c dev_sysctrl.c diskslots.c)
 LOADER_OBJS := $(patsubst $(ROOT)/runtime/%.c,$(BUILD)/runtime/%.o,$(LOADER_SRCS))
 # the bus and the hardware GAME.EXE touches directly: the Voodoo (registers, frame buffer,
-# texture unit), the gun, the sound FIFO and 0x17F00000 (runtime/hw/hw.h), for the runtime;
-# they need LOADER_OBJS (cmos_byte) and MACHINE_OBJS
+# texture unit), the gun, the sound FIFO and 0x17F00000, the DCS sound board's responder
+# (runtime/hw/hw.h), for the runtime; they need LOADER_OBJS (cmos_byte, ld_stop) and
+# MACHINE_OBJS
 HW_SRCS := $(ROOT)/runtime/core/bus.c $(addprefix $(ROOT)/runtime/hw/,voodoo_null.c \
-           voodoo_fb.c voodoo_tmu.c gun.c misc.c)
+           voodoo_fb.c voodoo_tmu.c gun.c misc.c dcs_stub.c)
 HW_OBJS := $(patsubst $(ROOT)/runtime/%.c,$(BUILD)/runtime/%.o,$(HW_SRCS))
 GENERATED_SRCS := $(sort $(wildcard $(GENERATED)/funcs_*.c)) $(GENERATED)/func_table.c
 GENERATED_OBJS := $(patsubst $(GENERATED)/%.c,$(BUILD)/generated/%.o,$(GENERATED_SRCS))

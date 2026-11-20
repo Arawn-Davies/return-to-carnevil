@@ -70,8 +70,8 @@ uint8_t cmos_byte(uint32_t offset);
 void ioasic_set_inputs(const uint16_t ports[4]);
 
 /* dcs_ioctl: the `ioasic:` sound-board commands 0x6906 to 0x690A and 0x6911 (section 3),
- * with the guest state of the call. Defined in dev_ioasic.c as a stop until the sound-board
- * task replaces the definition. Returns the ioctl's result. */
+ * with the guest state of the call: the sound board's responder, runtime/hw/dcs_stub.c.
+ * Returns the ioctl's result. */
 int dcs_ioctl(cpu_t *c, uint32_t cmd, uint32_t arg);
 
 /* --- between runtime/loader's files ------------------------------------------------------ */

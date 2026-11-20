@@ -33,7 +33,7 @@ LOADER_SOURCES = [os.path.join(LOADER_DIR, f) for f in (
     "dev_ioasic.c", "dev_sysctrl.c", "diskslots.c")]
 HW_SOURCES = [os.path.join(CORE, "bus.c")] + \
              [os.path.join(HW_DIR, f) for f in ("voodoo_null.c", "voodoo_fb.c", "voodoo_tmu.c",
-                                                 "gun.c", "misc.c")]
+                                                 "gun.c", "misc.c", "dcs_stub.c")]
 SOURCES = [os.path.join(CORE, f) for f in ("call.c", "fpu.c", "clock.c", "irq.c", "exc.c")] + \
           [os.path.join(REPO, "runtime", "interp", "interp.c")] + \
           [os.path.join(DISK_DIR, f) for f in ("image.c", "fs.c", "sha256.c")] + \
@@ -657,10 +657,7 @@ class LoaderTest(LoaderTestCase):
         self.assertEqual(out.m()["intctl"], 0x2345)
         self.assertEqual(err, f"carnevil: ioasic: ioctl 0x6905 (COIN register write) 0x10, "
                               f"ra 0x{CALLER_RA:08X}\n")
-        for cmd in (0x6906, 0x6907, 0x6908, 0x6909, 0x690A, 0x6911):
-            with self.subTest(cmd=hex(cmd)):
-                self.stops([ioctl(4, cmd, BUF)], f"sound board ioctl 0x{cmd:04X} is not "
-                           "implemented yet")
+        # 0x6906 to 0x690A and 0x6911 go to the sound board's responder (tests/test_dcs.py)
         for cmd in (0x6904, 0x690B, 0x690C, 0x690D, 0x6912):
             with self.subTest(cmd=hex(cmd)):
                 self.stops([ioctl(4, cmd, BUF)], f"0x{cmd:04X}", f"ra 0x{CALLER_RA:08X}")
