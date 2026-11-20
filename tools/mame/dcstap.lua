@@ -18,7 +18,10 @@
 --   DT W  0x80006CDC, the write path: k = a1 (6 SOUNDCTL 0x6906, 8 SOUNDOUT 0x6908, 11
 --         SOUNDIN 0x6911, F INTCTL 0x690F) and a2 (the argument; the register gets a2 & 0xFFFF)
 --   DT E  every return of 0xEEEE (v0 & 0xFFFF) from the game's DCS routines, at their `jr ra`
---         (v0 is final there: every delay slot is a nop): the jr's address, ra, sp
+--         (v0 is final there: every delay slot is a nop): the jr's address, ra, sp. The
+--         condition is the low half only, so a routine returning a real value whose low half
+--         is 0xEEEE would be logged as a timeout too; nothing tells the two apart here (run A
+--         logged no DT E line at all)
 --   DT I3 the general exception vector 0x80000180 when Cause has IP3 (0x800): Cause, EPC,
 --         and debugger reads (no side effects) of IOASIC INTSTAT (bus word 7) and INTCTL (8)
 --   DT H3 0x8013F678, the game's IP3 (line 3) handler: a0

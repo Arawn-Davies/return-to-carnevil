@@ -426,7 +426,11 @@ tLOD and texBaseAddr, 1 trexInit1 write, 45,330 vdstatus reads and 399,314 textu
 This run did not record when these accesses happened or which program made them. Inferred:
 they are the boot ROM's POST program before the hand-off, which does the Glide/Voodoo set-up
 (`boot-handoff.md`); the loader has no Voodoo access in the static census, and slot 0x110
-only maps the board through PCI configuration.
+only maps the board through PCI configuration. Note added 2026-11-20: this inference is
+probably wrong. In M2 the port, which runs GAME.EXE alone, makes exactly the texture-memory
+and trexInit1 write totals that this tap counts only once these "outside GAME.EXE" writes are
+added to the game's own, so they are the game's, made through code this tap did not
+attribute to GAME.EXE (inferred; `M2-report.md`, "The Voodoo's write counts").
 
 **Reconciliation.** These are the static census figures before the holder rule was made
 sound (fix round 1). The static census as it now stands lists 6 registers, all of them also
@@ -617,8 +621,11 @@ runtime's sink:
   and retrace). In the captures the first alternate-map write is a DMA record at 11.126 s
   after power-on (measured, `dma0.txt`); CPU code makes no alternate-map write in
   `voodoo-ramp.txt`. The retrace length is measured: in the 148 frames from 6.58 s to
-  9.30 s, which the game polled densely, the bit stayed set at least 251,354 ns (first to
-  last set read) and at most 254,120 ns (the clear reads either side). Those frames were
+  9.30 s, which the game polled densely, the bit stayed set at least 251,727 ns (the longest
+  span from a frame's first to its last set read; the shortest such span is 251,354 ns, which
+  bounds nothing) and at most 254,120 ns (the shortest span between the clear reads either
+  side of a frame's set reads; corrected 2026-11-20, the whole-branch review's open item).
+  Those frames were
   18,476,186 to 18,476,194 ns apart. Both agree with MAME's model of the card's timing:
   4 rows of 63,492 ns (253,968 ns) in a frame of 291 rows at 15,750 Hz (18,476,190.5 ns).
   No status read before the game programs the video timing at 6.5675 s has bit 6 set
@@ -971,7 +978,7 @@ fastfillCMD and 7,159 nopCMD.
 - With the game's values, written at 6.567466 s, that gives:
   - a frame of 291 rows at 15,750 Hz, 18,476,190.476 ns. Measured: 18,476,186 to 18,476,194
     ns between retraces.
-  - a retrace of 4 rows, 253,968 ns. Measured: 251,354 to 254,120 ns.
+  - a retrace of 4 rows, 253,968 ns. Measured: 251,727 to 254,120 ns.
   - a first retrace at 6,580,768,588 ns. Measured: between the reads at 6,580,767,773 and
     6,580,768,713 ns.
 - The residual phase error against the capture is within the reads' spacing. Every status

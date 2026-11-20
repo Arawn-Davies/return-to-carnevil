@@ -266,7 +266,8 @@ int ctx_count(void)
 #define TASK_HOST_STACK (1u << 20)
 #define TASKS_MAX 64 /* MAME saw at most 6 tasks alive at once */
 
-/* The live contexts by guest record. Changed only by the context holding the baton. */
+/* The live contexts by guest record, at most TASKS_MAX (a first run that would need one
+ * more stops, naming the record). Changed only by the context holding the baton. */
 static struct {
     uint32_t record;
     task_ctx *ctx;

@@ -452,8 +452,10 @@ reached as `snd:`, `con:` and `pci:` (read).
   0x1000, then UARTIN, bus word 11); 0x7401 sets or clears bit 0 of 0x800B6E50; 0x7405
   returns 0; 0x7406 stores 1 if input is waiting, else 0 (the loader's own "key hit" test on
   fd 0, 0x800067C8). The game writes its debug messages to fd 1 (for example 0x801447B4).
-  **Stand-in: write to the host's standard error, return n; read returns 0 bytes when
-  non-blocking and never blocks; 0x6602 returns 0.**
+  **Stand-in: write to the host's standard output (and to the runtime's trace), return n;
+  read returns 0 bytes when non-blocking and never blocks; 0x6602 returns 0.** (This said
+  standard error until 2026-11-20; the stand-in has always written standard output, as its
+  brief asked.)
 - **cmos (fd 3; read).** Position word 0x80014D78 = the KSEG1 address of the current byte's word
   (0xB6100000 at the hand-off, dump). Read copies n bytes from position, position + 4, ... and
   returns n; write first writes 1 to the CMOS write enable (0x17000000) before every byte and
@@ -945,7 +947,7 @@ The code is the instruction word at EPC shifted right 6.
 - **0x090 read(fd, buf, n):** -1 for a bad fd; files: 0 if n % 4 ≠ 0, else min(n, remaining)
   bytes copied and returned, 0xFFFFDBAE at end of file; cmos: n clamped, bytes from position,
   position unchanged; console: non-blocking, 0 when no input.
-- **0x0C0 write(fd, buf, n):** -1 for a bad fd; console: write to host stderr, return n; cmos:
+- **0x0C0 write(fd, buf, n):** -1 for a bad fd; console: write to host stdout, return n; cmos:
   store the bytes, return n (position unchanged); files: n % 4 ≠ 0 → 0, else write and return
   n, or -1.
 - **0x0C8 ioctl(fd, cmd, arg):** -1 for a bad or free fd; 0x6601/0x6603/0x6604 flag handling as
@@ -1054,17 +1056,21 @@ file in `mame/m2-facts/` on the share.
    With bit 0x40 forced clear (a breakpoint action in the loader's read path rather than a
    tap) the game timed out 13 times, printed `main_init_sound(): ERROR initializing sound
    system.` with three retries and `Aborting` at each of its two sound loads, sent no sound
-   data, and still ran attract mode (the same seven tasks, attract-mode snapshots to 150 s). No global flag receiving the 0xEEEE results was found (read, in part).
+   data, and still ran attract mode (the same seven tasks, attract-mode snapshots to 150 s).
+   No global flag receiving the 0xEEEE results was found (read, in part).
 4. **Scheduler loop timing.** Breakpoint on 0x80151C58 to 0x80151C7C (the VBLANK wait) logging
    the spin counter 0x801A36CC at exit, for 600 frames. Shows how close the wait comes to its
    100,000,000 limit and therefore how late a missing VBLANK reboots the game.
    **Answer (measured, `spin.txt`):** in the 600 frames from the first pass (160 passes) the
    counter at the end of the wait was at most 373,548 (median 219,574); over all 3,580 passes
-   of the 150 s at most 376,317, 0.38% of the limit. With `task-switch.md`'s mean wait of 5.19
-   million cycles at a median of about 216,000 spins, one spin takes about 24 cycles in MAME,
-   so 100,000,000 spins are about 2.4 × 10^9 cycles, **about 16 s at 150 MHz**: a VBLANK that
-   stops turns into a reboot only after some 16 s of spinning (inferred; the real R5000's spin
-   rate may differ).
+   of the 150 s at most 376,317, 0.38% of the limit. `task-switch.md` measured a mean wait of
+   5.19 million cycles (median 4.76 million) per pass in run A, and `spin.txt` a mean of
+   235,464 spins (median 215,767) per wait: mean over mean and median over median both give
+   about 22 cycles per spin in MAME, so 100,000,000 spins are about 2.2 × 10^9 cycles,
+   **about 15 s at 150 MHz**: a VBLANK that stops turns into a reboot only after some 15 s of
+   spinning (inferred: the cycles and the spins come from two MAME runs of the same attract
+   mode, and the real R5000's spin rate may differ). Until 2026-11-20 this said 24 cycles and
+   16 s, from a mean of cycles divided by a median of spins.
 5. **Disk completion context.** Breakpoints on 0x800E7CF8 (movie callback) and 0x80149B40
    (wake) logging Status, sp and ra, and on 0x80149A44 (wait). Confirms that they run at
    interrupt level and whether wait is ever entered in attract mode; and whether wake is safe

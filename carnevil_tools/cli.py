@@ -129,8 +129,11 @@ def _functions(path, out, manual_path=None):
     print(f"unreached {len(res.unreached)} ranges, {gap} bytes, {100 * gap / span:.2f}% of the text")
     print(f"rejected pointers into unreached code {len(notes.rejected_pointers)}: "
           f"{_hex_list(notes.rejected_pointers)}")
-    jumps = " ".join(f"0x{a:08X}->0x{t:08X}" for a, t in notes.jumps_out) or "-"
-    print(f"j out of its function, not taken as a tail call {len(notes.jumps_out)}: {jumps}")
+    # the host-switch points (listed above) are such jumps by design, not something to look at
+    out = [(a, t) for a, t in notes.jumps_out if a not in res.host_switches]
+    jumps = " ".join(f"0x{a:08X}->0x{t:08X}" for a, t in out) or "-"
+    print(f"j out of its function, not taken as a tail call (host-switch points left out) "
+          f"{len(out)}: {jumps}")
     print(f"prologue starts withdrawn {len(notes.withdrawn)}: {_hex_list(sorted(notes.withdrawn))}")
     print(f"control transfers out of the image {len(notes.bad_targets)}, calls out of the image "
           f"{len(notes.external_calls)}, control transfers in delay slots {len(notes.cti_in_delay_slot)}")

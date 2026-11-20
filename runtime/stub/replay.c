@@ -10,9 +10,8 @@
  * The program loads the before-state, calls the function through recomp_lookup (it must be
  * recompiled) with no interrupt delivered (rt_tick only reloads slice), and compares every
  * general register, hi, lo, the 32 FP halves, FCSR with its condition codes, and all 8 MB of
- * RAM with the after-state. It
- * prints each difference (registers by name with both values; RAM as address ranges and byte
- * counts only) and exits 1 on any. An rt_loader, rt_break, rt_host_switch, rt_fp_trap or
+ * RAM with the after-state. It prints each difference (registers by name with both values;
+ * RAM as address ranges and byte counts only) and exits 1 on any. An rt_loader, rt_break, rt_host_switch, rt_fp_trap or
  * interpreter entry during the call is printed and is a difference too.
  *
  * The first bus access ends the run instead: the program prints "bus read ADDR size N" or

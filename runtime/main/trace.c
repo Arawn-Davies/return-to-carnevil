@@ -44,6 +44,9 @@
  *   T count sndfifo N            sound FIFO writes
  *   T count dcs_data N           words the sound board took as block data
  *   T alive RECORD FN            each task on the game's list at the end
+ * Those are every kind the trace has. tests/test_boot.py also parses a "tolerated REQUEST"
+ * kind, for a request config/runtime.expected.toml would tolerate; nothing writes one, since
+ * that list is empty and the runtime tolerates no request.
  *
  * The task list (docs/analysis/task-switch.md, "The mechanism"): records linked from the head
  * word 0x801A3110 through +0, the task function at +0x24. It is read at every host switch and

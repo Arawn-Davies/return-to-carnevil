@@ -498,7 +498,9 @@ game data, `test_every_file_matches_the_python_reader`, `test_write_round_trip`,
   next block at byte 4092, 0 ends the directory. Allocation is first fit; the date and time it
   writes are a constant, not the loader's clock. A damaged chain or directory is bounded and
   refused rather than followed. 1,523 files on partition 1 (static: counted by the C and the
-  Python readers alike). Its writes are ordered so that a kill between any two leaves a
+  Python readers alike). It does not update the disk's own checksum table `FILESYS.CHK` when
+  the game writes a file, so a file the game rewrites no longer matches its entry there;
+  whether the board's loader updates it is not read. Its writes are ordered so that a kill between any two leaves a
   consistent file system (finding I5): when blocks are allocated, the chain table is written
   before the directory entry or link that reaches them; when they are freed, the entry is
   written before the chain table releases them. The worst a kill leaves is allocated blocks

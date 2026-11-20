@@ -775,8 +775,16 @@ class GameDataTests(unittest.TestCase):
         self.assertTrue(self.lbas)
         self.assertTrue(all(self.part_start <= lba < self.part_start + 193000
                             for lba in self.lbas))
-        self.assertEqual(self.raw_sectors, self.split_sectors)
-        self.assertNotEqual(self.raw_sectors, self.overlay_sectors)
+        # every sector the overlay holds is, in the raw image, still the original (the split
+        # partition's copy), sector by sector ...
+        self.assertEqual(len(self.raw_sectors), len(self.lbas))
+        for lba, raw, split in zip(self.lbas, self.raw_sectors, self.split_sectors):
+            self.assertEqual(raw, split, f"sector {lba}")
+        # ... while the overlay holds new contents for some of them (a write can leave a
+        # sector as it was, so not necessarily for all)
+        changed = [lba for lba, raw, new in zip(self.lbas, self.raw_sectors,
+                                                self.overlay_sectors) if raw != new]
+        self.assertTrue(changed, "no overlay sector differs from the raw image's")
 
 
 if __name__ == "__main__":

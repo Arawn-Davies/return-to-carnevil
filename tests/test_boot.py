@@ -49,7 +49,9 @@ SUPPORTED_SHA256 = "f9455ce801d2e5c26a7b6e00eff88efa573deb7ab15fa29f9c90100623bf
 ATTRACT = 0x800CB084  # the `attract` task's function (task-switch.md, section 1)
 RUN_SECONDS, SHORT_SECONDS = 150, 20
 RUN_TIMEOUT, SHORT_TIMEOUT = 3600, 1200
-EXCEPTION_STACK = (0x800C0000, 0x800C1400)  # the loader's exception stack (loader-calls.md)
+# sp of MAME's interrupt-time loader calls, on the loader's exception stack: 0x800C1320 to
+# 0x800C1368 inclusive (loader-calls.md, measured)
+EXCEPTION_STACK = (0x800C1320, 0x800C1368)
 A = vectors.assemble
 A0, A1, A2 = 4, 5, 6
 
@@ -581,10 +583,11 @@ class BootTest(unittest.TestCase):
         self.assertEqual(self.trace().console, mame_console())
 
     def test_opens_match_mame(self):
+        """Every open of MAME's 150 s run (193), in order, with the same mode and result, and
+        no other: the port's 150 s make exactly the same opens."""
         port, mame = self.trace().opens, mame_opens()
-        common = min(len(port), len(mame))
-        self.assertEqual(port[:common], mame[:common])
-        self.assertGreaterEqual(len(port), 180, f"{len(port)} of MAME's {len(mame)} opens")
+        self.assertEqual(len(mame), 193)
+        self.assertEqual(port, mame)
 
     def test_tasks_match_mame(self):
         trace = self.trace()
@@ -593,16 +596,20 @@ class BootTest(unittest.TestCase):
 
     def test_first_loader_calls_match_mame(self):
         """The first 400 loader calls of each side, those outside interrupts (in_irq 0 here;
-        on MAME's side sp outside the loader's exception stack), agree in order on the slot,
-        the arguments its signature has and v0. The shorter list is compared whole."""
+        on MAME's side sp outside the loader's exception stack, 0x800C1320 to 0x800C1368 in
+        every interrupt-time call MAME recorded: loader-calls.md), agree in order on the
+        slot, the arguments its signature has and v0. The two sides take their interrupts at
+        different points, so their first 400 calls hold different numbers of interrupt-time
+        calls and the two lists outside interrupts can differ in length; the shorter is then
+        a prefix of both sequences and is compared whole. Both are 389 long (measured)."""
         port = [compared(slot, (a0, a1, a2, a3), v0)
                 for _n, slot, irq, a0, a1, a2, a3, _sp, v0 in self.trace().loader[:400]
                 if not irq]
         mame = [compared(slot, (a0, a1, a2, a3), v0)
                 for _n, slot, a0, a1, a2, a3, sp, v0 in mame_loader_first()[:400]
-                if not EXCEPTION_STACK[0] <= sp < EXCEPTION_STACK[1]]
+                if not EXCEPTION_STACK[0] <= sp <= EXCEPTION_STACK[1]]
         common = min(len(port), len(mame))
-        self.assertGreater(common, 300, (len(port), len(mame)))
+        self.assertGreaterEqual(common, 389, (len(port), len(mame)))
         for i, (p, m) in enumerate(zip(port[:common], mame[:common])):
             self.assertEqual(p, m, f"call {i} outside interrupts (slot, args, v0)")
 

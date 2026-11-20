@@ -207,8 +207,9 @@ class FrameBufferTest(HwTestCase):
 
     def test_textured_triangle(self):
         """A point-sampled RGB 565 texel passed through by the texture combine is the pixel:
-        S steps one texel a pixel with dSdX = 1.0; a texel never written marks its pixel; with
-        trexInit1 bit 18 the TMU sends its configuration word (0x11 in blue) instead."""
+        S steps one texel a pixel with dSdX = 1.0; a texel never written marks its pixel, and
+        reading that pixel back stops ("texel not written since reset"); with trexInit1 bit
+        18 the TMU sends its configuration word (0x11 in blue) instead."""
         base = (setup() + fill(0) + [reg(TEXMODE, RGB565_LOCAL), reg(TLOD, 0), reg(TEXBASE, 0),
                                      wr(4, TEX, 0x22221111), reg(0x054, 0x40000)])
         draw = triangle([(0, 0), (0x40, 0), (0, 0x40)], fbz=0x200, colorpath=0x08000001)

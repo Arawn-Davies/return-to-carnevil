@@ -7,8 +7,9 @@
  * 0x13FFFFEC for a run-out one-shot, wrapping with the period in timer mode. Here the
  * counters run on the virtual clock (vclock_now), all in 64 bits up to the final 32-bit
  * value. A stopped timer holds the value of the moment it was stopped (section 3, inferred);
- * a timer never started since loader_reset has no documented value. Timer 0 is the loader's own 100 ms tick and is not the game's (section 7). Open,
- * close, read and write are the shared return-0 routine (section 2: "only ioctl").
+ * a timer never started since loader_reset has no documented value. Timer 0 is the loader's
+ * own 100 ms tick and is not the game's (section 7). Open, close, read and write are the
+ * shared return-0 routine (section 2: "only ioctl").
  */
 #include "loader.h"
 #include "machine.h"
