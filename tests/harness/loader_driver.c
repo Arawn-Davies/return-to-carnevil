@@ -3,7 +3,7 @@
  * exceptions), the interpreter and the disk library (runtime/disk/disk.h).
  *
  * One command per line. Numbers are hexadecimal, except times in nanoseconds (decimal):
- *   reset                machine_reset, loader_reset; RAM and cpu_t zeroed, FCSR 0
+ *   reset                machine_reset, loader_reset, hw_reset; RAM and cpu_t zeroed, FCSR 0
  *   img RAW OVERLAY      img_open (OVERLAY - for none); "img 0", or "img -1 MESSAGE"
  *   mem ADDR WORD        a RAM word
  *   str ADDR TEXT        TEXT and a NUL into RAM at ADDR (byte by byte); TEXT "-" is empty
@@ -24,7 +24,8 @@
  *                        "now NOW"
  *   run PC               interp_run from PC, then "ran"
  *   desc FD              "desc FLAGS" of descriptor FD (ld_desc)
- *   state                "m STATUS CAUSE_IP INTCTL NOW FCSR VBLANK_PERIOD"
+ *   wr ADDR WORD         mem_w32 at ADDR (a device's register through the bus)
+ *   state                "m STATUS CAUSE_IP INTCTL NOW FCSR VBLANK_ENABLE"
  *   handlers             "handlers LINE0 .. LINE7 GT4 FPE0 .. FPE5 BREAK7 BREAK6 GTMASK"
  *   atstop               rt_at_stop of a function that prints "at_stop" on stderr
  * The bus is the runtime's (runtime/core/bus.c, with runtime/hw): a guest pointer outside RAM
@@ -40,6 +41,7 @@
 #include <string.h>
 
 #include "disk.h"
+#include "hw.h"
 #include "loader.h"
 #include "machine.h"
 
@@ -144,6 +146,7 @@ static void reset(void)
 {
     machine_reset();
     loader_reset();
+    hw_reset();
     memset(ram, 0, RAM_SIZE);
     memset(&cpu, 0, sizeof cpu);
     rt_set_fcsr(&cpu, 0);
@@ -179,6 +182,9 @@ int main(void)
         } else if (strcmp(key, "mem") == 0) {
             uint32_t addr = hex(), w = hex();
             memcpy(ram_at(addr, 4), &w, 4);
+        } else if (strcmp(key, "wr") == 0) {
+            uint32_t addr = hex(), w = hex();
+            mem_w32(ram, &cpu, addr, w);
         } else if (strcmp(key, "str") == 0) {
             uint32_t addr = hex();
             size_t n;
@@ -257,7 +263,7 @@ int main(void)
         } else if (strcmp(key, "state") == 0) {
             printf("m %08" PRIX32 " %08" PRIX32 " %08" PRIX32 " %" PRIu64 " %08" PRIX32
                    " %" PRIu64 "\n", m_status(), machine.cause_ip, machine.intctl,
-                   vclock_now(&cpu), rt_get_fcsr(&cpu), machine.vblank_period);
+                   vclock_now(&cpu), rt_get_fcsr(&cpu), (uint64_t)machine.vblank_enable);
         } else if (strcmp(key, "handlers") == 0) {
             fputs("handlers", stdout);
             for (int i = 0; i < 8; i++)

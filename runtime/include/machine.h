@@ -58,10 +58,6 @@ void vclock_cancel(void (*fn)(void *), void *arg);
  * open question 1). */
 #define INTCTL_AT_ENTRY 0x4000u
 
-/* VBLANK until M3 derives it from the Voodoo's timing registers: 1e9 / 54.15 ns, the
- * refresh rate of MAME's screen. */
-#define VBLANK_PERIOD_NS 18467220u
-
 /* irq_raise, irq_clear: the level of CPU interrupt line IP2 to IP6 (Cause bit 8 + ip). A
  * line raised twice before it is served is one pending bit. Delivery happens only in rt_tick,
  * when Status has IE set and EXL clear and a pending line is unmasked (Status IM).
@@ -81,7 +77,8 @@ void m_status_set(uint32_t set, uint32_t clear);
 /* The handler tables, filled as the loader's slots fill them (section 1):
  * - irq_set_line (slot 0x200): line 0 to 7 by the loader's line map, IP6 -> line 0, IP2 ->
  *   1, IP4 -> 2, IP3 -> 3, IP5 -> 4; a line no IP maps to does nothing. A non-zero fn unmasks
- *   the line and sets IE, zero masks it; for line 0 either acknowledges VBLANK.
+ *   the line and sets IE, zero masks it; for line 0 either acknowledges VBLANK, and fn sets
+ *   or clears the board's VBLANK enable (interrupt enable 0x17300000 bit 7).
  * - irq_set_gt (slot 0x1E0): GT64010 cause bit 0 to 31. A non-zero fn clears the cause bit
  *   and enables it in CPU_MASK; zero disables and clears it (except bit 8, the loader's
  *   timer tick, which stays enabled). gt_cause_raise sets a cause bit; IP2 follows
@@ -107,8 +104,10 @@ void exc_set_break_hook(int which, uint32_t fn);
  * else. An exception while EXL is set stops (the board reboots). */
 uint32_t exc_raise(uint8_t *ram, cpu_t *c, int code, uint32_t epc);
 
-/* vblank_start: from now on, VBLANK (IP6) is raised every period_ns. */
-void vblank_start(uint64_t period_ns);
+/* vblank_raise: the start of the Voodoo's vertical retrace, which is the board's VBLANK
+ * source (runtime/hw/voodoo_null.c drives it from the card's video timing): raises IP6 if
+ * the board's VBLANK enable is set (loader-services.md section 1, slot 0x200). */
+void vblank_raise(void);
 
 /* --- stopping (exc.c) ------------------------------------------------------------------- */
 
@@ -136,7 +135,7 @@ typedef struct machine {
     struct vclock_event events[VCLOCK_MAX_EVENTS]; /* sorted by (t, seq) */
     int n_events;
     uint64_t event_seq;
-    uint64_t vblank_period, vblank_next;
+    int vblank_enable;      /* interrupt enable 0x17300000 bit 7: VBLANK reaches IP6 */
     /* CP0 and the board's interrupt state */
     uint32_t status;
     uint32_t cause_ip;      /* the pending IP bits, as Cause holds them (bits 8 to 15) */

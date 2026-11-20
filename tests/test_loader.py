@@ -21,6 +21,7 @@ from tests import charness
 from tests.gamedata import requires_file, work_path
 from tests.test_clock_irq import LOOP, asm, call_probe, li, place, ret
 from tests.test_disk_c import fs_image, fs_partition, pattern
+from tests import voodoo_timing as vt
 
 REPO = charness.REPO
 CORE = os.path.join(REPO, "runtime", "core")
@@ -31,7 +32,8 @@ LOADER_SOURCES = [os.path.join(LOADER_DIR, f) for f in (
     "slots.c", "fd.c", "dev_file.c", "dev_con.c", "dev_cmos.c", "dev_pic.c", "dev_timer.c",
     "dev_ioasic.c", "dev_sysctrl.c", "diskslots.c")]
 HW_SOURCES = [os.path.join(CORE, "bus.c")] + \
-             [os.path.join(HW_DIR, f) for f in ("voodoo_null.c", "gun.c", "misc.c")]
+             [os.path.join(HW_DIR, f) for f in ("voodoo_null.c", "voodoo_fb.c", "voodoo_tmu.c",
+                                                 "gun.c", "misc.c")]
 SOURCES = [os.path.join(CORE, f) for f in ("call.c", "fpu.c", "clock.c", "irq.c", "exc.c")] + \
           [os.path.join(REPO, "runtime", "interp", "interp.c")] + \
           [os.path.join(DISK_DIR, f) for f in ("image.c", "fs.c", "sha256.c")] + \
@@ -49,7 +51,6 @@ V0, A0, A1, A2, T0, SP, RA = 2, 4, 5, 6, 8, 29, 31
 
 STATUS = 0x30010401
 IM3, IM6 = 0x800, 0x4000
-VBLANK_PERIOD_NS = 18467220
 NS_PER_CHECK = 100
 EOF = 0xFFFFDBAE
 ENOENT = 0xFFFFDBB7
@@ -464,7 +465,8 @@ class LoaderTest(LoaderTestCase):
 
     def test_slots_from_handler(self):
         """An ioctl issued while EXL is set, from a synthetic line-0 handler registered
-        through slot 0x200, works and delivers nothing: one VBLANK, one handler call; the
+        through slot 0x200, works and delivers nothing: one VBLANK (the Voodoo's first
+        retrace once the game's video timing is written at time 0), one handler call; the
         INTCTL read inside sees bit 14 cleared (the dispatcher clears it while handling)."""
         handler = asm(A("addiu", rt=SP, rs=SP, imm=-8), A("sw", rt=RA, base=SP, imm=0),
                       A("ori", rt=A0, rs=0, imm=4), A("ori", rt=A1, rs=0, imm=0x6910),
@@ -477,15 +479,17 @@ class LoaderTest(LoaderTestCase):
                       call_probe(1),
                       A("lw", rt=RA, base=SP, imm=0), A("addiu", rt=SP, rs=SP, imm=8),
                       ret(1))
-        loops = VBLANK_PERIOD_NS // NS_PER_CHECK + 20000
-        out, _ = self.drive(place(MAIN, LOOP) + place(H, handler)
+        first = vt.to_ns(vt.retrace_after(vt.ENTRY_PS)[0])
+        loops = first // NS_PER_CHECK + 20000
+        out, _ = self.drive(vt.timing_writes(lambda size, a, v: f"wr {a:X} {v:X}")
+                            + place(MAIN, LOOP) + place(H, handler)
                             + [f"r {SP:X} 80700000", call(0x200, 0, H), f"r {T0:X} {loops:X}",
                                f"run {MAIN:08X}", f"dump {BUF:08X} 2", f"dump {BUF2:08X} 1",
                                "state"])
         self.assertEqual(len(out.probes()), 1)
         [p] = out.probes()
         self.assertTrue(p["status"] & 2)  # EXL
-        self.assertTrue(VBLANK_PERIOD_NS <= p["now"] < VBLANK_PERIOD_NS + 1000)
+        self.assertTrue(first <= p["now"] < first + 1000)
         intctl, elapsed = out.dumps()[0]
         self.assertEqual(intctl, 0)
         self.assertLess(elapsed, 1000)
@@ -553,28 +557,39 @@ class LoaderTest(LoaderTestCase):
         self.assertEqual((h["break7"], h["break6"]), (FN, FN + 4))
 
     def test_irq_set_handler(self):
-        """irq_set_handler (slot 0x200): line 0 starts VBLANK once (a second registration
-        does not restart it) and ORs IM6 and IE into Status, line 3 IM3; v0 is 8; fn 0 masks
-        the line again; a line no IP maps to stops."""
+        """irq_set_handler (slot 0x200): line 0 sets the board's VBLANK enable (a second
+        registration changes nothing) and ORs IM6 and IE into Status, line 3 IM3; v0 is 8;
+        fn 0 masks the line again. No VBLANK arrives before the Voodoo's video timing is
+        programmed, then one at each retrace start of MAME's rule (tests/voodoo_timing.py);
+        fn 0 for line 0 clears the enable, and none arrives after it; a line no IP maps to
+        stops."""
+        timing = vt.timing_writes(lambda size, a, v: f"wr {a:X} {v:X}")
         out, _ = self.drive(place(H, asm(call_probe(1), ret(1)))
                             + [call(0x200, 0, H), "state", "checks 3E8",
                                call(0x200, 0, H), call(0x200, 3, H + 0x40), "state",
-                               "handlers", f"advance {VBLANK_PERIOD_NS + 5000}",
-                               call(0x200, 3, 0), "state"])
-        self.assertEqual(out.v0s(), [8, 8, 8, 8])
+                               "handlers", "advance 40000000"] + timing
+                            + ["advance 300000000", call(0x200, 3, 0), "state",
+                               call(0x200, 0, 0), "state", "advance 600000000"])
+        self.assertEqual(out.v0s(), [8, 8, 8, 8, 8])
         ms = out.all("m")
         self.assertEqual(int(ms[0][0], 16), STATUS | IM6)
-        self.assertEqual(int(ms[0][5]), VBLANK_PERIOD_NS)
+        self.assertEqual(int(ms[0][5]), 1)
         self.assertEqual(int(ms[1][0], 16), STATUS | IM6 | IM3)
         self.assertEqual(int(ms[2][0], 16), STATUS | IM6)
+        self.assertEqual(int(ms[3][5]), 0)
         self.assertEqual(out.handlers()["line"][:4], [H, 0, 0, H + 0x40])
-        # (advance runs whole slices, so it may pass more than one period)
+        # "now" after the checks and each advance; advance runs whole slices (up to 100 ms
+        # without an event), so the first ends past 40 ms, where the timing is written
+        nows = [int(n[0]) for n in out.all("now")]
+        written = nows[1]
+        first, _, frame = vt.retrace_after(written * 1000 + vt.ENTRY_PS)
         probes = out.probes()
-        self.assertTrue(probes)
+        self.assertGreater(len(probes), 5)
         for k, p in enumerate(probes):
             self.assertEqual(p["a0"], IM6)
-            self.assertEqual(p["now"] // VBLANK_PERIOD_NS, k + 1)
-            self.assertLess(p["now"] % VBLANK_PERIOD_NS, 1000)
+            due = vt.to_ns(first + k * frame)
+            self.assertTrue(due <= p["now"] < due + 1000, (k, due, p["now"]))
+        self.assertLessEqual(probes[-1]["now"], nows[2])  # none once line 0 is cleared
         for line in (5, 8):
             with self.subTest(line=line):
                 self.stops([call(0x200, line, H)], "0x200", f"line {line}")

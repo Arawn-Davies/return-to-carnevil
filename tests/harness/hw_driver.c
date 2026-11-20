@@ -20,7 +20,12 @@
  *   advance NS           ticks as if each slice ran out until vclock_now reaches NS, then
  *                        "now NOW"
  *   checks K             K check points that do not reach 0 (slice -= K), then "now NOW"
- *   vblank               vclock_account, then vblank_start(VBLANK_PERIOD_NS)
+ *   at NS                the virtual clock set to NS (decimal, not earlier than now), with
+ *                        no events run: for replaying a capture at its recorded times; test
+ *                        only, the runtime has no such call
+ *   vsync                "vsync NEXT LEN PERIOD" (picoseconds since power-on, decimal):
+ *                        voodoo_vsync, or "vsync -" before the video timing is programmed
+ *   dropped              "dropped N0 .. N(DROP_COUNT-1)": vfb_dropped per reason
  *   state                "m STATUS CAUSE_IP GT_CAUSE GT_MASK NOW"
  *   delay N BYTES        "delay NS": dma0_delay_ns(N, BYTES), N and BYTES decimal
  *   counts REG           "counts STD ALT TEX FIFO": voodoo_reg_writes(REG),
@@ -224,9 +229,24 @@ int main(void)
         } else if (strcmp(key, "checks") == 0) {
             cpu.slice -= (int32_t)hex();
             printf("now %" PRIu64 "\n", vclock_now(&cpu));
-        } else if (strcmp(key, "vblank") == 0) {
-            vclock_account(&cpu); /* as slot 0x200 does: the first VBLANK a period from now */
-            vblank_start(VBLANK_PERIOD_NS);
+        } else if (strcmp(key, "at") == 0) {
+            /* test only, for replaying a capture at its times: the virtual clock set to NS */
+            uint64_t t = dec();
+            vclock_account(&cpu);
+            if (t < machine.now)
+                die("bad input", "at: a time before the virtual clock");
+            machine.now = t;
+        } else if (strcmp(key, "vsync") == 0) {
+            uint64_t next, len, period;
+            if (voodoo_vsync(&next, &len, &period))
+                printf("vsync %" PRIu64 " %" PRIu64 " %" PRIu64 "\n", next, len, period);
+            else
+                puts("vsync -");
+        } else if (strcmp(key, "dropped") == 0) {
+            fputs("dropped", stdout);
+            for (int i = 0; i < DROP_COUNT; i++)
+                printf(" %" PRIu32, vfb_dropped(i));
+            putchar('\n');
         } else if (strcmp(key, "state") == 0) {
             printf("m %08" PRIX32 " %08" PRIX32 " %08" PRIX32 " %08" PRIX32 " %" PRIu64 "\n",
                    m_status(), machine.cause_ip, machine.gt_cause, machine.gt_mask,

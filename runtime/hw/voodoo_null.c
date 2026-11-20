@@ -1,53 +1,100 @@
-/* voodoo_null.c: the Voodoo Graphics card as a sink: it accepts what the game writes,
- * answers the reads the game made in MAME the way MAME answered them, and draws nothing.
+/* voodoo_null.c: the Voodoo Graphics card's registers, status and command dispatch, its
+ * FIFOs and its video timing; the frame buffer and the drawing are voodoo_fb.c's, the
+ * texture unit voodoo_tmu.c's.
  *
- * docs/analysis/hardware-usage.md, "Dynamic check: Voodoo accesses" (the address layout and
- * the registers written and read) and "Measured values the runtime answers with" (every value
- * and kind below, each from mame/m2-facts/voodoo-reads.txt). The 16 MB at physical
- * 0x08000000: registers below 0x400000, the linear frame buffer (LFB) to 0x7FFFFF, texture
- * memory above. A register address is folded to its number (offset & 0x3FC, / 4); bits 10
- * to 13 select chips (0 all, 0x400 the FBI, 0x800 to 0x2000 the TMUs), bit 20 swizzles bytes
- * and bit 21 selects the alternate register map.
+ * docs/analysis/hardware-usage.md: "Dynamic check: Voodoo accesses" (the address layout and
+ * the registers written and read), "Measured values the runtime answers with" (the values
+ * the measured reads gave) and "The Voodoo model" (every rule below, each marked measured,
+ * read, inferred or from MAME's model, MAME 0.276's voodoo.cpp and screen.cpp). The 16 MB at
+ * physical 0x08000000: registers below 0x400000, the linear frame buffer (LFB) to 0x7FFFFF,
+ * texture memory above. A register address is folded to its number (offset & 0x3FC, / 4);
+ * bits 10 to 13 select chips (0 all, 0x400 the FBI, 0x800 TMU0, 0x1000 and 0x2000 TMUs the
+ * board does not have), bit 20 swizzles bytes and bit 21 selects the alternate register map,
+ * which renumbers registers 0 to 0x3F while fbiInit3 bit 0 is set.
  *
  * The registers the game read are of three kinds (the doc's list says which is which):
- * 1. storage, which reads back what was last written: fbzColorPath, fogMode, alphaMode,
+ * 1. storage, which reads back what was last executed: fbzColorPath, fogMode, alphaMode,
  *    fbzMode, lfbMode, clipLeftRight, clipLowYHighY, stipple, color0, color1, and fbiInit0 to
  *    fbiInit4, which start at the values the game first read (measured);
- * 2. status, computed: FIFOs free, idle, no swap pending, and the vertical-retrace bit
- *    for the first RETRACE_NS of each VBLANK period on the virtual clock;
+ * 2. status, computed: the PCI and memory FIFOs' free space, the busy bits while a command
+ *    runs, the vertical retrace, the displayed buffer and the swaps pending;
  * 3. fbiInit2 while PCI initEnable bit 2 is set: the DAC's latched read data (the doc's "The
- *    DAC": a dacData write stores a byte in a DAC register, or with its read flag latches
- *    one, register 5 answering by register 7's value). fbiInit3 in that state stops, for
- *    want of evidence either way.
- * Any other read stops, as does a read of a storage register never written since reset,
- * and any read after an alternate-map write (the alternate order is not decoded, so the
- * register read may have been written through it). Writes are counted per register; LFB
- * writes are accepted and every LFB read stops (the card's frame-buffer addresses alias and
- * its pipeline draws, neither modelled here: the doc's "Voodoo frame buffer reads"); texture
- * writes are counted and dropped.
+ *    DAC"). fbiInit3 in that state stops, for want of evidence either way.
+ * Any other read stops, as does a read of a storage register never written since reset.
+ *
+ * Time is the card's: picoseconds since power-on (hw.h, VOODOO_ENTRY_PS), from the virtual
+ * clock at each access. A command (triangle, fastfill, swap) keeps the card busy for its
+ * clocks at 50 MHz; register, LFB and texture writes made meanwhile wait in the PCI FIFO
+ * (and the memory FIFO behind it) and run when the card is free, in order. The card is
+ * brought up to date lazily, at each access, by running what has come due in time order:
+ * queued writes and retrace starts (where a pending swap happens). The retrace also raises
+ * the board's VBLANK interrupt (irq.c, vblank_raise) through a clock event.
  */
 #include <string.h>
 
 #include "hw.h"
 #include "machine.h"
 
-#define NREGS 256
 #define REG_STATUS 0x00u
-#define REG_FBIINIT2 (0x218u / 4)
-#define REG_FBIINIT3 (0x21Cu / 4)
+#define REG_TRIANGLE 0x20u
+#define REG_FTRIANGLE 0x40u
+#define REG_FASTFILL 0x49u
+#define REG_SWAPBUFFER 0x4Au
+#define REG_FBIINIT4 0x80u
+#define REG_BACKPORCH 0x82u
+#define REG_VIDEODIM 0x83u
+#define REG_FBIINIT0 0x84u
+#define REG_FBIINIT1 0x85u
+#define REG_FBIINIT2 0x86u
+#define REG_FBIINIT3 0x87u
+#define REG_HSYNC 0x88u
+#define REG_VSYNC 0x89u
+#define REG_DACDATA 0x8Bu
 
 #define SWIZZLE 0x100000u
 #define ALT_MAP 0x200000u
 #define CHIP_SHIFT 10
 #define CHIP_FBI 1u
-#define REG_DACDATA (0x22Cu / 4)
-#define REG_SWAPBUFFER (0x128u / 4)
+#define CHIP_TMU0 2u
 #define INIT_WRITE_ENABLE 0x1u /* PCI initEnable bit 0: fbiInit writes enabled */
+#define INIT_PCI_FIFO 0x2u     /* bit 1: writes wait in the PCI FIFO while the card is busy */
 
-/* fbiInit0 to fbiInit4 (0x210 to 0x21C, 0x200) */
+/* The card's clock: 50 MHz (MAME's NOMINAL_CLOCK), 20,000 ps a clock. */
+#define CLOCK_PS 20000ull
+#define CLOCK_HZ 50000000ull
+
+/* The FIFOs (MAME's model): the PCI FIFO holds 128 entries, two per write, one slot always
+ * free; the memory FIFO, in frame-buffer rows fbiInit4 bits 8 to 17 to bits 18 to 27, at
+ * most 131,072 entries. */
+#define PCI_FIFO_ENTRIES 128u
+#define MEM_FIFO_MAX_ENTRIES 131072u
+#define QUEUE_WRITES (PCI_FIFO_ENTRIES / 2 + MEM_FIFO_MAX_ENTRIES / 2)
+#define FB_LAST_PAGE 511u /* 2 MB of frame buffer in 4 KB pages, less one */
+
+/* fbiInit0 to fbiInit4 */
 static int is_fbiinit(uint32_t n)
 {
-    return n == 0x200u / 4 || (n >= 0x210u / 4 && n <= 0x21Cu / 4);
+    return n == REG_FBIINIT4 || (n >= REG_FBIINIT0 && n <= REG_FBIINIT3);
+}
+
+/* MAME's register table: everything waits in the FIFO but the statistics counters (0x14C to
+ * 0x15C) and the initialisation and video registers (0x200 to 0x230). */
+static int is_fifo(uint32_t n)
+{
+    return !(n >= 0x53u && n <= 0x57u) && !(n >= 0x80u && n <= 0x8Cu);
+}
+
+/* The alternate register order for registers 0 to 0x3F (MAME's s_alias_map, a fact about the
+ * card reproduced as data): each colour, Z, A, S, T and W start value followed by its d/dX
+ * and d/dY, for the fixed-point registers (0 to 0x1F) and the float ones (0x20 to 0x3F). */
+static const uint8_t ALT_ORDER[0x20] = {
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x10, 0x18, 0x09, 0x11, 0x19,
+    0x0A, 0x12, 0x1A, 0x0B, 0x13, 0x1B, 0x0C, 0x14, 0x1C, 0x0D, 0x15, 0x1D, 0x0E, 0x16,
+    0x1E, 0x0F, 0x17, 0x1F};
+
+static uint32_t alt_renumber(uint32_t n)
+{
+    return n < 0x40u ? ALT_ORDER[n & 0x1Fu] + (n & 0x20u) : n;
 }
 
 /* The DAC behind dacData (hardware-usage.md, "The DAC"): data in bits 0 to 7, the DAC register
@@ -60,17 +107,8 @@ static const struct {
     uint8_t reg7, answer;
 } DAC_REG5[] = {{0x01, 0x55}, {0x07, 0x71}, {0x0B, 0x79}};
 
-/* status as MAME returned it when idle: PCI FIFO free 0x3F, memory FIFO free 0xFFFF, no
- * busy bit, no swap pending; and the vertical-retrace bit (hardware-usage.md, "Measured
- * values ...", status) */
-#define STATUS_IDLE 0x0FFFF03Fu
-#define STATUS_RETRACE 0x40u
-/* the retrace bit's length in each frame: the middle of the measured bounds 251,354 ns and
- * 254,120 ns (same section) */
-#define RETRACE_NS 252737u
-
 /* The readable registers (kinds 1 and 2) by number, and the power-on values of fbiInit0 to
- * fbiInit4: their first reads (same section). */
+ * fbiInit4: their first reads (measured), which are also MAME's power-on values. */
 static const uint16_t READABLE[] = {0x000, 0x104, 0x108, 0x10C, 0x110, 0x114, 0x118, 0x11C,
                                     0x140, 0x144, 0x148, 0x200, 0x210, 0x214, 0x218, 0x21C};
 static const struct {
@@ -88,19 +126,70 @@ static const struct {
 #define CFG_INIT_ENABLE 0x10u   /* byte offset 0x40: initEnable */
 #define INIT_REMAP_DAC 0x4u     /* its bit 2, under which fbiInit2 read the DAC (measured) */
 
+/* The screen before the game programs the video timing: MAME's seattle.cpp, 57 Hz, 640 x 480
+ * all visible, VBLANK at every frame from power-on (measured: the capture's frame counter
+ * steps at multiples of 1/57 s since power-on, 296 x 17,543,859.6 ns at 5.1930 s). */
+#define AS_PER_S 1000000000000000000ull
+#define AS_PER_PS 1000000ull
+#define DEFAULT_HZ 57u
+#define DEFAULT_HEIGHT 480u
+#define DEFAULT_WIDTH 640u
+/* the line rates MAME's recompute_video_timing chooses between: standard, medium, VGA */
+#define LINE_HZ_STD 15750u
+#define LINE_HZ_MED 25000u
+#define LINE_HZ_VGA 31500u
+
+enum { E_REG, E_LFB, E_TEX };
+struct entry {
+    uint8_t kind, chips, size;
+    uint16_t n;
+    uint32_t off, value; /* off: into the 16 MB */
+};
+
 static struct {
-    uint32_t reg[NREGS];
-    uint8_t written[NREGS];
-    uint32_t writes[NREGS], alt_writes[NREGS];
-    int alt_used;
+    uint32_t reg[NREGS_VOODOO];
+    uint8_t written[NREGS_VOODOO];
+    uint32_t writes[NREGS_VOODOO], alt_writes[NREGS_VOODOO];
     uint64_t tex_writes;
     uint32_t cfg[64];
     int bar0_set;
     uint8_t dac[8], dac_set;   /* the DAC registers, and which have a value (bit n) */
     int latched;               /* a read has been latched since reset */
-    int swapped;               /* a swapbufferCMD write has been made since reset */
     uint8_t latch;
+    /* the command running and the FIFOs */
+    uint64_t op_end;           /* ps the running command ends, 0 when idle */
+    struct entry q[QUEUE_WRITES];
+    uint32_t q_head, q_count, n_mem; /* the oldest n_mem writes are in the memory FIFO */
+    uint32_t mem_entries;      /* the memory FIFO's size, 0 when it is off */
+    /* swaps (MAME's reg_swapbuffer_w, vblank_start, swap_buffers) */
+    uint32_t swaps_pending, vblank_count, swap_interval;
+    int swap_waiting;
+    /* the screen: VBLANK starts at ref + k * frame; its rows, its width in pixels, and the
+     * first row after the visible area */
+    uint64_t ref_ps, frame_as, frame_ps;
+    uint32_t height, width, vis_end;
+    /* the card's retrace, once the video timing is programmed */
+    int armed;
+    uint64_t retrace_next, retrace_len, irq_next;
 } v;
+
+uint32_t voodoo_reg(uint32_t n)
+{
+    return n < NREGS_VOODOO ? v.reg[n] : 0;
+}
+
+static uint64_t card_now(cpu_t *c)
+{
+    return vclock_now(c) * 1000u + VOODOO_ENTRY_PS;
+}
+
+/* The virtual time (ns) at or after a card time. */
+static uint64_t to_ns(uint64_t ps)
+{
+    return ps <= VOODOO_ENTRY_PS ? 0 : (ps - VOODOO_ENTRY_PS + 999u) / 1000u;
+}
+
+/* --- the DAC ------------------------------------------------------------------------------ */
 
 /* A dacData write (stored as a register as well). */
 static void dac_write(cpu_t *c, uint32_t value)
@@ -131,24 +220,332 @@ static void dac_write(cpu_t *c, uint32_t value)
     v.latch = v.dac[reg], v.latched = 1;
 }
 
+/* --- video timing and the retrace (MAME's recompute_video_timing, screen_device::configure
+ * and time_until_pos, adjust_vblank_start_timer, vblank_start, vblank_stop) --------------- */
+
+static void retrace_event(void *arg)
+{
+    (void)arg;
+    vblank_raise();
+    v.irq_next += v.frame_ps;
+    vclock_at(to_ns(v.irq_next), retrace_event, NULL);
+}
+
+/* The next time after `now` the beam reaches the start of row `row`: rows count from the
+ * screen's VBLANK start, which is vis_end rows after row 0; a time within half a pixel
+ * counts as past. */
+static uint64_t until_row(uint64_t now, uint32_t row)
+{
+    uint64_t scan = v.frame_ps / v.height, pixel = v.frame_ps / ((uint64_t)v.height * v.width);
+    uint64_t cur = now - v.ref_ps, target = ((row + v.height - v.vis_end) % v.height) * scan;
+    if (target <= cur + pixel / 2)
+        target += v.frame_ps;
+    while (target <= cur)
+        target += v.frame_ps;
+    return v.ref_ps + target;
+}
+
+static int in_retrace(uint64_t now)
+{
+    uint64_t last;
+    if (!v.armed || v.retrace_next < v.frame_ps || v.retrace_next <= now)
+        return 0;
+    last = v.retrace_next - v.frame_ps;
+    return last <= now && now < last + v.retrace_len;
+}
+
+static uint64_t abs_diff(uint64_t a, uint64_t b)
+{
+    return a > b ? a - b : b - a;
+}
+
+/* reg_video_w: once hSync, vSync, backPorch and videoDimensions are all non-zero (in their
+ * register widths), the screen takes vtotal rows at the standard, medium or VGA line rate
+ * whose frame is closest to its current one; it keeps the time of its last VBLANK start,
+ * unless that is a new frame ago, when VBLANK starts now. The card's retrace runs from row
+ * vSync-off to row 0. */
+static void video_timing(cpu_t *c, uint64_t now, uint32_t n, uint32_t value)
+{
+    uint32_t hs = v.reg[REG_HSYNC] & 0x3FFFFFFu, vs = v.reg[REG_VSYNC] & 0xFFFFFFFu;
+    uint32_t bp = v.reg[REG_BACKPORCH] & 0xFFFFFFu, dim = v.reg[REG_VIDEODIM] & 0x3FFFFFFu;
+    uint32_t vtotal, vbp, vvis, vmax, vsyncoff;
+    uint64_t std, med, vga, ds, dm, dv, frame, last;
+    if (!hs || !vs || !bp || !dim)
+        return;
+    if (in_retrace(now))
+        hw_stop(c, VOODOO_PHYS + 4 * n, 4, 1, value, "the video timing reprogrammed during "
+                "the vertical retrace: when MAME's model ends that retrace is not modelled");
+    vsyncoff = (vs >> 16) & 0xFFFu;
+    vtotal = vsyncoff + (vs & 0xFFFu);
+    vbp = (bp >> 16) & 0xFFu;
+    vvis = (dim >> 16) & 0x3FFu;
+    vmax = vbp + (vvis ? vvis - 1 : 0);
+    if (vmax > vtotal - 1)
+        vmax = vtotal - 1;
+    std = AS_PER_S / LINE_HZ_STD * vtotal;
+    med = AS_PER_S / LINE_HZ_MED * vtotal;
+    vga = AS_PER_S / LINE_HZ_VGA * vtotal;
+    ds = abs_diff(std, v.frame_as), dm = abs_diff(med, v.frame_as), dv = abs_diff(vga, v.frame_as);
+    frame = ds < dm && ds < dv ? std : dm < dv ? med : vga;
+    last = v.ref_ps + (now - v.ref_ps) / v.frame_ps * v.frame_ps;
+    v.frame_as = frame;
+    v.frame_ps = (frame + AS_PER_PS / 2) / AS_PER_PS;
+    if (now - last >= v.frame_ps)
+        last = now;
+    v.ref_ps = last;
+    v.height = vtotal;
+    v.width = ((hs >> 16) & 0x3FFu) + 1 + (hs & 0xFFu) + 1;
+    v.vis_end = vmax + 1;
+    v.retrace_next = until_row(now, vsyncoff);
+    v.retrace_len = until_row(v.retrace_next, 0) - v.retrace_next;
+    v.armed = 1;
+    v.irq_next = v.retrace_next;
+    vclock_cancel(retrace_event, NULL);
+    vclock_at(to_ns(v.irq_next), retrace_event, NULL);
+    vclock_reload(c); /* so the current slice ends at the first retrace */
+}
+
+int voodoo_vsync(uint64_t *next_ps, uint64_t *len_ps, uint64_t *period_ps)
+{
+    if (!v.armed)
+        return 0;
+    *next_ps = v.retrace_next, *len_ps = v.retrace_len, *period_ps = v.frame_ps;
+    return 1;
+}
+
+/* --- the FIFOs ------------------------------------------------------------------------------ */
+
+static uint32_t n_pci(void)
+{
+    return v.q_count - v.n_mem;
+}
+
+static uint32_t pci_space(void)
+{
+    return PCI_FIFO_ENTRIES - 1 - 2 * n_pci();
+}
+
+/* recompute_fbmem_fifo: on when fbiInit0 bit 13 is set and the rows are in order; a new
+ * configuration empties it */
+static void mem_fifo_configure(void)
+{
+    uint32_t i4 = v.reg[REG_FBIINIT4], last = (i4 >> 18) & 0x3FFu, first = (i4 >> 8) & 0x3FFu;
+    if (last > FB_LAST_PAGE)
+        last = FB_LAST_PAGE;
+    if (first <= last && (v.reg[REG_FBIINIT0] & 0x2000u)) {
+        v.mem_entries = (last + 1 - first) * 0x1000u / 4;
+        if (v.mem_entries > MEM_FIFO_MAX_ENTRIES)
+            v.mem_entries = MEM_FIFO_MAX_ENTRIES;
+    } else {
+        v.mem_entries = 0;
+    }
+    v.q_head = (v.q_head + v.n_mem) % QUEUE_WRITES; /* the memory FIFO's writes are lost */
+    v.q_count -= v.n_mem;
+    v.n_mem = 0;
+}
+
+/* A write the busy card queues (add_to_fifo), with the stops for what MAME would do and the
+ * model does not: hold the writer (stall) or lose the write (full). */
+static void enqueue(cpu_t *c, uint32_t phys, int size, struct entry e)
+{
+    uint32_t i0 = v.reg[REG_FBIINIT0], i4 = v.reg[REG_FBIINIT4];
+    if (2 * (n_pci() + 1) > PCI_FIFO_ENTRIES - 1)
+        hw_stop(c, phys, size, 1, e.value, "a Voodoo write with the PCI FIFO full (MAME "
+                "asserts; the card would have held the writer before)");
+    v.q[(v.q_head + v.q_count) % QUEUE_WRITES] = e;
+    v.q_count++;
+    if ((i0 & 0x2000u) && pci_space() <= 2 * ((i4 >> 2) & 0x3Fu)) {
+        while (n_pci()) {
+            const struct entry *h = &v.q[(v.q_head + v.n_mem) % QUEUE_WRITES];
+            if ((h->kind == E_LFB && !(i0 & 0x800u)) || (h->kind == E_TEX && !(i0 & 0x1000u)))
+                break;
+            if (2 * (v.n_mem + 1) + 1 > v.mem_entries)
+                hw_stop(c, phys, size, 1, e.value, "a Voodoo write with the memory FIFO full "
+                        "or off (MAME's model loses it)");
+            v.n_mem++;
+        }
+        if ((i0 & 0x10u) && 2 * v.n_mem >= 2 * 32 * ((i0 >> 14) & 0x7FFu))
+            hw_stop(c, phys, size, 1, e.value, "the Voodoo's memory FIFO reached its high-water "
+                    "mark (fbiInit0 bits 14 to 24): the card would hold the writer until it "
+                    "drains, which the model does not do (hardware-usage.md, \"Known gaps in "
+                    "the card model\")");
+    }
+    if ((i0 & 0x10u) && pci_space() <= 2 * ((i0 >> 6) & 0x1Fu))
+        hw_stop(c, phys, size, 1, e.value, "the Voodoo's PCI FIFO reached its low-water mark "
+                "(fbiInit0 bits 6 to 10): the card would hold the writer until it drains, "
+                "which the model does not do (hardware-usage.md, \"Known gaps in the card "
+                "model\")");
+}
+
+/* --- executing a write ------------------------------------------------------------------------ */
+
+/* MAME's float_to_int32: a raw IEEE single to fixed point with `bits` fraction bits, the
+ * left shift wrapping in 32 bits as the x86-64 build does. */
+static uint32_t float_fixed32(uint32_t data, int bits)
+{
+    int exponent = (int)((data >> 23) & 0xFFu) - 127 - 23 + bits;
+    uint32_t m = (data & 0x7FFFFFu) | 0x800000u;
+    if (exponent < 0)
+        m = exponent > -32 ? m >> -exponent : 0;
+    else
+        m = exponent < 32 ? m << exponent : 0x7FFFFFFFu;
+    return (data & 0x80000000u) ? 0 - m : m;
+}
+
+/* swap_buffers: the buffers rotate, a pending swap is done, and a running command's queue
+ * goes on from `at` */
+static void swap_now(uint64_t at)
+{
+    vfb_swap();
+    if (v.swaps_pending)
+        v.swaps_pending--;
+    v.vblank_count = 0;
+    v.swap_waiting = 0;
+    if (v.op_end)
+        v.op_end = at;
+}
+
+/* A register write as the card executes it, at card time `at` (the time of the access or of
+ * the flush that runs it); returns its clocks. */
+static uint32_t execute_reg(cpu_t *c, uint32_t chips, uint32_t n, uint32_t value, uint64_t at)
+{
+    const char *why = NULL;
+    uint32_t cycles = 0;
+    int fbi = chips == 0 || (chips & CHIP_FBI), tmu = chips == 0 || (chips & CHIP_TMU0);
+    if (fbi) {
+        v.reg[n] = value;
+        v.written[n] = 1;
+        /* the float vertex and colour registers write their fixed-point twins (MAME's
+         * reg_fpassive_4_w and _12_w) */
+        if (n >= 0x22u && n <= 0x27u)
+            v.reg[n - 0x20u] = float_fixed32(value, 4);
+        else if ((n >= 0x28u && n <= 0x2Cu) || (n >= 0x30u && n <= 0x34u) ||
+                 (n >= 0x38u && n <= 0x3Cu))
+            v.reg[n - 0x20u] = float_fixed32(value, 12);
+    }
+    if (tmu)
+        tmu_reg_write(n, value);
+    switch (n) {
+    case REG_TRIANGLE:
+    case REG_FTRIANGLE:
+        cycles = vfb_triangle(&why);
+        break;
+    case REG_FASTFILL:
+        cycles = vfb_fastfill(&why);
+        break;
+    case REG_SWAPBUFFER:
+        v.swap_waiting = 1;
+        v.swap_interval = (value >> 1) & 0xFFu;
+        if (!(value & 1u))
+            swap_now(at);
+        else
+            cycles = (uint32_t)((v.swap_interval + 1) * CLOCK_HZ / 10);
+        break;
+    case REG_FBIINIT0:
+        if (!fbi)
+            break;
+        if (value & 0x2u) /* graphics reset: both FIFOs emptied */
+            v.q_count = v.n_mem = 0;
+        if (value & 0x4u) /* FIFO reset: the PCI FIFO emptied */
+            v.q_count = v.n_mem;
+        mem_fifo_configure();
+        break;
+    case REG_FBIINIT4:
+        if (fbi)
+            mem_fifo_configure();
+        break;
+    case REG_FBIINIT1:
+    case REG_FBIINIT2:
+        if (fbi)
+            vfb_layout(v.reg[REG_FBIINIT1], v.reg[REG_FBIINIT2]);
+        break;
+    case REG_BACKPORCH:
+    case REG_VIDEODIM:
+    case REG_HSYNC:
+    case REG_VSYNC:
+        if (fbi)
+            video_timing(c, at, n, value);
+        break;
+    case REG_DACDATA:
+        if (fbi)
+            dac_write(c, value);
+        break;
+    default:
+        break;
+    }
+    if (why)
+        hw_stop(c, VOODOO_PHYS + 4 * n, 4, 1, value, "%s", why);
+    return cycles;
+}
+
+static uint32_t execute(cpu_t *c, const struct entry *e, uint64_t at)
+{
+    const char *why;
+    if (e->kind == E_REG)
+        return execute_reg(c, e->chips, e->n, e->value, at);
+    if (e->kind == E_LFB)
+        why = vfb_lfb_write(e->off - VOODOO_LFB, e->size, e->value);
+    else
+        why = tmu_tex_write(e->off - VOODOO_TEX, e->value);
+    if (why)
+        hw_stop(c, VOODOO_PHYS + e->off, e->size, 1, e->value, "%s", why);
+    return 0;
+}
+
+/* execute_fifos from the running command's end: queued writes in order (memory FIFO first)
+ * until one takes clocks; idle when the queue runs dry. `at` is the time of the flush. */
+static void run_fifo(cpu_t *c, uint64_t at)
+{
+    while (v.q_count) {
+        struct entry e = v.q[v.q_head];
+        uint32_t cycles;
+        v.q_head = (v.q_head + 1) % QUEUE_WRITES;
+        v.q_count--;
+        if (v.n_mem)
+            v.n_mem--;
+        cycles = execute(c, &e, at);
+        if (cycles) {
+            v.op_end += cycles * CLOCK_PS;
+            return;
+        }
+    }
+    v.op_end = 0;
+}
+
+/* Everything due up to `now`, in time order: queued writes as the running command ends,
+ * and retrace starts (vblank_start: a pending swap whose interval has passed happens). A
+ * queued write that comes due before a retrace start runs in that retrace's flush. */
+static void card_advance(cpu_t *c, uint64_t now)
+{
+    for (;;) {
+        int op = v.op_end && v.op_end <= now;
+        int vb = v.armed && v.retrace_next <= now;
+        if (op && (!vb || v.op_end <= v.retrace_next)) {
+            run_fifo(c, vb ? v.retrace_next : now);
+        } else if (vb) {
+            uint64_t at = v.retrace_next;
+            v.retrace_next += v.frame_ps;
+            if (v.vblank_count < 250)
+                v.vblank_count++;
+            if (v.swap_waiting && v.vblank_count >= v.swap_interval) {
+                swap_now(at);
+                while (v.op_end && v.op_end <= at)
+                    run_fifo(c, at);
+            }
+        } else {
+            return;
+        }
+    }
+}
+
+/* --- register accesses ------------------------------------------------------------------------ */
+
 static int readable(uint32_t regnum)
 {
     for (size_t i = 0; i < sizeof READABLE / sizeof READABLE[0]; i++)
         if (READABLE[i] == regnum * 4)
             return 1;
     return 0;
-}
-
-/* The vertical-retrace bit: the first RETRACE_NS of each period, counted from the VBLANK
- * interrupts once VBLANK runs (machine.h, vblank_start), from time 0 before. */
-static uint32_t retrace(cpu_t *c)
-{
-    uint64_t now = vclock_now(c), p = machine.vblank_period, phase;
-    if (p)
-        phase = (now % p + p - machine.vblank_next % p) % p;
-    else
-        phase = now % VBLANK_PERIOD_NS;
-    return phase < RETRACE_NS ? STATUS_RETRACE : 0;
 }
 
 /* The register number of a register-space access, after the checks reads and writes share. */
@@ -167,25 +564,41 @@ static uint32_t reg_of(cpu_t *c, uint32_t off, int size, int write, uint32_t val
     return (off & 0x3FCu) >> 2;
 }
 
+/* reg_status_r: PCI FIFO free writes (bits 0 to 5, at most 0x3F), the retrace (6), busy
+ * (7 to 9), the displayed buffer (10 and 11), memory FIFO free writes (12 to 27, 0xFFFF
+ * while it is off) and the swaps pending (28 to 30, at most 7). */
+static uint32_t status(uint64_t now)
+{
+    uint32_t r = pci_space() / 2, mem = 0xFFFFu;
+    if (r > 0x3Fu)
+        r = 0x3Fu;
+    if (in_retrace(now))
+        r |= 0x40u;
+    if (v.op_end)
+        r |= 0x380u;
+    r |= (uint32_t)vfb_front() << 10;
+    if (v.reg[REG_FBIINIT0] & 0x2000u) {
+        uint32_t space = v.mem_entries ? (v.mem_entries - 1 - 2 * v.n_mem) / 2 : 0;
+        mem = space < 0xFFFFu ? space : 0xFFFFu;
+    }
+    r |= mem << 12;
+    r |= (v.swaps_pending < 7 ? v.swaps_pending : 7) << 28;
+    return r;
+}
+
 static uint32_t reg_read(cpu_t *c, uint32_t off, int size)
 {
     uint32_t phys = VOODOO_PHYS + off, n = reg_of(c, off, size, 0, 0);
+    uint64_t now = card_now(c);
     if (off & ALT_MAP)
         hw_stop(c, phys, 4, 0, 0, "Voodoo read through the alternate register map (bit 21), "
                 "which the game never read through");
     if ((off >> CHIP_SHIFT) & 0xFu)
         hw_stop(c, phys, 4, 0, 0, "Voodoo read with chip bits 0x%X, which the game never "
                 "read with", (unsigned)((off >> CHIP_SHIFT) & 0xFu));
-    if (n == REG_STATUS) {
-        if (v.swapped)
-            hw_stop(c, phys, 4, 0, 0, "a status read after a swapbufferCMD write: the "
-                    "displayed-buffer field (and swap-pending) is not modelled yet");
-        if (v.alt_used)
-            hw_stop(c, phys, 4, 0, 0, "a status read after a write through the alternate "
-                    "register map, which is not decoded yet: a swap or any other command "
-                    "written through it cannot be ruled out");
-        return STATUS_IDLE | retrace(c);
-    }
+    card_advance(c, now);
+    if (n == REG_STATUS)
+        return status(now);
     if (!readable(n))
         hw_stop(c, phys, 4, 0, 0, "Voodoo register 0x%03X is not one the game read in MAME "
                 "(voodoo-reads.txt), so what it reads as is not known", (unsigned)(4 * n));
@@ -198,10 +611,6 @@ static uint32_t reg_read(cpu_t *c, uint32_t off, int size)
     if (n == REG_FBIINIT3 && (v.cfg[CFG_INIT_ENABLE] & INIT_REMAP_DAC))
         hw_stop(c, phys, 4, 0, 0, "fbiInit3 read with PCI initEnable bit 2 set: whether it "
                 "reads the DAC too is not measured (the game never made such a read)");
-    if (v.alt_used)
-        hw_stop(c, phys, 4, 0, 0, "Voodoo register 0x%03X read after a write through the "
-                "alternate register map, whose order the sink does not decode: the register "
-                "may have been written through it", (unsigned)(4 * n));
     if (!v.written[n])
         hw_stop(c, phys, 4, 0, 0, "Voodoo register 0x%03X never written since reset, and its "
                 "power-on value is not measured", (unsigned)(4 * n));
@@ -210,15 +619,18 @@ static uint32_t reg_read(cpu_t *c, uint32_t off, int size)
 
 static void reg_write(cpu_t *c, uint32_t off, int size, uint32_t value)
 {
-    uint32_t phys = VOODOO_PHYS + off, n = reg_of(c, off, size, 1, value);
+    uint32_t phys = VOODOO_PHYS + off, n = reg_of(c, off, size, 1, value), cycles;
     uint32_t chips = (off >> CHIP_SHIFT) & 0xFu;
+    uint64_t now = card_now(c);
     if (off & ALT_MAP) {
         if (chips)
             hw_stop(c, phys, 4, 1, value, "Voodoo write through the alternate map with chip "
                     "bits 0x%X, which the game never made", (unsigned)chips);
         v.alt_writes[n]++;
-        v.alt_used = 1;
-        return;
+        if (v.reg[REG_FBIINIT3] & 1u) /* tri_register_remap */
+            n = alt_renumber(n);
+    } else {
+        v.writes[n]++;
     }
     if (n == REG_STATUS)
         hw_stop(c, phys, 4, 1, value, "a write of the Voodoo status register, which the game "
@@ -226,55 +638,73 @@ static void reg_write(cpu_t *c, uint32_t off, int size, uint32_t value)
     if (is_fbiinit(n) && !(v.cfg[CFG_INIT_ENABLE] & INIT_WRITE_ENABLE))
         hw_stop(c, phys, 4, 1, value, "an fbiInit write while PCI initEnable bit 0 is clear "
                 "(the card may ignore it; the game made none in MAME)");
-    v.writes[n]++;
-    if (n == REG_SWAPBUFFER)
-        v.swapped = 1;
-    /* the value the game can read back is the FBI's: chips 0 (all) or with the FBI bit */
-    if (chips == 0 || (chips & CHIP_FBI)) {
-        v.reg[n] = value;
-        v.written[n] = 1;
-        if (n == REG_DACDATA)
-            dac_write(c, value);
+    card_advance(c, now);
+    if (!is_fifo(n)) {
+        execute_reg(c, chips, n, value, now);
+        return;
     }
+    if (n == REG_SWAPBUFFER)
+        v.swaps_pending++;
+    if (v.op_end && (v.cfg[CFG_INIT_ENABLE] & INIT_PCI_FIFO)) {
+        enqueue(c, phys, 4, (struct entry){E_REG, (uint8_t)chips, 4, (uint16_t)n, off, value});
+        return;
+    }
+    cycles = execute_reg(c, chips, n, value, now);
+    if (cycles)
+        v.op_end = now + cycles * CLOCK_PS;
 }
+
+/* --- the address space ---------------------------------------------------------------------- */
 
 uint32_t voodoo_read(cpu_t *c, uint32_t off, int size)
 {
-    uint32_t phys = VOODOO_PHYS + off;
+    uint32_t phys = VOODOO_PHYS + off, value;
+    const char *why;
     if (off < VOODOO_LFB)
         return reg_read(c, off, size);
     if (off >= VOODOO_TEX)
         hw_stop(c, phys, size, 0, 0, "a texture memory read: the game made none in MAME");
-    hw_stop(c, phys, size, 0, 0, "an LFB read: the card's frame-buffer addresses alias (the "
-            "start-up memory test read 0xFFFF at 0x08432100 after writing 0xDEAD there) and "
-            "its pipeline draws (the dither ramp), and the sink models neither "
-            "(hardware-usage.md, \"Voodoo frame buffer reads\")");
+    if ((size != 2 && size != 4) || (off & (uint32_t)(size - 1)))
+        hw_stop(c, phys, size, 0, 0, "LFB reads are aligned halfwords and words");
+    card_advance(c, card_now(c));
+    if (vfb_lfb_read(off - VOODOO_LFB, size, &value, &why) != 0)
+        hw_stop(c, phys, size, 0, 0, "%s", why);
+    return value;
 }
 
 void voodoo_write(cpu_t *c, uint32_t off, int size, uint32_t value)
 {
     uint32_t phys = VOODOO_PHYS + off;
+    struct entry e = {E_LFB, 0, (uint8_t)size, 0, off, value};
+    uint64_t now;
     if (off < VOODOO_LFB) {
         reg_write(c, off, size, value);
         return;
     }
     if (off >= VOODOO_TEX) {
+        if (size != 4 || (off & 3u))
+            hw_stop(c, phys, size, 1, value, "texture writes are aligned words");
         v.tex_writes++;
-        return;
-    }
-    /* accepted and dropped: nothing reads them back (voodoo_read) */
-    if ((size != 2 && size != 4) || (off & (uint32_t)(size - 1)))
+        e.kind = E_TEX;
+    } else if ((size != 2 && size != 4) || (off & (uint32_t)(size - 1))) {
         hw_stop(c, phys, size, 1, value, "LFB writes are aligned halfwords and words");
+    }
+    now = card_now(c);
+    card_advance(c, now);
+    if (v.op_end && (v.cfg[CFG_INIT_ENABLE] & INIT_PCI_FIFO))
+        enqueue(c, phys, size, e);
+    else
+        execute(c, &e, now);
 }
 
 uint32_t voodoo_reg_writes(uint32_t regnum)
 {
-    return regnum < NREGS ? v.writes[regnum] : 0;
+    return regnum < NREGS_VOODOO ? v.writes[regnum] : 0;
 }
 
 uint32_t voodoo_alt_writes(uint32_t regnum)
 {
-    return regnum < NREGS ? v.alt_writes[regnum] : 0;
+    return regnum < NREGS_VOODOO ? v.alt_writes[regnum] : 0;
 }
 
 uint64_t voodoo_tex_writes(void)
@@ -332,8 +762,11 @@ void voodoo_cfg_map_bar0(uint32_t base)
     v.bar0_set = 1;
 }
 
+/* Power-on: the registers' measured first values, the DAC, idle, both FIFOs empty and the
+ * memory FIFO off, MAME's default screen and no retrace, the frame buffer and the TMU. */
 void voodoo_reset(void)
 {
+    vclock_cancel(retrace_event, NULL);
     memset(&v, 0, sizeof v);
     v.dac[5] = DAC_REG5_POWER_ON;
     v.dac_set = 1u << 5;
@@ -341,4 +774,11 @@ void voodoo_reset(void)
         v.reg[POWER_ON[i].reg / 4] = POWER_ON[i].value;
         v.written[POWER_ON[i].reg / 4] = 1;
     }
+    v.frame_as = AS_PER_S / DEFAULT_HZ;
+    v.frame_ps = (v.frame_as + AS_PER_PS / 2) / AS_PER_PS;
+    v.height = DEFAULT_HEIGHT;
+    v.width = DEFAULT_WIDTH;
+    v.vis_end = DEFAULT_HEIGHT;
+    vfb_reset();
+    tmu_reset();
 }

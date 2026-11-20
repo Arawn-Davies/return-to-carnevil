@@ -80,10 +80,13 @@ void irq_set_line(int line, uint32_t fn)
     if (n == 8)
         return; /* lines 5 to 7: nothing happens, not even the store */
     /* for line 0 the slot writes VBLANK clear either way (section 1, slot 0x200), which
-     * acknowledges a pending VBLANK (inferred, as for the default IP6 work); the interrupt
-     * enable bit it also writes (0x17300000 bit 7) has no model yet */
-    if (line == 0)
+     * acknowledges a pending VBLANK (inferred, as for the default IP6 work), and sets bit 7
+     * of the interrupt enable register 0x17300000 for a handler, clears it for none (read):
+     * the board's VBLANK enable */
+    if (line == 0) {
         irq_clear(6);
+        machine.vblank_enable = fn != 0;
+    }
     if (fn)
         machine.status |= IP_BIT(n) | ST_IE;
     else
@@ -311,22 +314,10 @@ uint32_t exc_raise(uint8_t *ram, cpu_t *c, int code, uint32_t epc)
 
 /* --- VBLANK ----------------------------------------------------------------------------- */
 
-static void vblank_event(void *arg)
+/* The board's VBLANK is the Voodoo's vertical retrace (MAME's seattle.cpp: the card's vblank
+ * callback is the board's VBLANK interrupt); its times are the card's (runtime/hw). */
+void vblank_raise(void)
 {
-    (void)arg;
-    irq_raise(6);
-    machine.vblank_next += machine.vblank_period;
-    vclock_at(machine.vblank_next, vblank_event, NULL);
-}
-
-/* The first VBLANK is one period after the time last accounted (vblank_start has no cpu_t,
- * so the part of the current slice already used is not counted). */
-void vblank_start(uint64_t period_ns)
-{
-    if (period_ns == 0)
-        rt_stop(RT_STOP_STATUS, "vblank_start: VBLANK period 0");
-    vclock_cancel(vblank_event, NULL);
-    machine.vblank_period = period_ns;
-    machine.vblank_next = machine.now + period_ns;
-    vclock_at(machine.vblank_next, vblank_event, NULL);
+    if (machine.vblank_enable)
+        irq_raise(6);
 }

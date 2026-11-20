@@ -14,6 +14,7 @@ import os
 import unittest
 
 from tests import test_loader
+from tests import voodoo_timing as vt
 from tests.gamedata import requires_file, work_path
 from tests.test_disk_c import SECTOR, fs_partition, pattern, raw_header
 from tests.test_loader import BUF, CALLER_RA, DATA, M1, call, ioctl, open_
@@ -27,8 +28,6 @@ DEVP = 0x802374B0
 VOODOO = 0xA8000000
 STATUS_IDLE = 0x0FFFF03F       # hardware-usage.md, "Measured values ...": the idle status
 STATUS_RETRACE = 0x0FFFF07F    # ... with the vertical-retrace bit
-RETRACE_NS = 252737
-VBLANK_PERIOD_NS = 18467220
 PART_TABLE = 0x800B7160
 CALLBACK_RA = 0x800124D4
 COOKIE = 0x803F75E0
@@ -138,51 +137,52 @@ class PciTest(HwTestCase):
 
 class VoodooTest(HwTestCase):
     def test_lfb_readback(self):
-        """LFB writes of halfwords and words are accepted; an LFB read stops, even of a pixel
-        just written, because the card's frame-buffer addresses alias (the start-up memory
-        test read 0xFFFF where it had written 0xDEAD: hardware-usage.md, "Voodoo frame buffer
-        reads") and the sink does not model its memory layout; a texture write is dropped and
-        counted; a texture read and a byte access stop."""
-        out, _ = self.drive([wr(2, 0xA8432064, 0xDEAD), wr(4, 0xA8400000, 0x12345678),
+        """LFB writes of halfwords and words read back what was written (raw RGB 565 into
+        the front buffer, lfbMode 0); a texture write is counted; a texture read and a byte
+        access stop."""
+        out, _ = self.drive([wr(2, 0xA8432064, 0xDEAD), rd(2, 0xA8432064),
+                             wr(4, 0xA8400000, 0x12345678), rd(4, 0xA8400000), rd(2, 0xA8400002),
                              wr(4, 0xA8800000, 0x11111111), wr(4, 0xA8FFFFFC, 2), "counts 0"])
+        self.assertEqual(self.rds(out), [0xDEAD, 0x12345678, 0x1234])
         self.assertEqual(out.all("counts"), [["0", "0", "2", "0"]])
-        self.stops([wr(2, 0xA8432064, 0xDEAD), rd(2, 0xA8432064)], "physical 0x08432064",
-                   "LFB read", "alias")
         self.stops([wr(4, 0xA8800000, 1), rd(4, 0xA8800000)], "physical 0x08800000",
                    "texture")
         self.stops([wr(1, 0xA8432064, 1)], "physical 0x08432064", "1 byte")
 
     def test_voodoo_status(self):
-        """status (kind 2): FIFO free at its maximum, not busy, no swap pending, and the
-        vertical-retrace bit for the first RETRACE_NS of each VBLANK period, by the virtual
-        clock (from time 0 until VBLANK starts, then from each VBLANK); a write stops; after a
-        swapbufferCMD write, written directly or by a DMA record, a status read stops (the
-        displayed-buffer field is not modelled yet)."""
-        after = RETRACE_NS // 100 + 1  # check points of 100 ns
-        to_next = (VBLANK_PERIOD_NS - after * 100) // 100 + 1
-        out, _ = self.drive([rd(4, VOODOO), f"checks {after - 1:X}", rd(4, VOODOO),
-                             "checks 1", rd(4, VOODOO), f"checks {to_next:X}", rd(4, VOODOO),
-                             "checks 9C40", "vblank", rd(4, VOODOO), f"checks {after:X}",
-                             rd(4, VOODOO), f"checks {to_next:X}", rd(4, VOODOO)])
-        self.assertEqual(self.rds(out), [STATUS_RETRACE, STATUS_RETRACE, STATUS_IDLE,
-                                         STATUS_RETRACE, STATUS_RETRACE, STATUS_IDLE,
-                                         STATUS_RETRACE])
+        """status (kind 2), by MAME's model (hardware-usage.md, "The Voodoo model"):
+        - idle, FIFOs free, and no retrace bit before the video timing is programmed, over
+          more than one 57 Hz frame;
+        - once the game's timing is written, the retrace bit from the first retrace start
+          MAME's rule gives (tests/voodoo_timing.py) for its length, and a frame later again;
+        - a fastfill keeps the card busy (bits 7 to 9) for its clocks, 100 x 100 pixels at two
+          a clock, with a nopCMD waiting in the PCI FIFO under initEnable bit 1 (free 0x3E);
+        - a swapbufferCMD without vsync shows buffer 1 at once; one with vsync is pending and
+          busy until the next retrace start swaps;
+        - a write stops."""
+        written = 1000
+        first, length, frame = vt.retrace_after(written * 1000 + vt.ENTRY_PS)
+        timing = [f"at {written}"] + vt.timing_writes(wr)
+        on, off = vt.to_ns(first), vt.to_ns(first + length)
+        out, _ = self.drive([rd(4, VOODOO), "at 20000000", rd(4, VOODOO), "reset"] + timing
+                            + [f"at {on - 1}", rd(4, VOODOO), f"at {on}", rd(4, VOODOO),
+                               f"at {off - 1}", rd(4, VOODOO), f"at {off}", rd(4, VOODOO),
+                               f"at {vt.to_ns(first + frame)}", rd(4, VOODOO)])
+        self.assertEqual(self.rds(out), [STATUS_IDLE] * 3 + [STATUS_RETRACE] * 2
+                         + [STATUS_IDLE, STATUS_RETRACE])
+        fill = (cfg_write(0x40, 3) + [wr(4, VOODOO + 0x110, 0x200), wr(4, VOODOO + 0x118, 100),
+                                      wr(4, VOODOO + 0x11C, 100), wr(4, VOODOO + 0x148, 0)])
+        out, _ = self.drive(fill + ["at 100000", wr(4, VOODOO + 0x124, 0),
+                                    wr(4, VOODOO + 0x120, 0), "at 150000", rd(4, VOODOO),
+                                    "at 199999", rd(4, VOODOO), "at 200000", rd(4, VOODOO)])
+        self.assertEqual(self.rds(out), [0x0FFFF3BE, 0x0FFFF3BE, STATUS_IDLE])
+        out, _ = self.drive([wr(4, VOODOO + 0x128, 0), rd(4, VOODOO)] + timing
+                            + [wr(4, VOODOO + 0x128, 1), rd(4, VOODOO), f"at {on}",
+                               rd(4, VOODOO)])
+        # before any fbiInit2 write MAME's layout has three colour buffers, all at 0, so the
+        # displayed buffer goes 0, 1, 2
+        self.assertEqual(self.rds(out), [0x0FFFF43F, 0x1FFFF7BF, 0x0FFFF87F])
         self.stops([wr(4, VOODOO, 0)], "physical 0x08000000", "status")
-        self.stops([rd(4, VOODOO), wr(4, VOODOO + 0x128, 0), rd(4, VOODOO)],
-                   "physical 0x08000000", "swapbufferCMD", "displayed-buffer")
-        swap = mem(CHAIN, 4, 0x002375D0, 0x08000128, 0, 0)
-        self.stops(swap + open_("pci:", 2) + start_chain(0x002375C0) + [rd(4, VOODOO)],
-                   "physical 0x08000000", "displayed-buffer")
-        # after an alternate-map write, direct or as a DMA record's destination, status stops:
-        # a swap written through the undecoded alternate map cannot be ruled out
-        self.stops([rd(4, VOODOO), wr(4, VOODOO + 0x200088, 7), rd(4, VOODOO)],
-                   "physical 0x08000000", "alternate register map", "not decoded")
-        alt = mem(CHAIN, 4, 0x002375D0, 0x08200088, 0, 0)
-        self.stops(alt + open_("pci:", 2) + start_chain(0x002375C0) + [rd(4, VOODOO)],
-                   "physical 0x08000000", "alternate register map")
-        out, _ = self.drive([wr(4, VOODOO + 0x200088, 7), wr(4, VOODOO + 0x128, 0), "reset",
-                             rd(4, VOODOO)])
-        self.assertEqual(self.rds(out), [STATUS_RETRACE])  # hw_reset clears both conditions
 
     def test_voodoo_registers(self):
         """Kind 1: a register reads back what was last written, and counts its writes; the
@@ -190,7 +190,7 @@ class VoodooTest(HwTestCase):
         PCI initEnable bit 0 is clear stops; fbiInit2 reads the DAC while initEnable bit 2 is
         set (DacTest; with no DAC read latched it stops) and fbiInit3 then stops; both read
         their storage when it is clear; a read before any write, of a register the game never
-        read, through chip bits or the alternate map, and after an alternate-map write, stops."""
+        read, through chip bits or the alternate map, stops."""
         out, _ = self.drive([rd(4, VOODOO + r) for r in sorted(FBIINIT_POWER_ON)]
                             + [wr(4, VOODOO + 0x104, 0x0C000035), rd(4, VOODOO + 0x104),
                                wr(4, VOODOO + 0x104, 1), rd(4, VOODOO + 0x104), "counts 41"]
@@ -209,8 +209,6 @@ class VoodooTest(HwTestCase):
             with self.subTest(reg=hex(reg)):
                 self.stops(cfg_write(0x40, 5) + [rd(4, VOODOO + reg)],
                            f"physical 0x{0x08000000 + reg:08X}", "DAC")
-        self.stops([wr(4, VOODOO + 0x104, 1), wr(4, VOODOO + 0x200088, 7),
-                    rd(4, VOODOO + 0x104)], "physical 0x08000104", "alternate")
         self.stops([wr(4, VOODOO + 0x904, 1), rd(4, VOODOO + 0x904)], "physical 0x08000904",
                    "chip")
         self.stops([rd(4, VOODOO + 0x200104)], "physical 0x08200104", "alternate")
@@ -461,8 +459,8 @@ class BusTest(HwTestCase):
         self.stops([rd(4, 0xB7F00000)], "physical 0x17F00000", "4 bytes")
 
     def test_hw_reset(self):
-        """hw_reset returns the registers, the DAC, the counters and the PCI space to
-        power-on."""
+        """hw_reset returns the registers, the DAC, the counters, the PCI space, the frame
+        buffer and the video timing to power-on."""
         self.stops(cfg_write(0x40, 5) + dac_cmds([0x303, 0xB00]) + ["reset"]
                    + cfg_write(0x40, 5) + dac_cmds([0xB00, None]), "DAC register 3")
         self.stops([wr(4, VOODOO + 0x104, 1), "reset", rd(4, VOODOO + 0x104)], "never written")
@@ -473,6 +471,13 @@ class BusTest(HwTestCase):
         self.stops([f"r 1D {SP_TOP:X}"] + mem(SP_TOP + 16, 0)
                    + [call(0x110, 0x121A, 0xFFFF, 0, DEVP), "reset",
                       call(0x0F0, 0x10, 8, DATA)], "BAR0")
+        # the frame buffer, the video timing and the card's state to power-on
+        self.stops([wr(2, 0xA8400000, 1), "reset", rd(2, 0xA8400000)], "not written since reset")
+        out, _ = self.drive(vt.timing_writes(wr) + ["vsync", "reset", "vsync", "at 30000000",
+                                                    rd(4, VOODOO)])
+        self.assertEqual(len(out.all("vsync")[0]), 3)
+        self.assertEqual(out.all("vsync")[1], ["-"])
+        self.assertEqual(self.rds(out), [STATUS_IDLE])
 
 
 def facts(name):
@@ -491,7 +496,8 @@ def fact_lines(name):
 class VoodooFactsTest(HwTestCase):
     def test_voodoo_reads_like_mame(self):
         """For every register voodoo-reads.txt shows the game reading: status reads only
-        values MAME returned (idle, and idle with retrace, both of them over a frame); every
+        values MAME returned (idle, and idle with retrace, both of them over a frame once the
+        game's video timing is written); every
         other register is plain storage (kind 1) or fbiInit2 under PCI initEnable bit 2 (the
         DAC, kind 3, which stops here only because no DAC read is latched; DacTest and
         test_dac_reads_like_mame cover it): each value MAME returned reads back after being written,
@@ -499,8 +505,9 @@ class VoodooFactsTest(HwTestCase):
         the reads made while initEnable bit 2 was set are the remapped fbiInit2 ones.
 
         voodoo-reads.txt has no writes. For the first 2 s after the entry,
-        test_voodoo_replay_like_mame replays the captured writes (voodoo-ramp.txt) before each
-        read. This weaker form covers the 15 s and so is all that checks the reads after that
+        tests/test_voodoo_fb.py's test_reads_like_mame_full replays the captured writes
+        (voodoo-ramp.txt) at their times and compares every read. This weaker form covers the
+        15 s and so is all that checks the reads after that
         span (the DAC windows at 7.93 s, fbiInit reads from 7.93 s and the mode registers at
         9.29 s); test_dac_reads_like_mame covers every DAC read."""
         values = collections.defaultdict(list)
@@ -532,8 +539,8 @@ class VoodooFactsTest(HwTestCase):
         for reg in sorted(values):
             for v in sorted(set(values[reg])):
                 cmds += [wr(4, VOODOO + reg, v), rd(4, VOODOO + reg)]
-        frame = [rd(4, VOODOO)] + [f"checks {VBLANK_PERIOD_NS // 100 // 50:X}",
-                                   rd(4, VOODOO)] * 50
+        frame = vt.timing_writes(wr) + [rd(4, VOODOO)] + [
+            f"checks {vt.retrace_after(vt.ENTRY_PS)[2] // 1000 // 100 // 50:X}", rd(4, VOODOO)] * 60
         out, _ = self.drive(cmds + frame)
         got = self.rds(out)
         want = [v for reg in sorted(values) for v in sorted(set(values[reg]))]
@@ -596,55 +603,6 @@ class VoodooFactsTest(HwTestCase):
 
 
 VOODOO_PHYS = 0x08000000
-
-
-@requires_file("mame", "m2-facts", "voodoo-ramp.txt")
-@requires_file("mame", "m2-facts", "voodoo-reads.txt")
-class VoodooReplayTest(HwTestCase):
-    def test_voodoo_replay_like_mame(self):
-        """The game's own Voodoo writes and reads of voodoo-ramp.txt (its first 2 s after the
-        entry), merged in time order with the PCI configuration writes of voodoo-reads.txt,
-        replayed into the sink. Every register read returns what MAME returned, except status
-        (the virtual clock is not MAME's: test_voodoo_reads_like_mame covers it). Every LFB
-        read stops: the first, of the start-up memory test, is checked to stop; the replay then
-        goes on without the LFB reads (9 of the memory test, 8,228 of the triangle-drawn
-        ramp)."""
-        events = []
-        for f in fact_lines("voodoo-reads.txt"):
-            if len(f) == 10 and f[1] == "0x0F8":
-                events.append((int(f[0]), 0, cfg_write(int(f[2], 16), int(f[8], 16))))
-        last = 0
-        for f in fact_lines("voodoo-ramp.txt"):
-            last = int(f[0])
-            events.append((last, 1, (f[1], int(f[2], 16), int(f[3], 16))))
-        events = [e for e in sorted(events, key=lambda e: (e[0], e[1])) if e[0] <= last]
-        cmds, want, lfb_reads, first_lfb, before_lfb = [], [], 0, None, None
-        for t, _, e in events:
-            if isinstance(e, list):
-                cmds += e
-                continue
-            kind, addr, value = e
-            lfb = VOODOO_PHYS + 0x400000 <= addr < VOODOO_PHYS + 0x800000
-            if kind == "W":
-                # the game's LFB stores are halfwords (hardware-usage.md, "Voodoo LFB")
-                cmds.append(wr(2 if lfb else 4, 0xA0000000 | addr, value))
-            elif lfb:
-                lfb_reads += 1
-                if first_lfb is None:
-                    first_lfb, before_lfb = addr, list(cmds)
-            elif addr != VOODOO_PHYS:
-                cmds.append(rd(4, 0xA0000000 | addr))
-                want.append(value)
-        self.assertEqual(lfb_reads, 9 + 8228)
-        # the same register reads as voodoo-reads.txt shows for that span
-        same = [int(f[2], 16) for f in fact_lines("voodoo-reads.txt")
-                if len(f) == 4 and int(f[0]) <= last
-                and VOODOO_PHYS < int(f[1], 16) < VOODOO_PHYS + 0x400000]
-        self.assertEqual(want, same)
-        out, _ = self.drive(cmds)
-        self.assertEqual(self.rds(out), want)
-        self.stops(before_lfb + [rd(2, 0xA0000000 | first_lfb)],
-                   f"physical 0x{first_lfb:08X}", "LFB read")
 
 
 @requires_file("mame", "m2-facts", "dma0.txt")

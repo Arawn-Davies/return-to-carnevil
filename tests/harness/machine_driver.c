@@ -13,7 +13,9 @@
  *   exc CODE FN          exc_set_handler
  *   fpe CAUSE FN         exc_set_fpe
  *   hook WHICH FN        exc_set_break_hook
- *   vblank NS            vblank_start
+ *   vblank NS            a stand-in for the Voodoo's retrace (runtime/hw drives it in the
+ *                        runtime): vblank_raise every NS from one NS after the time last
+ *                        accounted, replacing an earlier one
  *   event ID NS          vclock_at an event that prints "event ID NOW"
  *   chain ID NS          the same, and the event also schedules event ID + 1 at the time it
  *                        runs
@@ -120,6 +122,16 @@ static void on_chain(void *arg)
 {
     on_event(arg);
     vclock_at(vclock_now(&cpu), on_event, (void *)((uintptr_t)arg + 1));
+}
+
+static uint64_t retrace_period, retrace_next;
+
+static void on_retrace(void *arg)
+{
+    (void)arg;
+    vblank_raise();
+    retrace_next += retrace_period;
+    vclock_at(retrace_next, on_retrace, NULL);
 }
 
 static void at_stop_1(void)
@@ -253,7 +265,12 @@ int main(void)
             uint32_t which = hex();
             exc_set_break_hook((int)which, hex());
         } else if (strcmp(key, "vblank") == 0) {
-            vblank_start(dec());
+            retrace_period = dec();
+            if (!retrace_period)
+                die("bad input", "vblank: period 0");
+            vclock_cancel(on_retrace, NULL);
+            retrace_next = machine.now + retrace_period;
+            vclock_at(retrace_next, on_retrace, NULL);
         } else if (strcmp(key, "event") == 0 || strcmp(key, "chain") == 0) {
             uint32_t id = hex();
             vclock_at(dec(), key[0] == 'e' ? on_event : on_chain, (void *)(uintptr_t)id);

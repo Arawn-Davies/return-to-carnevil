@@ -284,7 +284,9 @@ class ClockIrqTest(unittest.TestCase):
         m = out.m()
         self.assertGreaterEqual(m["now"], 10 * P)
         self.assertEqual(m["status"], STATUS)
-        self.assertEqual(m["cause"], 0x4000)  # pending, masked
+        # not even pending: the board's VBLANK enable (interrupt enable bit 7) is set only by
+        # registering line 0 (slot 0x200), so the retrace never reaches IP6
+        self.assertEqual(m["cause"], 0)
         # INTCTL as machine_reset leaves it: the value measured at the game's entry
         # (loader-services.md, open question 1)
         self.assertEqual(m["intctl"], 0x4000)
@@ -563,7 +565,6 @@ class ClockIrqTest(unittest.TestCase):
             (["cause 8000", "raise 0 80100040"], ["IP7", "0x80100040"]),
             (["irqraise 7"], ["IP7"]),
             (["irqraise 1"], ["IP1"]),
-            (["vblank 0"], ["VBLANK period 0"]),
             ([f"event {i:X} 1000" for i in range(65)], ["events"]),
             # before the runtime was given RAM
             (["fptrap 8000"], ["0x8000", "exact only in a --trace-pc build"]),

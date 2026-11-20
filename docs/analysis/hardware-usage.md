@@ -375,8 +375,10 @@ share, not in git.
 13 select chips: 0 means all chips, 0x800 TMU0, 0x1000 TMU1, 0x2000 TMU2 (`voodoo.cpp`).
 Chip bits were seen only on textureMode, tLOD and tDetail (0 and 0x800) and on
 trexInit0/trexInit1 (0x800, 0x1000, 0x2000). Neither the alternate register map (bit 21)
-nor the byte-swizzle bit (bit 20) was seen. That rules out the alternate-map guess this page
-made before the run. GAME.EXE made 132 raw write offsets, which fold to 125 registers.
+nor the byte-swizzle bit (bit 20) was seen in CPU accesses. GAME.EXE made 132 raw write
+offsets, which fold to 125 registers. Correction, 2026-11-20: the taps saw CPU accesses only.
+The game's GT64010 DMA does write through the alternate map; see "The Voodoo model",
+"Alternate register map".
 
 **Writes by GAME.EXE** (20,342 in all). The tag is "static" where the static census also had
 the register and "missed" where it did not. Counts are writes:
@@ -401,8 +403,12 @@ the register and "missed" where it did not. Counts are writes:
 - trexInit0 5, trexInit1 11 (missed)
 - nccTable[0] to [23], 0x324 to 0x380: 2 each. The static census had nccTable[4] only.
 
-Not written: the float triangle path 0x088 to 0x100 (fvertex*, fstart*, fd*, ftriangleCMD)
-and the counters 0x14C to 0x15C. Attract mode uses the fixed-point triangle path only.
+Not written by the CPU: the float triangle path 0x088 to 0x100 (fvertex*, fstart*, fd*,
+ftriangleCMD) and the counters 0x14C to 0x15C. Correction, 2026-11-20: attract mode does use
+the float path, through DMA records that write the alternate register map. dma0.txt holds
+137,936 ftriangleCMD writes in 150 s, each with fvertexAx to fvertexCy and fstartS/T/W, fdS/T/WdX
+and fdS/T/WdY, first at 11.126 s. That is measured, decoded with the alternate map from MAME's
+model. The fixed-point path's 258 triangleCMD writes are the CPU's start-up checks.
 
 **Reads by GAME.EXE** (568,262 in all; 16 registers):
 - vdstatus: 568,150 reads, the busy-wait (static)
@@ -602,20 +608,16 @@ runtime's sink:
   - 1 of 0x0FF327F3: busy, retrace, PCI FIFO 0x33, memory FIFO 0xFF32, buffer 1.
   - 1 each of 0x0F2563BF and 0x0F2463BF: busy, PCI FIFO 0x3F, memory FIFO 0xF256 and 0xF246,
     buffer 0.
-  The sink does not yet model the displayed-buffer field, swaps pending or the busy states;
-  a later step models them. It answers 0x0FFFF03F, with bit 6 for the first 252,737 ns of
-  each VBLANK period. A status read stops instead of reporting buffer 0 once either of two
-  writes has reached the sink, directly or through a DMA record: a swapbufferCMD write, or
-  any write through the alternate register map (address bit 21). The alternate map is not
-  decoded yet, so a swap written through it cannot be ruled out. In the captures the first
-  alternate-map write is a DMA record at 11.126 s after power-on, and 940 status reads
-  follow it in the first 15 s (measured, `dma0.txt`, `voodoo-reads.txt`); CPU code makes no
-  alternate-map write in `voodoo-ramp.txt`. The retrace length is measured: in the
-  148 frames from 6.58 s to 9.30 s, which the game polled densely, the bit stayed set at
-  least 251,354 ns (first to last set read) and at most 254,120 ns (the clear reads either
-  side); the sink takes the middle. Those frames were 18,476,186 to 18,476,194 ns apart,
-  0.05% longer than the runtime's VBLANK period (inferred: the card's own video timing; the
-  sink follows the runtime's VBLANK so that a wait for the bit agrees with the interrupt).
+  The model computes every field ("The Voodoo model": busy and the FIFOs, swaps, video timing
+  and retrace). In the captures the first alternate-map write is a DMA record at 11.126 s
+  after power-on (measured, `dma0.txt`); CPU code makes no alternate-map write in
+  `voodoo-ramp.txt`. The retrace length is measured: in the 148 frames from 6.58 s to
+  9.30 s, which the game polled densely, the bit stayed set at least 251,354 ns (first to
+  last set read) and at most 254,120 ns (the clear reads either side). Those frames were
+  18,476,186 to 18,476,194 ns apart. Both agree with MAME's model of the card's timing:
+  4 rows of 63,492 ns (253,968 ns) in a frame of 291 rows at 15,750 Hz (18,476,190.5 ns).
+  No status read before the game programs the video timing at 6.5675 s has bit 6 set
+  (measured: 266,000 reads over 1.37 s from 5.19 s).
 - fbzColorPath 0x104, fogMode 0x108, alphaMode 0x10C, fbzMode 0x110, lfbMode 0x114,
   clipLeftRight 0x118, clipLowYHighY 0x11C, stipple 0x140, color0 0x144, color1 0x148: one
   read each at 9.29 s (0x80161AF0 to 0x80161BC4), returning 0, 0, 0, 0x4200, 0, 0x190, 0x100,
@@ -663,18 +665,33 @@ sequences, and replaying them reproduces the reads of its first 2 s.
 power-on). It writes halfwords under lfbMode 0x8F, 0x10 and 0x40 in turn and reads them back.
 In one case it wrote 0xDEAD at 0x08432100, then 0xFFFF at 0x0852BE3C and other addresses, and
 read 0xFFFF at 0x08432100. So LFB addresses alias in the card's frame-buffer memory, by its
-layout (row pitch, buffer offsets and memory size, set by the fbiInit registers). The other
-8,228 are a dither ramp, read 0x8015B250 to 0x8015B468. For each of 258 triangles, it draws
-one flat-coloured triangle, with vertices (0, 0), (36, 0) and (0, 36) in 12.4 fixed point,
-fbzColorPath 0x2 (color1), fbzMode 0x300 (dither and RGB write) and lfbMode 0. color1 steps
-from 0x000000 to 0xFFFFFF by 0x010101. The triangle is drawn with triangleCMD, never
-fastfillCMD (the one fastfillCMD before it, at 6.5529 s, cleared with color1 0 under fbzMode
-0x600). After each triangle the routine reads the 4 by 4 pixels at the origin through the LFB
-(eight words, each read four times). From 0x8015B39C it sums the 16 pixels' red, green and
-blue into tables at 0x801AB190 and 0x801AF190 indexed by the sums, and returns 0 when they
-disagree (read, in outline). Inferred: a calibration of the card's dither. The sink models
-neither the memory layout nor the rasteriser, so every LFB read stops. Without that stop, a
-plain memory would answer 0xDEAD where MAME answered 0xFFFF.
+layout (row pitch, buffer offsets and memory size, set by the fbiInit registers).
+
+The dither ramp makes 8,192 reads, at 0x8015B384 to 0x8015B390, from 6.5538 s to 6.5670 s
+(routine 0x8015B250). It draws 256 flat-coloured triangles, one at a time, each with
+vertices (0, 0), (36, 0) and (0, 36) in 12.4 fixed point, fbzColorPath 0x2 (color1), fbzMode
+0x300 (dither and RGB write) and lfbMode 0. color1 steps from 0x000000 to 0xFFFFFF by
+0x010101. The triangle is drawn with triangleCMD, never fastfillCMD (the one fastfillCMD
+before it, at 6.5529 s, cleared a 100 by 100 rectangle with color1 0 under fbzMode 0x600).
+After each triangle the routine reads the 4 by 4 pixels at the origin through the LFB (eight
+words, each read four times). From 0x8015B39C it sums the 16 pixels' red, green and blue into
+tables at 0x801AB190 and 0x801AF190 indexed by the sums, and returns 0 when they disagree
+(read, in outline). Inferred: a calibration of the card's dither.
+
+The last 36 reads are a TMU check, made right after the ramp with 2 textured triangles.
+- At 6.5670 s it writes trexInit1 0x0004F420 (bit 18 set) to each TMU, then draws the 36 by 36
+  triangle with fbzColorPath 0x08000001 (texture RGB), textureMode 0x00000D00 and tLOD 0. It
+  reads 32 times at 0x8015B664 to 0x8015B670: 0x00020002 at every word but 0x08401800, which
+  gives 0x00020003.
+- At 6.5671 s it writes three texture words at texBaseAddr 0x40000, 0x20000 and 0, then draws
+  a 4 by 4 triangle (textureMode 0x08241A00, RGB 565, fbzMode 0x200, no dither). It reads
+  0x08400000 4 times at 0x8015B948 to 0x8015B954 and gets 0x92F56EB0, the first texture word.
+- Inferred: the first triangle reads the TMU's revision or configuration word, and the
+  second sizes texture memory by aliasing.
+
+Correction, 2026-11-20: this paragraph said 258 flat triangles and 8,228 ramp reads. The
+measured split is 256 flat triangles with 8,192 reads, and 2 textured triangles with 36
+reads. The three checks are modelled ("The Voodoo model").
 
 **`voodoo-ramp.txt`** (measured, `tools/mame/voodooramp.lua`): every access of physical
 0x08000000 to 0x08FFFFFF by GAME.EXE code from its entry to 2 emulated seconds after it, in
@@ -693,6 +710,221 @@ the cause-bit-4 handler is, to within 5 ns (0.002%) for every start, 2,663.890 n
 byte: a least-squares fit to the eight chain shapes (28, 126, 195, 279, 564, 571 and 576
 small records, and 130 small with 256 large). The data cannot tell a cost per large record
 from one per large byte, since every large record has 0x640 bytes.
+
+## The Voodoo model
+
+The runtime models the card in `runtime/hw/voodoo_null.c` (registers, status, FIFOs, video
+timing), `voodoo_fb.c` (frame buffer, LFB, fastfill, triangles, swap) and `voodoo_tmu.c`
+(texture unit).
+
+**Source.** The capture cannot fix the card's rules, so they come from MAME's model of the
+Voodoo Graphics. That is MAME 0.276 (tag `mame0276`, BSD-3-Clause), read, not built: the
+files `src/devices/video/voodoo.cpp`, `voodoo.h`, `voodoo_regs.h`, `voodoo_render.cpp`,
+`voodoo_render.h`, `voodoo_pci.cpp`, `voodoo_pci.h` and `poly.h`, plus `src/emu/screen.cpp`,
+`src/mame/midway/seattle.cpp` and `src/lib/util/palette.h`. The runtime's code is written
+fresh. The dither matrices and the alternate register order are reproduced as data, as facts
+about the card. Each rule below is marked "from MAME's model", "measured", "read" or
+"inferred". Where the two disagree, the capture wins; no disagreement was found.
+
+**Checked against the capture** (measured). `voodoo-ramp.txt` is replayed in time order with
+`voodoo-reads.txt`'s PCI configuration writes, at its recorded times. Virtual time is the
+capture time less the entry's, 5,003,569,667 ns, the CPU's cycle 750,535,450 at 150 MHz.
+Every one of its 274,967 reads returns the value MAME returned (`tests/test_voodoo_fb.py`):
+- 266,645 status reads, including 771 of 0x0FFFF3BD and 16 of 0x0FFFF3BE, which are busy
+  with writes queued;
+- 85 register reads;
+- the memory test's 9 LFB reads;
+- the dither ramp's 8,192;
+- the TMU check's 36.
+
+**Frame buffer** (from MAME's model; the memory size from seattle.cpp's `set_fbmem(2)`).
+- Memory and layout:
+  - 2 MB of 16-bit pixels.
+  - fbiInit1 bits 4 to 7 give the row in 64-pixel tiles.
+  - fbiInit2 bits 11 to 19 give a colour buffer's size in 4 KB pages.
+  - With fbiInit2 bit 4 clear there are two colour buffers at 0 and one size, and an aux
+    buffer at twice the size. With it set there are three colour buffers and no aux.
+  - An offset past the memory is clamped to its last byte.
+  - The layout is recomputed only on an fbiInit1 or fbiInit2 write. Before one, every colour
+    buffer is at 0, there is no aux buffer, a row is 0 pixels, and three buffers rotate.
+- Memory test: its answer follows from this. With 13 tiles and 247 pages, its 0xDEAD under
+  lfbMode 0x8F goes to aux row 100, past the 2 MB, and is lost. The read there gives 0xFFFF
+  (measured agreement).
+- Power-on content: MAME's memory starts at zero. The model treats it as unknown, because it
+  is not measured. An LFB read of a pixel no modelled operation wrote since reset stops. The
+  capture never makes such a read.
+
+**LFB** (from MAME's model).
+- Addressing:
+  - A word's offset, doubled, is the pixel index: x in its low 10 bits, y above, y & 0x3FF.
+  - lfbMode bit 13 flips y about fbiInit3 bits 22 to 31.
+  - For reads, bits 6 and 7 select front, back or aux, and 3 is none, reading 0xFFFFFFFF.
+  - For writes, bits 4 and 5 select front or back; 2 and 3 write nothing.
+- Reads:
+  - A read returns the pair (x, x + 1), or 0xFFFFFFFF if the pair's second pixel is at or past
+    the end of the memory.
+  - Bits 15 and 16 swap words and bytes.
+  - A halfword is the half that address bit 1 selects (little-endian).
+- Writes:
+  - The game writes raw format 0 (RGB 565, expanded to 8 bits by bit replication and
+    dithered as fbzMode says) and raw format 15 (16-bit depth into the aux buffer, nothing
+    under fbzMode bit 18).
+  - A pixel past the end of the memory is not written.
+  - Any other mode (the pixel pipeline, the 32-bit formats, the lanes and swaps) is counted,
+    dropped and its pixels marked, as for triangles below.
+
+**Dither** (from MAME's model, "hardware-verified" there).
+- Red and blue go from 8 to 5 bits as (2v - v/16 + v/128 + d) / 16, green to 6 bits as
+  (4v - v/16 + v/64 + d) / 16, in integers.
+- d comes from the 4 by 4 matrix 0, 8, 2, 10 / 12, 4, 14, 6 / 3, 11, 1, 9 / 15, 7, 13, 5, or
+  MAME's 2 by 2 one under fbzMode bit 11, indexed by (y & 3, x & 3).
+- Without fbzMode bit 8 the top bits are kept: 0x808080 is 0x8410.
+- Triangles and LFB writes use the flipped row, fastfill the unflipped one.
+
+**Triangles** (from MAME's model: voodoo.cpp `triangle`, poly.h `render_triangle`).
+- The fill:
+  - Vertices are the s16 registers / 16, in single precision, sorted by y.
+  - Scanlines run from round(y1) to round(y3), exclusive, sampled at y + 0.5. round rounds
+    down, and up only above one half.
+  - Each scanline is the long edge v1 to v3 against v1 to v2 or v2 to v3. The extent is
+    [round(start), round(stop)), swapped if reversed.
+  - Then fbzMode bit 0 clips to [clipLeft, clipRight) and [clipLowY, clipHighY) on the
+    flipped row.
+  - The ramp's triangle covers 630 pixels, 35 - y in row y.
+- The card is busy for 100 clocks plus one per pixel of the unclipped extents, at 50 MHz.
+- triangleCMD and ftriangleCMD are the same command. The float registers write their
+  fixed-point twins: vertices in .4, colours in .12 (MAME's float_to_int32), and the TMU's S,
+  T and W in .32.
+- The capability rule decides what is drawn. At each triangle the model reads the mode
+  registers and draws only if every feature they enable is one it implements:
+  - the colour path selecting color1 or the texel, with no zero, subtraction, factor,
+    reverse, add or invert;
+  - clipping, the y origin, dither and the RGB write.
+- The rule is not from MAME's model. Otherwise the first feature missing, in pipeline order,
+  names the reason: subpixel adjust, iterated (Gouraud) colour, the colour combine, chroma
+  key, stipple, the depth test, the alpha mask, alpha test, fog, alpha blending, a depth or
+  alpha buffer write, the TMUs disabled, TMU0 off, or a texture-path reason below.
+- A triangle that fails is counted under that reason and dropped, and every pixel it would
+  have written is marked. An LFB read of a marked pixel stops, saying it holds drawing the
+  model does not render. A modelled write of the pixel, such as a fastfill, clears the mark.
+- A drawn pixel outside the memory, which MAME leaves undefined, stops.
+
+**Fastfill** (from MAME's model).
+- It fills the rectangle [clipLeft, clipRight) by [clipLowY, clipHighY) of the draw buffer
+  (fbzMode bits 14 and 15). RGB is filled with color1's dither pattern if bit 9 is set, aux
+  with zaColor's low half if bit 10 is set and there is an aux buffer.
+- It does nothing, in no time, without either bit. The card is busy for pixels / 2 clocks.
+- The capture's one fastfill, 100 by 100, keeps the card busy for 100 µs, with the
+  following nopCMD queued. That gives the 16 reads of 0x0FFFF3BE (measured agreement).
+
+**Texture unit** (from MAME's model, implemented as far as the TMU check needs).
+- Texture memory:
+  - One TMU with 4 MB (seattle.cpp `set_tmumem(4, 0)`).
+  - Registers reach it with chip bits 0 or 0x800. Writes for TMU1 and TMU2, absent, are
+    dropped.
+  - A texture word is placed by texBaseAddr × 8 and the LOD layout of tLOD and the format, as
+    MAME's `internal_texture_w`.
+  - A texel never written since reset makes its pixel marked.
+- Drawn: a non-perspective, point-sampled RGB 565 texture of one LOD (lod_min = lod_max).
+  - S and T are iterated in 32.32 from vertex A, converted to 24.8 by truncation (out of
+    range 0x80000000, as MAME's x86-64 build), shifted by the LOD, then clamped or wrapped.
+  - The texture combine must pass the TMU's own texel through: zero other, add c_local.
+  - Under trexInit1 bit 18 the texel is MAME's TMU configuration word, 0x11 in blue. The
+    check's 0x0002 and 0x0003 follow from it under the 4 by 4 dither, and from no other blue
+    of 0x10 to 0x12 (measured).
+- Otherwise the reason is perspective-corrected texturing, trilinear filtering, more than one
+  LOD, bilinear filtering, a texture format other than RGB 565, or another texture combine.
+
+**Busy and the FIFOs** (from MAME's model; measured agreement over the ramp).
+- Queueing:
+  - A command's clocks keep the card busy.
+  - While it is busy and PCI initEnable bit 1 is set, writes wait in the PCI FIFO and run in
+    order as the card frees. Those are writes to every register but 0x14C to 0x15C and 0x200
+    to 0x230, plus LFB and texture writes.
+  - The PCI FIFO holds 128 entries, two per write. The memory FIFO behind it (fbiInit0 bit
+    13; rows fbiInit4 bits 8 to 17 to 18 to 27, at most 131,072 entries) takes the oldest
+    writes once the PCI FIFO's free entries fall to twice fbiInit4 bits 2 to 7.
+  - Register reads return executed values.
+- Status:
+  - bits 0 to 5: PCI FIFO free writes, at most 0x3F;
+  - bit 6: the retrace;
+  - bits 7 to 9: busy;
+  - bits 10 and 11: the displayed buffer;
+  - bits 12 to 27: memory FIFO free writes, 0xFFFF when it is off;
+  - bits 28 to 30: swaps pending.
+- Where MAME would hold the writer (fbiInit0 bit 4, with the PCI FIFO at its low-water mark
+  or the memory FIFO at its high-water mark) or lose a write (a full FIFO), the model stops.
+  See "Known gaps in the card model".
+
+**Swaps** (from MAME's model).
+- A swapbufferCMD write counts as a pending swap at once.
+- Without bit 0 it swaps when it runs.
+- With bit 0 the card is busy for (interval + 1) × 5,000,000 clocks, and at each retrace start
+  that finds the retrace count (reset by each swap, at most 250) at the interval or more, it
+  swaps. The queue then goes on from that time.
+- A swap rotates front and back over two or three buffers. Before any fbiInit2 write MAME's
+  layout has three, all at 0.
+
+**Alternate register map** (from MAME's model). With fbiInit3 bit 0 set, a write with address
+bit 21 renumbers registers 0 to 0x3F. Each colour, Z, A, S, T and W start value is followed by
+its d/dX and d/dY, for the fixed-point registers and the float ones; registers from 0x40 up,
+ftriangleCMD among them, are unchanged. The game sets bit 0 from 6.5527 s (measured). Decoded
+this way, the DMA's alternate-map words (measured, `dma0.txt`, 150 s) are 137,936 each of
+fvertexAx to fvertexCy, fstartS/T/W, fdS/T/WdX, fdS/T/WdY and ftriangleCMD. The earlier
+count of alternate-map writes therefore hid all of attract mode's textured drawing. No swap
+or fastfill goes through the alternate map; the DMA's standard-map words include 4,042
+fastfillCMD and 7,159 nopCMD.
+
+**Video timing and retrace.** The card's vertical retrace is the board's VBLANK interrupt
+(from MAME's model: seattle.cpp connects the card's vblank callback to the board's VBLANK).
+- Before the timing is programmed:
+  - The screen runs MAME's default frames: 57 Hz, 480 rows, all visible, VBLANK at every
+    frame from power-on. Measured agreement: the capture's frame counter steps at multiples
+    of 1/57 s since power-on, for example frame 296 at 5.19298 s.
+  - The card has no retrace. Measured: no status read before 6.5675 s has bit 6.
+- When hSync, vSync, backPorch and videoDimensions are all non-zero, the screen is
+  reconfigured (from MAME's model):
+  - vtotal rows (vSync's two fields added) at the standard (15,750 Hz), medium or VGA line
+    rate, whichever frame is closest to the current one;
+  - the visible rows from backPorch's vertical field for videoDimensions' height;
+  - the time of its last VBLANK start kept, unless that is a new frame ago, when VBLANK
+    starts now.
+- The card's retrace runs from row vSync-off to row 0, rows counting from the screen's VBLANK
+  start (the end of the visible area). Each start raises IP6 while the board's VBLANK enable
+  is set (slot 0x200 for line 0; loader-services.md section 1).
+- With the game's values, written at 6.567466 s, that gives:
+  - a frame of 291 rows at 15,750 Hz, 18,476,190.476 ns. Measured: 18,476,186 to 18,476,194
+    ns between retraces.
+  - a retrace of 4 rows, 253,968 ns. Measured: 251,354 to 254,120 ns.
+  - a first retrace at 6,580,768,588 ns. Measured: between the reads at 6,580,767,773 and
+    6,580,768,713 ns.
+- The residual phase error against the capture is within the reads' spacing. Every status
+  read of the capture agrees, the nearest falling 120 ns from a model edge. The capture's
+  frame counter steps 21 rows after each model retrace start, between the accesses either
+  side, as MAME's screen counts a frame at its VBLANK end (35 rows after its start).
+- If the game registers line 0 before the timing is programmed, no VBLANK arrives until it is.
+- Reprogramming the timing during a retrace stops, because when MAME's model ends that
+  retrace is not modelled. The game programs it once.
+
+**Known gaps in the card model.**
+- The DMA delivers a chain at one instant. dev_sysctrl.c copies every record at the enable
+  write, where on the board, and in MAME, the card holds the GT64010's DMA (pci_stall) while
+  its FIFO is at the water marks.
+  - A chain written while the card is busy can therefore reach a water mark at once, for
+    example behind a swapbufferCMD that waits for the retrace. The model then stops rather
+    than report a FIFO the card would never show.
+  - What would show it: a stop naming the PCI FIFO low-water mark or the memory FIFO
+    high-water mark at a DMA enable (ioctl 0x7301). In MAME the status reads after such a
+    chain show the FIFOs draining over time; in the captures, values such as 0x0F1217B8 and
+    0x1F1737AA after 11.13 s.
+  - The 253 reads of 0x0FFFF47F after 11.18 s (swaps by DMA) cannot be replayed, because
+    the DMA's data was not captured. For those the model is from MAME's model.
+- MAME's memory FIFO lives in frame-buffer memory. From 6.5678 s that is rows 192 to 511, over
+  the aux buffer, and MAME's entries would overwrite those pixels. The model keeps the FIFO's
+  writes apart.
+  - What would show it: an LFB read of aux pixels there after the memory FIFO held entries.
+    MAME would answer with its FIFO's encoding, the model with the pixels. The capture has no
+    such read.
 
 ## Constants that are not addresses
 

@@ -137,19 +137,17 @@ static void s_break6_hook(cpu_t *c)
     exc_set_break_hook(6, c->r[4]);
 }
 
-/* 0x200 irq_set_handler: section 1; line 0 also starts the VBLANK source the first time;
- * v0 = 8 on the normal path */
+/* 0x200 irq_set_handler: section 1; for line 0 it also sets (or clears) the board's VBLANK
+ * enable, which lets the Voodoo's retrace (runtime/hw) reach IP6; v0 = 8 on the normal
+ * path */
 static void s_irq_set_handler(cpu_t *c)
 {
     uint32_t line = c->r[4], fn = c->r[5];
     if (line > 4)
         ld_stop("line %u: no IP maps to it; the loader does nothing and its v0 is not "
                 "documented", (unsigned)line);
-    vclock_account(c); /* so the first VBLANK is one period after this call */
-    if (line == 0 && fn && machine.vblank_period == 0)
-        vblank_start(VBLANK_PERIOD_NS);
     irq_set_line((int)line, fn);
-    vclock_reload(c); /* the new event, and a line now unmasked */
+    vclock_reload(c); /* a line now unmasked */
     c->r[2] = 8;
 }
 
