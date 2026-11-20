@@ -602,10 +602,15 @@ runtime's sink:
   - 1 of 0x0FF327F3: busy, retrace, PCI FIFO 0x33, memory FIFO 0xFF32, buffer 1.
   - 1 each of 0x0F2563BF and 0x0F2463BF: busy, PCI FIFO 0x3F, memory FIFO 0xF256 and 0xF246,
     buffer 0.
-  The sink does not yet model the displayed-buffer field, swaps pending or the busy states
-  (Task 7b will). It answers 0x0FFFF03F, with bit 6 for the first 252,737 ns of each VBLANK
-  period, and once a swapbufferCMD write has reached it (directly or through a DMA record) a
-  status read stops instead of reporting buffer 0. The retrace length is measured: in the
+  The sink does not yet model the displayed-buffer field, swaps pending or the busy states;
+  a later step models them. It answers 0x0FFFF03F, with bit 6 for the first 252,737 ns of
+  each VBLANK period. A status read stops instead of reporting buffer 0 once either of two
+  writes has reached the sink, directly or through a DMA record: a swapbufferCMD write, or
+  any write through the alternate register map (address bit 21). The alternate map is not
+  decoded yet, so a swap written through it cannot be ruled out. In the captures the first
+  alternate-map write is a DMA record at 11.126 s after power-on, and 940 status reads
+  follow it in the first 15 s (measured, `dma0.txt`, `voodoo-reads.txt`); CPU code makes no
+  alternate-map write in `voodoo-ramp.txt`. The retrace length is measured: in the
   148 frames from 6.58 s to 9.30 s, which the game polled densely, the bit stayed set at
   least 251,354 ns (first to last set read) and at most 254,120 ns (the clear reads either
   side); the sink takes the middle. Those frames were 18,476,186 to 18,476,194 ns apart,
@@ -643,10 +648,11 @@ fbiInit2 read under initEnable bit 2 follows dacData (0x22C) writes made through
 The model: a dacData write puts its bits 0 to 7 into DAC register (bits 8 to 10) unless bit 11
 is set; with bit 11 it latches that register's value, except that register 5 answers 0x55,
 0x71 or 0x79 while register 7 holds 0x01, 0x07 or 0x0B; fbiInit2 read under initEnable bit 2
-returns the latch. Register 5 starts at 0, since the first plain read of it, before any write
-to it, returned 0. Register 7's power-on value is not measured (the game writes it before
-every register-5 read), so the runtime stops on a register-5 read request made before
-register 7 has been written. The basis for the model is the coordinator's recollection of MAME's
+returns the latch. Of the DAC's power-on values only register 5's is known: it is 0. The
+first plain read of register 5, made after register 7 was written (0x0E) and before any
+write to register 5, returned 0. Register 7's power-on value is not known, and register 5's
+answer depends on it, so the runtime stops on a register-5 read request made before
+register 7 has been written; the game always writes register 7 first. The basis for the model is the coordinator's recollection of MAME's
 Voodoo DAC, which was not re-read. It reproduces all 9 measured reads in order: the six of
 the ICS detect, and three of 0x00 (register 5 as last written, its byte read & 0xEF). The
 capture `voodoo-ramp.txt` (below) holds the first 23 dacData writes, which are exactly these

@@ -173,6 +173,16 @@ class VoodooTest(HwTestCase):
         swap = mem(CHAIN, 4, 0x002375D0, 0x08000128, 0, 0)
         self.stops(swap + open_("pci:", 2) + start_chain(0x002375C0) + [rd(4, VOODOO)],
                    "physical 0x08000000", "displayed-buffer")
+        # after an alternate-map write, direct or as a DMA record's destination, status stops:
+        # a swap written through the undecoded alternate map cannot be ruled out
+        self.stops([rd(4, VOODOO), wr(4, VOODOO + 0x200088, 7), rd(4, VOODOO)],
+                   "physical 0x08000000", "alternate register map", "not decoded")
+        alt = mem(CHAIN, 4, 0x002375D0, 0x08200088, 0, 0)
+        self.stops(alt + open_("pci:", 2) + start_chain(0x002375C0) + [rd(4, VOODOO)],
+                   "physical 0x08000000", "alternate register map")
+        out, _ = self.drive([wr(4, VOODOO + 0x200088, 7), wr(4, VOODOO + 0x128, 0), "reset",
+                             rd(4, VOODOO)])
+        self.assertEqual(self.rds(out), [STATUS_RETRACE])  # hw_reset clears both conditions
 
     def test_voodoo_registers(self):
         """Kind 1: a register reads back what was last written, and counts its writes; the

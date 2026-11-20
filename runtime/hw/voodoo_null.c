@@ -180,6 +180,10 @@ static uint32_t reg_read(cpu_t *c, uint32_t off, int size)
         if (v.swapped)
             hw_stop(c, phys, 4, 0, 0, "a status read after a swapbufferCMD write: the "
                     "displayed-buffer field (and swap-pending) is not modelled yet");
+        if (v.alt_used)
+            hw_stop(c, phys, 4, 0, 0, "a status read after a write through the alternate "
+                    "register map, which is not decoded yet: a swap or any other command "
+                    "written through it cannot be ruled out");
         return STATUS_IDLE | retrace(c);
     }
     if (!readable(n))
