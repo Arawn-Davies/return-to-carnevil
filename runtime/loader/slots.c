@@ -163,7 +163,6 @@ static void s_irq_set_handler(cpu_t *c)
 #define PCI_SCAN_FIRST 6u
 #define PCI_SCAN_LAST 9u
 #define PCI_NOT_FOUND 10u
-#define CFG_BAR0_WORD 4u
 #define VOODOO_BAR0 0x08000000u
 #define VOODOO_KSEG1 0xA8000000u
 
@@ -242,7 +241,7 @@ static void s_pci_map(cpu_t *c)
     for (uint32_t dev = PCI_SCAN_FIRST; dev <= PCI_SCAN_LAST; dev++) {
         if (!has_vendor(dev, vendor) || seen++ != index)
             continue;
-        cfg_write(dev, CFG_BAR0_WORD, VOODOO_BAR0);
+        voodoo_cfg_map_bar0(VOODOO_BAR0);
         ld_put32(dev_out, dev);
         c->r[2] = VOODOO_KSEG1;
         return;

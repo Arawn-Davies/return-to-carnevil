@@ -41,6 +41,14 @@
 #define CHIP_SHIFT 10
 #define CHIP_FBI 1u
 #define REG_DACDATA (0x22Cu / 4)
+#define REG_SWAPBUFFER (0x128u / 4)
+#define INIT_WRITE_ENABLE 0x1u /* PCI initEnable bit 0: fbiInit writes enabled */
+
+/* fbiInit0 to fbiInit4 (0x210 to 0x21C, 0x200) */
+static int is_fbiinit(uint32_t n)
+{
+    return n == 0x200u / 4 || (n >= 0x210u / 4 && n <= 0x21Cu / 4);
+}
 
 /* The DAC behind dacData (hardware-usage.md, "The DAC"): data in bits 0 to 7, the DAC register
  * in bits 8 to 10, the read flag in bit 11. Register 5 read while register 7 holds 0x01, 0x07
@@ -90,6 +98,7 @@ static struct {
     int bar0_set;
     uint8_t dac[8], dac_set;   /* the DAC registers, and which have a value (bit n) */
     int latched;               /* a read has been latched since reset */
+    int swapped;               /* a swapbufferCMD write has been made since reset */
     uint8_t latch;
 } v;
 
@@ -105,7 +114,11 @@ static void dac_write(cpu_t *c, uint32_t value)
         v.dac_set |= (uint8_t)(1u << reg);
         return;
     }
-    if (reg == 5 && (v.dac_set & 0x80u))
+    if (reg == 5 && !(v.dac_set & 0x80u))
+        hw_stop(c, VOODOO_PHYS + 4 * REG_DACDATA, 4, 1, value, "a read request of DAC register "
+                "5 before register 7 was written since reset: register 5's answer depends on "
+                "register 7, whose power-on value is not measured");
+    if (reg == 5)
         for (size_t i = 0; i < sizeof DAC_REG5 / sizeof DAC_REG5[0]; i++)
             if (DAC_REG5[i].reg7 == v.dac[7]) {
                 v.latch = DAC_REG5[i].answer, v.latched = 1;
@@ -163,8 +176,12 @@ static uint32_t reg_read(cpu_t *c, uint32_t off, int size)
     if ((off >> CHIP_SHIFT) & 0xFu)
         hw_stop(c, phys, 4, 0, 0, "Voodoo read with chip bits 0x%X, which the game never "
                 "read with", (unsigned)((off >> CHIP_SHIFT) & 0xFu));
-    if (n == REG_STATUS)
+    if (n == REG_STATUS) {
+        if (v.swapped)
+            hw_stop(c, phys, 4, 0, 0, "a status read after a swapbufferCMD write: the "
+                    "displayed-buffer field (and swap-pending) is not modelled yet");
         return STATUS_IDLE | retrace(c);
+    }
     if (!readable(n))
         hw_stop(c, phys, 4, 0, 0, "Voodoo register 0x%03X is not one the game read in MAME "
                 "(voodoo-reads.txt), so what it reads as is not known", (unsigned)(4 * n));
@@ -202,7 +219,12 @@ static void reg_write(cpu_t *c, uint32_t off, int size, uint32_t value)
     if (n == REG_STATUS)
         hw_stop(c, phys, 4, 1, value, "a write of the Voodoo status register, which the game "
                 "never made in MAME");
+    if (is_fbiinit(n) && !(v.cfg[CFG_INIT_ENABLE] & INIT_WRITE_ENABLE))
+        hw_stop(c, phys, 4, 1, value, "an fbiInit write while PCI initEnable bit 0 is clear "
+                "(the card may ignore it; the game made none in MAME)");
     v.writes[n]++;
+    if (n == REG_SWAPBUFFER)
+        v.swapped = 1;
     /* the value the game can read back is the FBI's: chips 0 (all) or with the FBI bit */
     if (chips == 0 || (chips & CHIP_FBI)) {
         v.reg[n] = value;
@@ -282,16 +304,28 @@ int voodoo_cfg_read(uint32_t word, uint32_t *out, const char **why)
     }
 }
 
+/* The words the game wrote through slot 0x0F8 (measured, voodoo-reads.txt: hardware-usage.md,
+ * "PCI configuration"): 1 (byte offset 0x04), 0x10 (0x40, initEnable), 0x11 (0x44), 0x12
+ * (0x48), 0x30 (0xC0) and 0x38 (0xE0). BAR0 is written only by slot 0x110
+ * (voodoo_cfg_map_bar0), so a BAR-sizing write never reaches it. */
+static const uint8_t CFG_WRITTEN[] = {0x01, 0x10, 0x11, 0x12, 0x30, 0x38};
+
 int voodoo_cfg_write(uint32_t word, uint32_t value, const char **why)
 {
-    if (word >= 64 || word == 0 || word == 2) {
-        *why = "a write the game never made (words 0 and 2 are the identification)";
-        return -1;
-    }
-    if (word == CFG_BAR0)
-        v.bar0_set = 1;
-    v.cfg[word] = value;
-    return 0;
+    for (size_t i = 0; i < sizeof CFG_WRITTEN; i++)
+        if (CFG_WRITTEN[i] == word) {
+            v.cfg[word] = value;
+            return 0;
+        }
+    *why = "a write of a word the game never wrote in MAME (it wrote byte offsets 0x04, 0x40, "
+           "0x44, 0x48, 0xC0 and 0xE0, and BAR0 only through slot 0x110)";
+    return -1;
+}
+
+void voodoo_cfg_map_bar0(uint32_t base)
+{
+    v.cfg[CFG_BAR0] = base;
+    v.bar0_set = 1;
 }
 
 void voodoo_reset(void)

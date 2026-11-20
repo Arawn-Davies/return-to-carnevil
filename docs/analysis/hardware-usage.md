@@ -565,19 +565,47 @@ write are told apart.
 **PCI configuration** (measured, `voodoo-reads.txt`, the 44 PCI slot calls). Device 8 read
 0x0001121A for configuration word 0 (byte offsets 0 and 2, twice), 0x00000002 for word 2
 (twice) and 0x08000008 for word 4, BAR0, once, after slot 0x110 had written 0x08000000 there.
-No other word of any device was read through slot 0x0F0. The game wrote word 1 (2, twice),
-the words at byte offsets 0x44, 0x48 and 0xE0 (0 each), 0xC0 (1, later 0) and 0x40,
-initEnable (1 once, then 3 six times and 5 five times, alternating). The vendor probes of
-devices 6, 7 and 9 returned 0. Inferred: word 4 reads back the base with the memory BAR's
-type bits (bit 3, prefetchable); this is the one point measured.
+No other word of any device was read through slot 0x0F0. The game wrote, through slot 0x0F8
+(19 calls): byte offset 0x04, word 1 (2, twice); 0xE0, 0x44 and 0x48 (0, once each); 0xC0 (0,
+twice; corrected on 2026-11-20 from "1, later 0": the 1 is the call's fifth argument, not the
+value); and 0x40, initEnable (1 once, then 3 six times and 5 five times, alternating). It
+wrote no other word; BAR0 is written only by slot 0x110. The runtime accepts only these
+words through slot 0x0F8 and stops on any other, which also stops a BAR-sizing write. The
+vendor probes of devices 6, 7 and 9 returned 0. Inferred: word 4 reads back the base with
+the memory BAR's type bits (bit 3, prefetchable); this is the one point measured. The game
+sets initEnable bit 0 (1 at 5.1928 s) before its first fbiInit write (5.1928 s, 21 µs
+later; `voodoo-ramp.txt`), so the runtime stops on an fbiInit write while that bit is clear.
 
 **Voodoo registers the game read** (measured, `voodoo-reads.txt`), and the kind of each in the
 runtime's sink:
-- status (0x000), 604,082 reads, kind 2 (computed). 596,461 returned 0x0FFFF03F (PCI FIFO
-  free 0x3F, memory FIFO free 0xFFFF, not busy, no swap pending) and 5,815 0x0FFFF07F (the
-  same with bit 6, vertical retrace); the remaining 1,806 showed busy or swap-pending
-  states (0x0FFFF3BD, 0x0F1217B8, 0x1F1217B7 and others). The sink answers 0x0FFFF03F, with
-  bit 6 for the first 252,737 ns of each VBLANK period. That length is measured: in the
+- status (0x000), 604,082 reads, kind 2 (computed). The 18 distinct values, by field: PCI
+  FIFO free (bits 0 to 5), vertical retrace (6), FBI, TMU and SST busy (7 to 9), the
+  displayed buffer (10 and 11), memory FIFO free (12 to 27), swaps pending (28 to 30). The
+  field meanings are those of the Voodoo Graphics status register; they are inferred, and
+  agree with every value seen.
+  - 596,461 reads of 0x0FFFF03F: idle, FIFOs free (0x3F, 0xFFFF), buffer 0, no retrace, no
+    swap pending.
+  - 5,815 of 0x0FFFF07F: the same with retrace.
+  - 253 of 0x0FFFF47F: idle with retrace and displayed buffer 1, between 11.18 s and 19.99 s,
+    after swaps. They are neither busy nor swap-pending.
+  - 771 of 0x0FFFF3BD, 167 of 0x0FFFF3BE and 152 of 0x0FFFF3BC: busy, PCI FIFO 0x3D, 0x3E
+    and 0x3C, buffer 0.
+  - 152 of 0x0F1217B8 (buffer 1) and 150 of 0x0F1213B8 (buffer 0): busy, PCI FIFO 0x38,
+    memory FIFO 0xF121.
+  - 76 of 0x1F1217B7 (buffer 1) and 75 of 0x1F1213B7 (buffer 0): the same with PCI FIFO 0x37
+    and one swap pending.
+  - 2 of 0x0FFFF3F9: busy with retrace, PCI FIFO 0x39, buffer 0.
+  - 2 of 0x0F1737AB: busy, PCI FIFO 0x2B, memory FIFO 0xF173, buffer 1.
+  - 1 of 0x1FFFF3F8: busy, retrace, one swap pending, PCI FIFO 0x38, buffer 0.
+  - 1 of 0x1F2763BE: busy, one swap pending, PCI FIFO 0x3E, memory FIFO 0xF276, buffer 0.
+  - 1 of 0x1F1737AA: busy, one swap pending, PCI FIFO 0x2A, memory FIFO 0xF173, buffer 1.
+  - 1 of 0x0FF327F3: busy, retrace, PCI FIFO 0x33, memory FIFO 0xFF32, buffer 1.
+  - 1 each of 0x0F2563BF and 0x0F2463BF: busy, PCI FIFO 0x3F, memory FIFO 0xF256 and 0xF246,
+    buffer 0.
+  The sink does not yet model the displayed-buffer field, swaps pending or the busy states
+  (Task 7b will). It answers 0x0FFFF03F, with bit 6 for the first 252,737 ns of each VBLANK
+  period, and once a swapbufferCMD write has reached it (directly or through a DMA record) a
+  status read stops instead of reporting buffer 0. The retrace length is measured: in the
   148 frames from 6.58 s to 9.30 s, which the game polled densely, the bit stayed set at
   least 251,354 ns (first to last set read) and at most 254,120 ns (the clear reads either
   side); the sink takes the middle. Those frames were 18,476,186 to 18,476,194 ns apart,
@@ -616,7 +644,9 @@ The model: a dacData write puts its bits 0 to 7 into DAC register (bits 8 to 10)
 is set; with bit 11 it latches that register's value, except that register 5 answers 0x55,
 0x71 or 0x79 while register 7 holds 0x01, 0x07 or 0x0B; fbiInit2 read under initEnable bit 2
 returns the latch. Register 5 starts at 0, since the first plain read of it, before any write
-to it, returned 0. The basis for the model is the coordinator's recollection of MAME's
+to it, returned 0. Register 7's power-on value is not measured (the game writes it before
+every register-5 read), so the runtime stops on a register-5 read request made before
+register 7 has been written. The basis for the model is the coordinator's recollection of MAME's
 Voodoo DAC, which was not re-read. It reproduces all 9 measured reads in order: the six of
 the ICS detect, and three of 0x00 (register 5 as last written, its byte read & 0xEF). The
 capture `voodoo-ramp.txt` (below) holds the first 23 dacData writes, which are exactly these

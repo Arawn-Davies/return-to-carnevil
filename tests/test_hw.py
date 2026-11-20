@@ -104,20 +104,27 @@ class PciTest(HwTestCase):
 
     def test_pci_config(self):
         """Slots 0x0F0 and 0x0F8 on device 8 (section 8): words 0, 2 and 4 read as MAME
-        returned them (word 4, BAR0, once slot 0x110 has mapped it); writes are stored and
-        return 1; another device, an unread word, a write of an ID word and BAR0 before the
-        mapping stop."""
+        returned them (word 4, BAR0, once slot 0x110 has mapped it); writes of the words the
+        game wrote (byte offsets 0x04, 0x40, 0x44, 0x48, 0xC0, 0xE0) are stored and return 1;
+        another device, an unread word, a write of any other word (an ID word, BAR0 through
+        slot 0x0F8, a BAR-sizing 0xFFFFFFFF, word 0x3F) and BAR0 before the mapping stop."""
         out, _ = self.drive([f"r 1D {SP_TOP:X}"] + mem(SP_TOP + 16, 0)
                             + [call(0x110, 0x121A, 0xFFFF, 0, DEVP)]
                             + [call(0x0F0, reg, 8, DATA + 4 * i)
                                for i, reg in enumerate((0x10, 0x08, 0x02, 0x00))]
-                            + [f"dump {DATA:X} 4"] + cfg_write(0x04, 2) + cfg_write(0x40, 1))
-        self.assertEqual(out.v0s(), [0xA8000000, 1, 1, 1, 1, 1, 1])
+                            + [f"dump {DATA:X} 4"]
+                            + [c for reg, v in ((0x04, 2), (0xE0, 0), (0x40, 1), (0x44, 0),
+                                                (0x48, 0), (0xC0, 0))
+                               for c in cfg_write(reg, v)])
+        self.assertEqual(out.v0s(), [0xA8000000, 1, 1, 1, 1] + [1] * 6)
         self.assertEqual(out.dumps(), [[0x08000008, 0x00000002, 0x0001121A, 0x0001121A]])
         self.stops([call(0x0F0, 0, 7, DATA)], "0x0F0", "device 7")
         self.stops(cfg_write(0x40, 1, dev=9), "0x0F8", "device 9")
         self.stops([call(0x0F0, 0x40, 8, DATA)], "0x0F0", "word 0x10")
-        self.stops(cfg_write(0x00, 0x12345678), "0x0F8", "word 0x00")
+        self.stops(cfg_write(0x00, 0x12345678), "0x0F8", "word 0x00", "0x12345678")
+        self.stops(cfg_write(0x10, 0xFFFFFFFF), "0x0F8", "word 0x04", "0xFFFFFFFF")
+        self.stops(cfg_write(0x10, 0x08000000), "0x0F8", "word 0x04", "0x08000000")
+        self.stops(cfg_write(0xFC, 1), "0x0F8", "word 0x3F")
         self.stops([call(0x0F0, 0x10, 8, DATA)], "0x0F0", "BAR0", "before")
 
     def test_pci_probe_other(self):
@@ -148,7 +155,9 @@ class VoodooTest(HwTestCase):
     def test_voodoo_status(self):
         """status (kind 2): FIFO free at its maximum, not busy, no swap pending, and the
         vertical-retrace bit for the first RETRACE_NS of each VBLANK period, by the virtual
-        clock (from time 0 until VBLANK starts, then from each VBLANK); a write stops."""
+        clock (from time 0 until VBLANK starts, then from each VBLANK); a write stops; after a
+        swapbufferCMD write, written directly or by a DMA record, a status read stops (the
+        displayed-buffer field is not modelled yet)."""
         after = RETRACE_NS // 100 + 1  # check points of 100 ns
         to_next = (VBLANK_PERIOD_NS - after * 100) // 100 + 1
         out, _ = self.drive([rd(4, VOODOO), f"checks {after - 1:X}", rd(4, VOODOO),
@@ -159,11 +168,17 @@ class VoodooTest(HwTestCase):
                                          STATUS_RETRACE, STATUS_RETRACE, STATUS_IDLE,
                                          STATUS_RETRACE])
         self.stops([wr(4, VOODOO, 0)], "physical 0x08000000", "status")
+        self.stops([rd(4, VOODOO), wr(4, VOODOO + 0x128, 0), rd(4, VOODOO)],
+                   "physical 0x08000000", "swapbufferCMD", "displayed-buffer")
+        swap = mem(CHAIN, 4, 0x002375D0, 0x08000128, 0, 0)
+        self.stops(swap + open_("pci:", 2) + start_chain(0x002375C0) + [rd(4, VOODOO)],
+                   "physical 0x08000000", "displayed-buffer")
 
     def test_voodoo_registers(self):
         """Kind 1: a register reads back what was last written, and counts its writes; the
-        fbiInit registers start at their measured power-on values; fbiInit2 and fbiInit3
-        stop while PCI initEnable bit 2 is set (kind 3, the DAC: not modelled), and read
+        fbiInit registers start at their measured power-on values, and a write of one while
+        PCI initEnable bit 0 is clear stops; fbiInit2 reads the DAC while initEnable bit 2 is
+        set (DacTest; with no DAC read latched it stops) and fbiInit3 then stops; both read
         their storage when it is clear; a read before any write, of a register the game never
         read, through chip bits or the alternate map, and after an alternate-map write, stops."""
         out, _ = self.drive([rd(4, VOODOO + r) for r in sorted(FBIINIT_POWER_ON)]
@@ -193,6 +208,12 @@ class VoodooTest(HwTestCase):
         self.stops([wr(4, VOODOO + 0x4104, 1)], "physical 0x08004104", "bits 14 to 19")
         self.stops([wr(2, VOODOO + 0x104, 1)], "physical 0x08000104", "2 bytes")
         self.stops([rd(1, VOODOO + 0x210)], "physical 0x08000210", "1 byte")
+        for reg in sorted(FBIINIT_POWER_ON):
+            with self.subTest(write=hex(reg)):
+                self.stops([wr(4, VOODOO + reg, 1)], f"physical 0x{0x08000000 + reg:08X}",
+                           "initEnable bit 0")
+        self.stops(cfg_write(0x40, 1) + cfg_write(0x40, 0) + [wr(4, VOODOO + 0x210, 1)],
+                   "initEnable bit 0")
 
 
 DACDATA = 0x22C
@@ -239,6 +260,8 @@ class DacTest(HwTestCase):
                    "never written")
         self.stops(cfg_write(0x40, 5) + dac_cmds([0x70B, 0xD00]) + [rd(4, VOODOO + 0x21C)],
                    "fbiInit3", "DAC")
+        # register 5 before register 7 has a value: register 7's power-on value is unmeasured
+        self.stops(cfg_write(0x40, 5) + dac_cmds([0xD00]), "DAC register 5", "register 7")
 
 
 class DmaTest(HwTestCase):
@@ -460,7 +483,8 @@ class VoodooFactsTest(HwTestCase):
         """For every register voodoo-reads.txt shows the game reading: status reads only
         values MAME returned (idle, and idle with retrace, both of them over a frame); every
         other register is plain storage (kind 1) or fbiInit2 under PCI initEnable bit 2 (the
-        DAC, kind 3, which stops): each value MAME returned reads back after being written,
+        DAC, kind 3, which stops here only because no DAC read is latched; DacTest and
+        test_dac_reads_like_mame cover it): each value MAME returned reads back after being written,
         the fbiInit registers' power-on values are their first measured reads, and exactly
         the reads made while initEnable bit 2 was set are the remapped fbiInit2 ones.
 
@@ -617,8 +641,8 @@ class VoodooReplayTest(HwTestCase):
 class DmaFactsTest(HwTestCase):
     def test_dma0_delay_fits_mame(self):
         """For every chain shape of dma0.txt (records not writing the frame buffer, bytes of
-        those that do), dma0_delay_ns is within the fit's error (0.01% plus 10 ns, against a
-        largest fit residual of 0.002%) of every measured start-to-interrupt time; every chain
+        those that do), dma0_delay_ns is within the fit's stated error, 5 ns (dev_sysctrl.c and
+        hardware-usage.md), of every measured start-to-interrupt time; every chain
         ends with next = 0 and every record is word aligned, as the model assumes."""
         shapes = collections.defaultdict(set)
         cur = None
@@ -640,7 +664,7 @@ class DmaFactsTest(HwTestCase):
         for (shape, measured), (d,) in zip(sorted(shapes.items()), out.all("delay")):
             for m in measured:
                 with self.subTest(shape=shape, measured=m):
-                    self.assertLessEqual(abs(int(d) - m), m // 10000 + 10)
+                    self.assertLessEqual(abs(int(d) - m), 5)
 
 
 @requires_file("mame", "m2-facts", "inputs.txt")

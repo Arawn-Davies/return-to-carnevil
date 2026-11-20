@@ -53,11 +53,14 @@ uint64_t voodoo_tex_writes(void);
 /* The card's PCI configuration space: device VOODOO_PCI_DEV (measured), word = register
  * number (byte offset / 4, 0 to 63). voodoo_cfg_read returns 0 with the word in *out, or -1
  * with the reason in *why when the word's value is not one MAME showed; voodoo_cfg_write
- * returns 0 having stored the value, or -1 with the reason for a write the game never made.
- * The loader's PCI slots (runtime/loader/slots.c) turn a -1 into their stop. */
+ * returns 0 having stored the value of one of the words the game wrote in MAME, or -1 with
+ * the reason for any other word, BAR0 included. The loader's PCI slots
+ * (runtime/loader/slots.c) turn a -1 into their stop. voodoo_cfg_map_bar0: BAR0 = base, as
+ * slot 0x110 maps the card (the only BAR0 write the game makes). */
 #define VOODOO_PCI_DEV 8u
 int voodoo_cfg_read(uint32_t word, uint32_t *out, const char **why);
 int voodoo_cfg_write(uint32_t word, uint32_t value, const char **why);
+void voodoo_cfg_map_bar0(uint32_t base);
 
 /* --- the gun (gun.c) --------------------------------------------------------------------- */
 

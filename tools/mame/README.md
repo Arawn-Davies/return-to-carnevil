@@ -428,7 +428,10 @@ cycles converted as above), or from the M2 measurements where those already held
   `dma0.txt` (`M2 GW`, `M2 GR`, `M2 CHAIN`, `M2 RECS`, `M2 B4`), `disk-hooks.txt` (`M2 MCB`,
   `M2 WAIT`, `M2 WAKE`, `M2 WAKED`, `M2 MOV`), `spin.txt` (`M2 SPIN`), and with facts-P
   `breaks.txt` (`M2 BRK`, `M2 BRKR`, `M2 CATCH`, `M2 6905`);
-- from the `voodooramp.lua` run: `voodoo-ramp.txt` (`VR W`, `VR R`; the raw run was not kept);
+- from the `voodooramp.lua` run: `voodoo-ramp.txt` (`VR W`, `VR R`). The raw run (`debug.log`,
+  `mame.out`, `wall.txt`, the script as run and MAME's `cfg`, `nvram` and `diff` folders) was
+  left in `/tmp/m2f/ramp` on the machine that ran MAME, not copied to `raw/` on the share, so
+  it lasts only as long as that `/tmp`;
 - from dcs-A: `dcs-trace.txt` (`DT R`, `DT W`, `DT E`, `DT I3`, `DT H3`);
 - from `m2-measure`: `opens.txt` (loader-A's `loader-calls-first.txt` and the `LS` lines of
   its `debug.log.gz`), `loader-first.txt` (`loader-calls-first.txt`), `tasks.txt` (`TS CR`
