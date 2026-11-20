@@ -29,8 +29,8 @@ The way there: translate the game's own MIPS code (`GAME.EXE`) to C once, ahead 
 
 ## Facts established (recon 2026-11-19)
 
-- Source data: `Consoles/ROMs/mame/carnevil/` on the Gaming share : `carnevil.chd` (4,310,046,720-byte disk, data SHA1 `ba32b7ef…`), `carnevi1.chd` (other revision), `boot.u32` / `carnevil1_9.u32` (boot ROM), `sound102.u95` (DCS ADSP-2115 boot ROM), `486_carnevil.u96`.
-- Extraction follows the layout of the xclusivor/CarnEvil-Research scripts: CHD -> raw -> 17 partitions -> part0 has 1,356 files (the scripts read each file's blocks as contiguous, which is wrong for the 3 files whose blocks are not adjacent, `GAME.EXE` among them; our extractor follows the block chain, see `docs/analysis/disk-format.md`), including `GAME.EXE` (918,060 bytes) and `DIAG.EXE` (468,436 bytes), DCS `.BIN`/`.BNK`, `WMS` textures, `ZM`/`ZA` models. Work tree: `/share/reincarnevilation/work/` (the Linux container `/mnt/reincarnevilation/work/`).
+- Source data: `Consoles/ROMs/mame/carnevil/` on a network share: `carnevil.chd` (4,310,046,720-byte disk, data SHA1 `ba32b7ef…`), `carnevi1.chd` (other revision), `boot.u32` / `carnevil1_9.u32` (boot ROM), `sound102.u95` (DCS ADSP-2115 boot ROM), `486_carnevil.u96`.
+- Extraction follows the layout of the xclusivor/CarnEvil-Research scripts: CHD -> raw -> 17 partitions -> part0 has 1,356 files (the scripts read each file's blocks as contiguous, which is wrong for the 3 files whose blocks are not adjacent, `GAME.EXE` among them; our extractor follows the block chain, see `docs/analysis/disk-format.md`), including `GAME.EXE` (918,060 bytes) and `DIAG.EXE` (468,436 bytes), DCS `.BIN`/`.BNK`, `WMS` textures, `ZM`/`ZA` models. Work tree: `reincarnevilation/work/` on the share (in the Linux container: `/mnt/reincarnevilation/work/`).
 - `GAME.EXE` is a flat little-endian MIPS IV binary (no ELF/COFF header at offset 0). ~2,322 `jr ra`, ~1,862 `addiu sp,sp,-n` prologues, 1,317 distinct `jal` targets: on the order of 2,000 functions. Data references cluster at 0x8017xxxx–0x8023xxxx (KSEG0).
 - Built with GCC; statically links the 3dfx Glide library ("Portions Copyright (c) 1996 by 3DFx Interactive"), IDT MIPS runtime and DJ Delorie's libc. Debug strings exist (`graphics_init()`, `main_init_sound`, `grab_save_screen()`).
 - Boot chain (confirmed in MAME in M0; the research repo's boot ROM -> DIAG.EXE -> boot ROM -> GAME.EXE was wrong): boot ROM reset stub -> POST program -> the ROM's loader (copied to RAM, stays resident) -> GAME.EXE. DIAG.EXE runs only with the Test switch on. See `docs/analysis/boot-handoff.md`.
@@ -85,7 +85,7 @@ C/C++17, SDL2 for window/input/audio, OpenGL 3.3 core for rendering (radeonsi on
 
 ### 5. Verification
 
-- **MAME as the oracle:** run the same disk in MAME headless in a container in the Linux container (no GPU needed: MAME's Voodoo is a software renderer) with its debugger/trace; compare register/RAM state at agreed checkpoints (boot hand-off, after graphics_init, first attract frame), and compare rendered frames (dumped from MAME vs the port) with a perceptual diff.
+- **MAME as the oracle:** run the same disk in MAME headless in a Linux container (no GPU needed: MAME's Voodoo is a software renderer) with its debugger/trace; compare register/RAM state at agreed checkpoints (boot hand-off, after graphics_init, first attract frame), and compare rendered frames (dumped from MAME vs the port) with a perceptual diff.
 - Unit tests for the recompiler: per-instruction semantics tests (especially MIPS IV and FP), run on the host against a small MIPS reference interpreter.
 - The game's own console prints (via the UART) as bring-up breadcrumbs.
 
@@ -97,18 +97,18 @@ C/C++17, SDL2 for window/input/audio, OpenGL 3.3 core for rendering (radeonsi on
 - **M3** Voodoo-to-GL: attract mode renders correctly versus MAME.
 - **M4** Input and gun: a game can be played.
 - **M5** DCS audio. End of M5 = the first playable build, on macOS (M1–M5 are developed and tested on the Mac).
-- **M6** Linux x86-64 build, native and under WSL2 on the Linux PC. *(User's decision 2026-11-19: Mac build first, then Linux/WSL, then PS4.)*
+- **M6** Linux x86-64 build, native and under WSL2 on a Windows PC. *(User's decision 2026-11-19: Mac build first, then Linux/WSL, then PS4.)*
 - **M7** PS4 build: performance pass, full speed, launcher entry. Full speed is the pass line; if register-level Voodoo can't reach it on Jaguar, the Glide HLE work is pulled forward into M7. *(Builder's call.)*
 - **Phase 2** Glide HLE function by function; then widescreen/high-resolution options. Planned separately after M7; the first plan ends at M7. *(Builder's call.)*
 
 ## Constraints
 
-- **Development hosts, in order (user's decision):** (1) the Mac natively first: Apple clang (already present), SDL2 built from source inside the project tree, OpenGL 3.3/4.1 core; the generated C and runtime stay portable, so arm64 macOS is a first-class dev target; (2) then the Linux PC (the PC with the PCIe HD60 Pro, reserved <address>) for Linux x86-64 testing; (3) the PS4 last. PS4 sessions are costly: they need the Linux PC running for the HD60 Pro, plus a USB HDMI capture device after it (two capture cards), on top of the jailbreak and Linux boot, so PS4 time is kept to M7.
+- **Development hosts, in order (user's decision):** (1) the Mac natively first: Apple clang (already present), SDL2 built from source inside the project tree, OpenGL 3.3/4.1 core; the generated C and runtime stay portable, so arm64 macOS is a first-class dev target; (2) then a desktop PC for Linux x86-64 testing (natively and under WSL2); (3) the PS4 last. PS4 sessions are costly: they need that PC running for its HDMI capture card, plus a USB HDMI capture device after it (two capture cards), on top of the jailbreak and Linux boot, so PS4 time is kept to M7.
 - Builds: PS4 builds natively on the Linux container (Debian 13, GCC 14; binaries need glibc <= 2.38 to run on the PS4's 2.44, as with the tuned emulator cores) with `-O2 -march=btver2`.
 - No host installs on the user's Mac; toolchains live in containers/CTs.
-- Game data and generated C stay on the Gaming share (`reincarnevilation/` on the archive share); the git repo stays local/private and contains only tools, runtime, recompiler and tests.
+- Game data and generated C stay on a network share (`reincarnevilation/`); the git repo contains only tools, runtime, recompiler and tests.
 - PS4 time is expensive (see development hosts): PS4 is only needed from M7, apart from one MAME baseline measurement; earlier milestones are tested on the Mac, then the Linux PC.
-- The extracted game files, raw disk image and generated C live on the Gaming share under `reincarnevilation/` on the archive share; the Mac reaches them over the existing SMB mount (`/Volumes/archive`), or works on local copies kept outside the repo.
+- The extracted game files, raw disk image and generated C live on the network share under `reincarnevilation/`; the Mac reaches them over the existing SMB mount (`/Volumes/archive`), or works on local copies kept outside the repo.
 
 ## Left to the builder
 

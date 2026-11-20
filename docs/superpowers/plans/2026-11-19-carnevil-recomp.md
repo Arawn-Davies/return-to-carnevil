@@ -14,13 +14,13 @@
 
 ## Global Constraints
 
-- No game data, extracted files, ROMs or generated C in the git repo, ever. They live under the Gaming share: `reincarnevilation/work/` on the archive share (Mac: `/Volumes/archive/reincarnevilation/work`; the Linux container: `/mnt/reincarnevilation/work`). Analysis notes may quote addresses, opcodes counts and short strings, not code listings.
-- The repo is published privately (GitHub `origin`, mirror `mirror`) on a BYOCHD basis: it ships no copyrighted game material, and users bring their own CHD. Implementers never `git push`; pushes happen only on the user's say-so. No Claude attribution in commits.
-- Nothing is installed on the Mac. Python tools use the stdlib only and run with the existing `python3`. Anything else runs in the Linux container (`ssh root@<host> 'pct exec <id> -- su roms -c "…"'`), where apt installs are fine.
+- No game data, extracted files, ROMs or generated C in the git repo, ever. They live on a network share, under `reincarnevilation/work/` (Mac: `/Volumes/archive/reincarnevilation/work`; the Linux container: `/mnt/reincarnevilation/work`). Analysis notes may quote addresses, opcodes counts and short strings, not code listings.
+- The repo is published on a BYOCHD basis: it ships no copyrighted game material, and users bring their own CHD. Implementers never `git push`; pushes happen only on the user's say-so. No Claude attribution in commits.
+- Nothing is installed on the Mac. Python tools use the stdlib only and run with the existing `python3`. Anything else runs in the Linux container, where apt installs are fine.
 - Never run `head` or `tail`. Never print secrets.
 - One supported game revision: `GAME.EXE` SHA-256 `f9455ce801d2e5c26a7b6e00eff88efa573deb7ab15fa29f9c90100623bfd3a6` (from `carnevil.chd`, data SHA1 `ba32b7ef9721d730ce58bd753d47fb947b6ae9b6`). Tools refuse other hashes.
 - Other pinned hashes: `DIAG.EXE` `38b2810864c85d6971cedc3a6b0e507c8c6d593e4d7c355c880f91dbcaaaa2b9`; `boot.u32` = `carnevil1_9.u32` `05346e09d90a8e5aadc5e0aae8bd53b80816e96ea1e649ba548e4c6b07dac4a6`.
-- Build order (user's decision): macOS first (M1–M5 end in a playable Mac build), then Linux x86-64 native and WSL2 on the Linux PC (M6), then PS4 (M7 only).
+- Build order (user's decision): macOS first (M1–M5 end in a playable Mac build), then Linux x86-64 native and WSL2 on a Windows PC (M6), then PS4 (M7 only).
 - Tests that need game data read `CARNEVIL_WORK` (default `/Volumes/archive/reincarnevilation/work`) and **skip** when it is missing. Unit tests use synthetic fixtures built in the test.
 
 ## Review Focus
@@ -290,7 +290,7 @@ Inserted by the controller after Task 5 found a load-bearing defect in Task 1's 
 - Exit: music and effects play correctly through attract mode and a level. This is the first playable build (macOS).
 
 ### M6: Linux x86-64
-- The runtime and generated C built on Linux x86-64: natively, and under WSL2 on the Linux PC (OpenGL through WSLg/Mesa). SDL2 from the distribution or built in-tree.
+- The runtime and generated C built on Linux x86-64: natively, and under WSL2 on a Windows PC (OpenGL through WSLg/Mesa). SDL2 from the distribution or built in-tree.
 - Tests: the M3 golden-frame comparison, the M4 input tests and the M5 audio test pass on Linux; a full level is playable.
 - Exit: CarnEvil is playable on Linux and under WSL2 with the same results as the Mac build.
 

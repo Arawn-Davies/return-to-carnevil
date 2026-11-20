@@ -352,7 +352,7 @@ From `config/boot_state.toml`:
 
 Static numbers come from the Python tools in `carnevil_tools/`, which have unit tests on
 synthetic fixtures and checks against the real files (201 tests). MAME numbers come
-from the Lua scripts in `tools/mame/` (command lines in its README), run under MAME 0.276 on
+from the Lua scripts in `tools/mame/` (command lines in its README), run under MAME 0.276 in
 the Linux container, the oracle: they set breakpoints and logged registers (boot hand-off, registrations,
 callbacks), dumped RAM at the hand-off, and tapped the Voodoo and every other hardware range
 with PC attribution (`-nodrc` for exact PCs). Each task's result was reviewed independently,

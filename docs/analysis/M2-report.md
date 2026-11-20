@@ -392,9 +392,9 @@ concerns M1, not this milestone.
    other (chains of 28 to 576 records, 0.06 to 7.2 ms). Refined in Task 7 to records and
    frame-buffer bytes, and kept as the completion time in Task 9 (ruling 33). Cost if wrong:
    the timing of the bit-4 handler differs from MAME, visible only in timer-3 timeouts.
-5. **"the Linux container" may appear in the analysis documents**: M0 and M1 used it, and it names a
-   container, not a host or an address. Cost if wrong: one search and replace before the
-   repository goes public.
+5. **The analysis documents may name the build container by its own name**: M0 and M1 did.
+   Cost if wrong: one search and replace before the repository goes public (done on
+   2026-11-20: the documents now say "the Linux container").
 
 ### Task 3: the disk image and its file system in C
 
@@ -882,7 +882,8 @@ large).
   in Task 8's fix round.
 - `dcs-handshake.md` step 9 still said "4 to 6 ms" outside the Timing section (Task 8):
   corrected in Task 8's fix round.
-- `dcs-handshake.md` names the Linux container ("no source in the Linux container"), covered by ruling 5 (Task 8).
+- `dcs-handshake.md` named the build container, covered by ruling 5 (Task 8); reworded on
+  2026-11-20.
 - The Task 9 report has a typo in the trace size (Task 9).
 - `hardware-usage.md` paired the CPU hold count with a duration of a different set (Task 9):
   corrected in this task.

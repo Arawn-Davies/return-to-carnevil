@@ -23,7 +23,7 @@ Three choices are made here. Each is recorded in the spec's corrections so the s
 - No game data, extracted files, ROMs, RAM dumps or generated C in the git repo, ever. Generated C goes to `$CARNEVIL_WORK/generated`, objects and test binaries to `$CARNEVIL_WORK/build/<uname -s>-<uname -m>` or a temp dir. `CARNEVIL_WORK` defaults to `/Volumes/archive/reincarnevilation/work` (the Linux container: `/mnt/reincarnevilation/work`). Notes and config may hold addresses, counts and short strings, not code listings.
 - Test vectors made of synthetic instruction words and register values may be committed. Anything captured from the running game may not.
 - BYOCHD: implementers never `git push`; no Claude attribution in commits.
-- Nothing is installed on the Mac. Python is stdlib only. C is built with the `cc` and `make` already present. MAME runs only in the Linux container (`ssh root@<host> 'pct exec <id> -- su roms -c "…"'`).
+- Nothing is installed on the Mac. Python is stdlib only. C is built with the `cc` and `make` already present. MAME runs only in the Linux container.
 - Never run `head` or `tail`. Never print secrets.
 - One supported revision: `GAME.EXE` SHA-256 `f9455ce801d2e5c26a7b6e00eff88efa573deb7ab15fa29f9c90100623bfd3a6`. `boot.u32` is `05346e09d90a8e5aadc5e0aae8bd53b80816e96ea1e649ba548e4c6b07dac4a6`.
 - Tests that need game data use `tests/gamedata.py` and skip when the file is missing. Tests that need a C compiler skip, with a message naming `cc`, when there is none. The suite must pass with `python3 -W error -m unittest`.
